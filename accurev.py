@@ -239,13 +239,15 @@ class AccuRevTransaction(object):
         return None
     
 class AccuRevHistory(object):
-    def __init__(self, transactions = [], streams = []):
+    def __init__(self, taskId = None, transactions = [], streams = []):
+        self.taskId       = taskId
         self.transactions = transactions
         self.streams      = streams
     
     def __repr__(self):
-        str = "AccuRevTransaction(transactions=" + repr(self.transactions)
-        str += ", streams="                      + repr(self.streams)
+        str = "AccuRevTransaction(taskId=" + repr(self.taskId)
+        str += ", transactions="           + repr(self.transactions)
+        str += ", streams="                + repr(self.streams)
         str += ")"
         
         return str
@@ -258,6 +260,8 @@ class AccuRevHistory(object):
         
         if xmlRoot is not None and xmlRoot.tag == "AcResponse" and xmlRoot.get("Command") == "hist":
             # Build the class
+            taskId = xmlRoot.attrib.get('TaskId')
+            
             transactions = []
             for transactionElement in xmlRoot.findall('transaction'):
                 transactions.append(AccuRevTransaction.fromxmlelement(transactionElement))
@@ -269,7 +273,131 @@ class AccuRevHistory(object):
                     streams.append(AccuRevStream.fromxmlelement(streamElement))
             
             
-            return cls(transactions=transactions, streams=streams)
+            return cls(taskId=taskId, transactions=transactions, streams=streams)
+        else:
+            # Invalid XML for an AccuRev hist command response.
+            return None
+
+class AccuRevUser(object):
+    def __init__(self, number = None, name = None, kind = None):
+        self.number = number
+        self.name   = name
+        self.kind   = kind
+        
+    def __repr__(self):
+        str = "AccuRevUser(number=" + repr(self.number)
+        str += ", name="            + repr(self.name)
+        str += ", kind="            + repr(self.kind)
+        str += ")"
+        
+        return str
+    
+    @classmethod
+    def fromxmlelement(cls, xmlElement):
+        if xmlElement is not None and xmlElement.tag == 'Element':
+            number = xmlElement.attrib.get('Number')
+            name   = xmlElement.attrib.get('Name')
+            kind   = xmlElement.attrib.get('Kind')
+            
+            return cls(number, name, kind)
+        
+        return None
+            
+class AccuRevShowUsers(object):
+    def __init__(self, taskId = None, users = []):
+        self.taskId = taskId
+        self.users  = users
+    
+    def __repr__(self):
+        str = "AccuRevShowUsers(taskId=" + repr(self.taskId)
+        str += ", users="                  + repr(self.users)
+        str += ")"
+        
+        return str
+        
+    @classmethod
+    def fromxmlstring(cls, xmlText):
+        # Load the XML
+        xmlRoot = ElementTree.fromstring(xmlText)
+        #xpathPredicate = ".//AcResponse[@Command='hist']"
+        
+        if xmlRoot is not None and xmlRoot.tag == "AcResponse" and xmlRoot.get("Command") == "show users":
+            # Build the class
+            taskId = xmlRoot.attrib.get('TaskId')
+            
+            users = []
+            for userElement in xmlRoot.findall('Element'):
+                users.append(AccuRevUser.fromxmlelement(userElement))
+            
+            return cls(taskId=taskId, users=users)
+        else:
+            # Invalid XML for an AccuRev hist command response.
+            return None
+            
+class AccuRevDepot(object):
+    def __init__(self, number=None, name=None, slice=None, exclusiveLocking=None, case=None, locWidth=None, replStatus=None):
+        self.number           = number
+        self.name             = name
+        self.slice            = slice
+        self.exclusiveLocking = exclusiveLocking
+        self.case             = case
+        self.locWidth         = locWidth
+        self.replStatus       = replStatus
+        
+    def __repr__(self):
+        str = "AccuRevDepot(number="  + repr(self.number)
+        str += ", name="              + repr(self.name)
+        str += ", slice="             + repr(self.slice)
+        str += ", exclusiveLocking="  + repr(self.exclusiveLocking)
+        str += ", case="              + repr(self.case)
+        str += ", locWidth="          + repr(self.locWidth)
+        str += ", replStatus="        + repr(self.replStatus)
+        str += ")"
+        
+        return str
+    
+    @classmethod
+    def fromxmlelement(cls, xmlElement):
+        if xmlElement is not None and xmlElement.tag == 'Element':
+            number           = xmlElement.attrib.get('Number')
+            name             = xmlElement.attrib.get('Name')
+            slice            = xmlElement.attrib.get('Slice')
+            exclusiveLocking = xmlElement.attrib.get('exclusiveLocking')
+            case             = xmlElement.attrib.get('case')
+            locWidth         = xmlElement.attrib.get('locWidth')
+            replStatus       = xmlElement.attrib.get('ReplStatus')
+            
+            return cls(number, name, slice, exclusiveLocking, case, locWidth, replStatus)
+        
+        return None
+            
+class AccuRevShowDepots(object):
+    def __init__(self, taskId = None, depots = []):
+        self.taskId = taskId
+        self.depots = depots
+    
+    def __repr__(self):
+        str = "AccuRevShowDepots(taskId=" + repr(self.taskId)
+        str += ", depots="                + repr(self.depots)
+        str += ")"
+        
+        return str
+        
+    @classmethod
+    def fromxmlstring(cls, xmlText):
+        # Load the XML
+        xmlRoot = ElementTree.fromstring(xmlText)
+        #xpathPredicate = ".//AcResponse[@Command='hist']"
+        
+        if xmlRoot is not None and xmlRoot.tag == "AcResponse" and xmlRoot.get("Command") == "show depots":
+            # Build the class
+            taskId = xmlRoot.attrib.get('TaskId')
+            
+            depots = []
+            for depotElement in xmlRoot.findall('Element'):
+                depots.append(AccuRevDepot.fromxmlelement(depotElement))
+            
+            return cls(taskId=taskId, depots=depots)
         else:
             # Invalid XML for an AccuRev hist command response.
             return None
@@ -281,7 +409,7 @@ class raw(object):
     _lastCommand = None
     
     @staticmethod
-    def __RunCommand(cmd, outputFilename=None):
+    def _RunCommand(cmd, outputFilename=None):
         accurevCommand = subprocess.Popen(cmd, stdout=subprocess.PIPE, stdin=subprocess.PIPE)
         
         outputFile = None
@@ -363,7 +491,7 @@ class raw(object):
         if isXmlOutput:
             cmd.append("-fx")
         
-        return raw.__RunCommand(cmd, outputFilename)
+        return raw._RunCommand(cmd, outputFilename)
 
     @staticmethod
     def Populate(isRecursive=False, isOverride=False, verSpec=None, location=None, dontBuildDirTree=False, timeSpec=None, isXmlOutput=False, listFile=None, elementList=None):
@@ -394,8 +522,32 @@ class raw(object):
         elif elementList is not None:
             cmd.append(elementList)
         
-        return raw.__RunCommand(cmd)
+        return raw._RunCommand(cmd)
+
+    class Show(object):
+        @staticmethod
+        def Users(isXmlOutput=False):
+            cmd = [ "accurev", "show" ]
+            
+            if isXmlOutput:
+                cmd.append("-fx")
+            
+            cmd.append("users")
+            
+            return raw._RunCommand(cmd)
         
+        @staticmethod
+        def Depots(isXmlOutput=False):
+            cmd = [ "accurev", "show" ]
+            
+            if isXmlOutput:
+                cmd.append("-fx")
+            
+            cmd.append("depots")
+            
+            return raw._RunCommand(cmd)
+        
+    
 # ################################################################################################ #
 # Script Functions                                                                                 #
 # ################################################################################################ #
@@ -429,7 +581,18 @@ def Populate(isRecursive=False, isOverride=False, verSpec=None, location=None, d
     if raw._lastCommand is not None:
         return (raw._lastCommand.returncode == 0)
     return None
-        
+
+class Show(object):
+    @staticmethod
+    def Users():
+        xmlOutput = raw.Show.Users(isXmlOutput=True)
+        return AccuRevShowUsers.fromxmlstring(xmlOutput)
+    
+    @staticmethod
+    def Depots():
+        xmlOutput = raw.Show.Depots(isXmlOutput=True)
+        return AccuRevShowDepots.fromxmlstring(xmlOutput)
+
 # ################################################################################################ #
 # Script Main                                                                                      #
 # ################################################################################################ #
