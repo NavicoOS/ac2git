@@ -16,6 +16,11 @@ import xml.etree.ElementTree as ElementTree
 
 import accurev
 
+# GitPython is used to interact with git. Its project page is: https://gitorious.org/git-python
+# The repo it was cloned from: git://gitorious.org/git-python/mainline.git at commit 5eb7fd3f0dd99dc6c49da6fd7e78a392c4ef1b33
+# You might also need: https://pypi.python.org/pypi/setuptools#installation-instructions
+from git import *
+
 # ################################################################################################ #
 # Script Classes                                                                                   #
 # ################################################################################################ #
@@ -143,16 +148,30 @@ def DumpExampleConfigFile(outputFilename):
     file = open(outputFilename, 'w')
     file.write(exampleContents)
     file.close()
+
+def ValidateConfig(config):
+    # Validate the program args and configuration up to this point.
+    isValid = True
+    if config.accurev.username is None:
+        print "No AccuRev username specified."
+        isValid = False
+    elif config.accurev.password is None:
+        print "No AccuRev password specified."
+        isValid = False
+    elif config.accurev.depot is None:
+        print "No AccuRev depot specified."
+        isValid = False
+    elif config.git.repoPath is None:
+        print "No Git repository specified."
+        isValid = False
     
-    
-# ################################################################################################ #
-# Script Main                                                                                      #
-# ################################################################################################ #
-def AccuRev2GitMain(argv):
+    return isValid
+
+def LoadConfigOrDefaults(scriptName):
     # Try and load the config file
     doesConfigExist = True
     
-    configFilename = Config.FilenameFromScriptName(argv[0])
+    configFilename = Config.FilenameFromScriptName(scriptName)
     configXml = None
     try:
         configFile = open(configFilename)
@@ -167,12 +186,21 @@ def AccuRev2GitMain(argv):
 
     if config is None:
         config = Config(Config.AccuRev(), Config.Git(), [])
+        
+    return config
+
+# ################################################################################################ #
+# Script Main                                                                                      #
+# ################################################################################################ #
+def AccuRev2GitMain(argv):
+    config = LoadConfigOrDefaults(argv[0])
     
     # Set-up and parse the command line arguments. Examples from https://docs.python.org/dev/library/argparse.html
     parser = argparse.ArgumentParser(description="Conversion tool for migrating AccuRev repositories into Git")
     parser.add_argument('--accurev-username', nargs='?', dest='accurevUsername', default=config.accurev.username)
     parser.add_argument('--accurev-password', nargs='?', dest='accurevPassword', default=config.accurev.password)
     parser.add_argument('--accurev-depot',    nargs='?', dest='accurevDepot',    default=config.accurev.depot)
+    parser.add_argument('--git-repo-path',    nargs='?', dest='gitRepoPath',    default=config.git.repoPath)
     parser.add_argument('--dump-example-config', nargs='?', dest='exampleConfigFilename', const='no-filename', default=None)
     
     args = parser.parse_args()
@@ -190,9 +218,9 @@ def AccuRev2GitMain(argv):
     config.accurev.username = args.accurevUsername
     config.accurev.password = args.accurevPassword
     config.accurev.depot    = args.accurevDepot
+    config.git.repoPath     = args.gitRepoPath
     
-    if config.accurev.username is None or config.accurev.password is None:
-        print "No AccuRev username or password specified."
+    if not ValidateConfig(config):
         return 1
 
     accurev.Login(config.accurev.username, config.accurev.password)
