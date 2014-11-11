@@ -22,6 +22,40 @@ import accurev
 from git import *
 
 # ################################################################################################ #
+# Script Core. AccuRev transaction to Git conversion handlers.                                     #
+# ################################################################################################ #
+
+def OnAdd(transaction):
+    print "OnAdd:", transaction
+
+def OnChstream(transaction):
+    print "OnChstream:", transaction
+    
+def OnCo(transaction):
+    print "OnCo:", transaction
+
+def OnDefunct(transaction):
+    print "OnDefunct:", transaction
+
+def OnKeep(transaction):
+    print "OnKeep:", transaction
+
+def OnMove(transaction):
+    print "OnMove:", transaction
+
+def OnMkstream(transaction):
+    print "OnMkstream:", transaction
+
+def OnPurge(transaction):
+    print "OnPurge:", transaction
+
+def OnDefunct(transaction):
+    print "OnDefunct:", transaction
+
+def OnUndefunct(transaction):
+    print "OnDefunct:", transaction
+    
+# ################################################################################################ #
 # Script Classes                                                                                   #
 # ################################################################################################ #
 class Config(object):
@@ -32,20 +66,26 @@ class Config(object):
                 depot    = xmlElement.attrib.get('depot')
                 username = xmlElement.attrib.get('username')
                 password = xmlElement.attrib.get('password')
+                startTransaction = xmlElement.attrib.get('start-transaction')
+                endTransaction   = xmlElement.attrib.get('end-transaction')
                 
-                return cls(depot, username, password)
+                return cls(depot, username, password, startTransaction, endTransaction)
             else:
                 return None
             
-        def __init__(self, depot, username = None, password = None):
+        def __init__(self, depot, username = None, password = None, startTransaction = None, endTransaction = None):
             self.depot    = depot
             self.username = username
             self.password = password
+            self.startTransaction = startTransaction
+            self.endTransaction   = endTransaction
     
         def __repr__(self):
             str = "Config.AccuRev(depot=" + repr(self.depot)
             str += ", username="          + repr(self.username)
             str += ", password="          + repr(self.password)
+            str += ", startTransaction="  + repr(self.startTransaction)
+            str += ", endTransaction="    + repr(self.endTransaction)
             str += ")"
             
             return str
@@ -132,6 +172,40 @@ class Config(object):
         
         return str
 
+class AccuRev2Git(object):
+    def __init__(self, config):
+        self.config = config
+        self.transactionHandlers = { "add": OnAdd, "chstream": OnChstream, "co": OnCo, "defunct": OnDefunct, "keep": OnKeep, "move": OnMove, "mkstream": OnMkstream, "purge": OnPurge, "undefunct": OnUndefunct }
+        
+    def ProcessAccuRevTransaction(self, transaction):
+        handler = self.transactionHandlers.get(transaction.type)
+        if handler is not None:
+            handler(transaction)
+        
+    def Start(self):
+        if accurev.Login(self.config.accurev.username, self.config.accurev.password):
+            print "Login successful"
+            
+            print "Querying history"
+            arHist = accurev.History(depot=self.config.accurev.depot, timeSpec="{0}-{1}.1000".format(self.config.accurev.startTransaction, self.config.accurev.endTransaction))
+            
+            for transaction in arHist.transactions:
+                self.ProcessAccuRevTransaction(transaction)
+            
+            if accurev.Logout():
+                print "Logout successful"
+                return 0
+            else:
+                print "Logout failed"
+                return 1
+        else:
+            print "AccuRev login failed."
+            return 1
+    
+    def Resume(self):
+        # For now the resume feature is not supported and causes us to start from scratch again.
+        return self.Start()
+        
 # ################################################################################################ #
 # Script Functions                                                                                 #
 # ################################################################################################ #
@@ -200,7 +274,8 @@ def AccuRev2GitMain(argv):
     parser.add_argument('--accurev-username', nargs='?', dest='accurevUsername', default=config.accurev.username)
     parser.add_argument('--accurev-password', nargs='?', dest='accurevPassword', default=config.accurev.password)
     parser.add_argument('--accurev-depot',    nargs='?', dest='accurevDepot',    default=config.accurev.depot)
-    parser.add_argument('--git-repo-path',    nargs='?', dest='gitRepoPath',    default=config.git.repoPath)
+    parser.add_argument('--git-repo-path',    nargs='?', dest='gitRepoPath',     default=config.git.repoPath)
+    parser.add_argument('--resume',    nargs='?', dest='resume', const="true")
     parser.add_argument('--dump-example-config', nargs='?', dest='exampleConfigFilename', const='no-filename', default=None)
     
     args = parser.parse_args()
@@ -223,12 +298,13 @@ def AccuRev2GitMain(argv):
     if not ValidateConfig(config):
         return 1
 
-    accurev.Login(config.accurev.username, config.accurev.password)
+    accurev2git = AccuRev2Git(config)
     
-    print accurev.History(depot=config.accurev.depot, timeSpec="now.3")
-    
-    accurev.Logout()
-
+    if args.resume == "true":
+        return accurev2git.Resume()
+    else:
+        return accurev2git.Start()
+        
 # ################################################################################################ #
 # Script Start                                                                                     #
 # ################################################################################################ #
