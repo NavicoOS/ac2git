@@ -12,6 +12,7 @@
 import sys
 import argparse
 import os
+import shutil
 import xml.etree.ElementTree as ElementTree
 
 import accurev
@@ -24,6 +25,11 @@ from git import *
 # ################################################################################################ #
 # Script Core. AccuRev transaction to Git conversion handlers.                                     #
 # ################################################################################################ #
+
+# gitRepo - is a git.Repo object. See https://pythonhosted.org/GitPython/0.3.1/tutorial.html#initialize-a-repo-object
+#   It is guaranteed NOT to be None when the Handlers execute (or at least it is an error if this
+#   object is not a valid/initialised/existing git repo when the handlers are called)
+gitRepo = None
 
 def OnAdd(transaction):
     print "OnAdd:", transaction
@@ -189,13 +195,19 @@ class AccuRev2Git(object):
         #               way.
         return self.config.accurev.startTransaction
         
+    # ProcessAccuRevTransaction
+    #   Processes an individual AccuRev transaction by calling its corresponding handler.
     def ProcessAccuRevTransaction(self, transaction):
         handler = self.transactionHandlers.get(transaction.type)
         if handler is not None:
             handler(transaction)
         else:
-            print "Error: No handler for [", transaction.type, "] transactions"
+            sys.stderr.write("Error: No handler for [\"{0}\"] transactions\n".format(transaction.type))
         
+    # ProcessAccuRevTransactionRange
+    #   Iterates over accurev transactions between the startTransaction and endTransaction processing
+    #  each of them in turn. If maxTransactions is given as a positive integer it will process at 
+    #  most maxTransactions.
     def ProcessAccuRevTransactionRange(self, startTransaction="1", endTransaction="now", maxTransactions=None):
         timeSpec = "{0}-{1}".format(startTransaction, endTransaction)
         if maxTransactions is not None and maxTransactions > 0:
@@ -207,7 +219,47 @@ class AccuRev2Git(object):
         for transaction in arHist.transactions:
             self.ProcessAccuRevTransaction(transaction)
         
+    def NewGitRepo(self, gitRepoPath):
+        gitRootDir, gitRepoDir = os.path.split(gitRepoPath)
+        if os.path.isdir(gitRootDir):
+            if os.path.isdir(os.path.join(gitRepoPath, ".git")):
+                sys.stderr.write("Found an existing git repository.\n")
+                sys.stderr.write("Are you sure you want to overwrite? (yes/no)\n> ")
+                input = raw_input()
+                while input not in [ "yes", "no" ]:
+                    sys.stderr.write("Please enter yes or no\n")
+                    input = raw_input()
+
+                if input == "no":
+                    return None
+                
+                print "Removing existing git repository"
+                shutil.rmtree(os.path.join(gitRepoPath, ".git"))
+        
+        print "Creating new git repository"
+        repo = Repo.init(gitRepoPath, bare=False)
+        
+        return repo
+    
+    def GetExistingGitRepo(self, gitRepoPath):
+        gitRootDir, gitRepoDir = os.path.split(gitRepoPath)
+        if os.path.isdir(gitRootDir):
+            if os.path.isdir(os.path.join(gitRepoPath, ".git")):
+                print "Opening git repository"
+                return Repo(gitRepoPath)
+
+        print "Failed to find git repository at:", gitRepoPath
+        return None
+        
+    # Start
+    #   Begins a new AccuRev to Git conversion process discarding the old repository (if any).
     def Start(self):
+        global gitRepo
+        
+        print "Starting a new conversion operation"
+        
+        gitRepo = self.NewGitRepo(self.config.git.repoPath)
+        
         if accurev.Login(self.config.accurev.username, self.config.accurev.password):
             print "Login successful"
             
@@ -217,14 +269,19 @@ class AccuRev2Git(object):
                 print "Logout successful"
                 return 0
             else:
-                print "Logout failed"
+                sys.stderr.write("Logout failed\n")
                 return 1
         else:
-            print "AccuRev login failed."
+            sys.stderr.write("AccuRev login failed.\n")
             return 1
     
     def Resume(self):
+        global gitRepo
+        
         # For now the resume feature is not supported and causes us to start from scratch again.
+        print "Resuming last conversion operation"
+        
+        gitRepo = self.GetExistingGitRepo(self.config.git.repoPath)
         
         # TODO: Start by verifying where we have stopped last time and restoring state.
         
@@ -232,16 +289,17 @@ class AccuRev2Git(object):
         if accurev.Login(self.config.accurev.username, self.config.accurev.password):
             print "Login successful"
             
-            self.ProcessAccuRevTransactionRange()
+            # TODO: Figure out at which transaction we have stopped and use it as the startTransaction.
+            self.ProcessAccuRevTransactionRange(startTransaction=self.GetLastAccuRevTransaction(), endTransaction=self.config.accurev.endTransaction)
             
             if accurev.Logout():
                 print "Logout successful"
                 return 0
             else:
-                print "Logout failed"
+                sys.stderr.write("Logout failed\n")
                 return 1
         else:
-            print "AccuRev login failed."
+            sys.stderr.write("AccuRev login failed.\n")
             return 1
         
 # ################################################################################################ #
@@ -265,16 +323,16 @@ def ValidateConfig(config):
     # Validate the program args and configuration up to this point.
     isValid = True
     if config.accurev.username is None:
-        print "No AccuRev username specified."
+        sys.stderr.write("No AccuRev username specified.\n")
         isValid = False
-    elif config.accurev.password is None:
-        print "No AccuRev password specified."
+    if config.accurev.password is None:
+        sys.stderr.write("No AccuRev password specified.\n")
         isValid = False
-    elif config.accurev.depot is None:
-        print "No AccuRev depot specified."
+    if config.accurev.depot is None:
+        sys.stderr.write("No AccuRev depot specified.\n")
         isValid = False
-    elif config.git.repoPath is None:
-        print "No Git repository specified."
+    if config.git.repoPath is None:
+        sys.stderr.write("No Git repository specified.\n")
         isValid = False
     
     return isValid

@@ -576,7 +576,7 @@ def Populate(isRecursive=False, isOverride=False, verSpec=None, location=None, d
         if message is not None:
             errorAttrib = message.attrib.get('error')
             if errorAttrib is not None:
-                print "accurev populate error:", message.text
+                sys.stderr.write("accurev populate error:\n{0}\n".format(message.text))
     
     if raw._lastCommand is not None:
         return (raw._lastCommand.returncode == 0)
