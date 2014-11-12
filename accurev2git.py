@@ -40,6 +40,9 @@ def OnDefunct(transaction):
 def OnKeep(transaction):
     print "OnKeep:", transaction
 
+def OnPromote(transaction):
+    print "OnPromote:", transaction
+
 def OnMove(transaction):
     print "OnMove:", transaction
 
@@ -54,7 +57,10 @@ def OnDefunct(transaction):
 
 def OnUndefunct(transaction):
     print "OnDefunct:", transaction
-    
+
+def OnDefcomp(transaction):
+    print "OnDefcomp:", transaction
+
 # ################################################################################################ #
 # Script Classes                                                                                   #
 # ################################################################################################ #
@@ -175,22 +181,37 @@ class Config(object):
 class AccuRev2Git(object):
     def __init__(self, config):
         self.config = config
-        self.transactionHandlers = { "add": OnAdd, "chstream": OnChstream, "co": OnCo, "defunct": OnDefunct, "keep": OnKeep, "move": OnMove, "mkstream": OnMkstream, "purge": OnPurge, "undefunct": OnUndefunct }
+        self.transactionHandlers = { "add": OnAdd, "chstream": OnChstream, "co": OnCo, "defunct": OnDefunct, "keep": OnKeep, "promote": OnPromote, "move": OnMove, "mkstream": OnMkstream, "purge": OnPurge, "undefunct": OnUndefunct, "defcomp": OnDefcomp }
+        
+    def GetLastAccuRevTransaction(self):
+        # TODO: Fix me! We don't have a way of retrieving the last accurev transaction that we
+        #               processed yet. This will most likely involve parsing the git history in some
+        #               way.
+        return self.config.accurev.startTransaction
         
     def ProcessAccuRevTransaction(self, transaction):
         handler = self.transactionHandlers.get(transaction.type)
         if handler is not None:
             handler(transaction)
+        else:
+            print "Error: No handler for [", transaction.type, "] transactions"
+        
+    def ProcessAccuRevTransactionRange(self, startTransaction="1", endTransaction="now", maxTransactions=None):
+        timeSpec = "{0}-{1}".format(startTransaction, endTransaction)
+        if maxTransactions is not None and maxTransactions > 0:
+            timeSpec = "{0}.{1}".format(timeSpec, maxTransactions)
+        
+        print "Querying history"
+        arHist = accurev.History(depot=self.config.accurev.depot, timeSpec=timeSpec)
+        
+        for transaction in arHist.transactions:
+            self.ProcessAccuRevTransaction(transaction)
         
     def Start(self):
         if accurev.Login(self.config.accurev.username, self.config.accurev.password):
             print "Login successful"
             
-            print "Querying history"
-            arHist = accurev.History(depot=self.config.accurev.depot, timeSpec="{0}-{1}.1000".format(self.config.accurev.startTransaction, self.config.accurev.endTransaction))
-            
-            for transaction in arHist.transactions:
-                self.ProcessAccuRevTransaction(transaction)
+            self.ProcessAccuRevTransactionRange(startTransaction=self.config.accurev.startTransaction, endTransaction=self.config.accurev.endTransaction)
             
             if accurev.Logout():
                 print "Logout successful"
@@ -204,7 +225,24 @@ class AccuRev2Git(object):
     
     def Resume(self):
         # For now the resume feature is not supported and causes us to start from scratch again.
-        return self.Start()
+        
+        # TODO: Start by verifying where we have stopped last time and restoring state.
+        
+        # TODO: Do exactly what Start does but start in the middle...
+        if accurev.Login(self.config.accurev.username, self.config.accurev.password):
+            print "Login successful"
+            
+            self.ProcessAccuRevTransactionRange()
+            
+            if accurev.Logout():
+                print "Logout successful"
+                return 0
+            else:
+                print "Logout failed"
+                return 1
+        else:
+            print "AccuRev login failed."
+            return 1
         
 # ################################################################################################ #
 # Script Functions                                                                                 #
