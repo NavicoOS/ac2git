@@ -65,7 +65,10 @@ def OnUndefunct(transaction):
     print "OnDefunct:", transaction
 
 def OnDefcomp(transaction):
-    print "OnDefcomp:", transaction
+    # The defcomp command is not visible to the user; it is used in the implementation of the 
+    # include/exclude facility CLI commands incl, excl, incldo, and clear.
+    # Source: http://www.accurev.com/download/docs/5.5.0_books/AccuRev_WebHelp/AccuRev_Admin/wwhelp/wwhimpl/common/html/wwhelp.htm#context=admin&file=pre_op_trigs.html
+    print "Ignored defcomp transaction #{0}".format(transaction.id)
 
 # ################################################################################################ #
 # Script Classes                                                                                   #
