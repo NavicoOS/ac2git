@@ -13,6 +13,7 @@ import sys
 import argparse
 import os
 import shutil
+import subprocess
 import xml.etree.ElementTree as ElementTree
 
 import accurev
@@ -23,22 +24,96 @@ import accurev
 from git import *
 
 # ################################################################################################ #
-# Script Core. AccuRev transaction to Git conversion handlers.                                     #
+# Script Globals.                                                                                  #
 # ################################################################################################ #
-
 # gitRepo - is a git.Repo object. See https://pythonhosted.org/GitPython/0.3.1/tutorial.html#initialize-a-repo-object
 #   It is guaranteed NOT to be None when the Handlers execute (or at least it is an error if this
 #   object is not a valid/initialised/existing git repo when the handlers are called)
 gitRepo = None
+gitRepoPath = None
 
+# ################################################################################################ #
+# Script Core. Git helper functions                                                                #
+# ################################################################################################ #
+def CheckoutBranch(branchName):
+    global gitRepo
+    
+    branch = None
+    
+    try:
+        branch = getattr(gitRepo.heads, branchName)
+        #print "branch:", branchName, "exists"
+    except:
+        branch = gitRepo.create_head(branchName)
+        #print "branch:", branchName, "created"
+        
+    return branch
+
+def GetGitElementPath(accurevDepotElementPath, gitRepoPath=None, isAbsolute=False):
+    # All accurev depot paths start with \.\ or /./ so strip that before joining.
+    relpath = accurevDepotElementPath[3:]
+    if isAbsolute:
+        if gitRepoPath is not None:
+            return os.path.join(gitRepoPath, relpath)
+        else:
+            return os.path.abspath(relpath)
+    return relpath
+
+def PopulateHack():
+    # Note: If the pop command is used with the -v option, and any element specified in the
+    #   <list-file> or <element-list> has status (defunct) in the stream’s default group, the
+    #   command will fail. If you are using a script to generate a list of files to pop, check for
+    #   this potential error condition.
+    #  Source: http://www.accurev.com/download/ac_current_release/AccuRev_WebHelp/wwhelp/wwhimpl/js/html/wwhelp.htm#href=AccuRev_User_CLI/cli_ref_pop.html
+    #  
+    #  However, it seems that AccuRev allows you to populate an already defuncted directory at the
+    #  given version so lets do that when Populate fails...
+    #  
+    #  The exact error with which it fails is:
+    #  
+    #  accurev populate error:
+    #  No element named <path-to-element>
+    #  
+    #  So look for that.
+    pass
+    
+# ################################################################################################ #
+# Script Core. AccuRev transaction to Git conversion handlers.                                     #
+# ################################################################################################ #
 def OnAdd(transaction):
     print "OnAdd:", transaction
+    if len(transaction.versions) > 0:
+        print "Branch:", transaction.versions[0].virtualNamedVersion.stream
+        
+        CheckoutBranch(transaction.versions[0].virtualNamedVersion.stream)
+        addCount = 0
+        for version in transaction.versions:
+            # Populate it only if it is not a directory.
+            if version.dir != "yes":
+                print "Version:", version
+                print "gitRepoPath:", gitRepoPath
+                print "VersionPath:", version.path
+                print "ElementPath:", GetGitElementPath(version.path, gitRepoPath)
+            
+                if accurev.Populate(isRecursive=True, verSpec=repr(version.virtualNamedVersion), location=gitRepoPath, elementList=version.path):
+                    gitRepo.index.add([GetGitElementPath(version.path)])
+                    addCount += 1
+                else:
+                    # 
+                    print "Populate failed"
+            else:
+                accurev.Populate(isRecursive=True, verSpec=repr(version.virtualNamedVersion), timeSpec=transaction.id, location=gitRepoPath, elementList=version.path)
+                print "Skipp:", version
+        
+        if addCount > 0:
+            gitRepo.index.commit(message=transaction.comment)
 
 def OnChstream(transaction):
     print "OnChstream:", transaction
     
 def OnCo(transaction):
-    print "OnCo:", transaction
+    # The co (checkout) transaction can be safely ignored.
+    print "Ignored transaction #{0}: co".format(transaction.id)
 
 def OnDefunct(transaction):
     print "OnDefunct:", transaction
@@ -53,7 +128,9 @@ def OnMove(transaction):
     print "OnMove:", transaction
 
 def OnMkstream(transaction):
-    print "OnMkstream:", transaction
+    # The mkstream command doesn't contain enough information to create a branch in git.
+    # Silently ignore.
+    print "Ignored transaction #{0}: mkstream".format(transaction.id)
 
 def OnPurge(transaction):
     print "OnPurge:", transaction
@@ -68,7 +145,7 @@ def OnDefcomp(transaction):
     # The defcomp command is not visible to the user; it is used in the implementation of the 
     # include/exclude facility CLI commands incl, excl, incldo, and clear.
     # Source: http://www.accurev.com/download/docs/5.5.0_books/AccuRev_WebHelp/AccuRev_Admin/wwhelp/wwhimpl/common/html/wwhelp.htm#context=admin&file=pre_op_trigs.html
-    print "Ignored defcomp transaction #{0}".format(transaction.id)
+    print "Ignored transaction #{0}: defcomp".format(transaction.id)
 
 # ################################################################################################ #
 # Script Classes                                                                                   #
@@ -191,6 +268,7 @@ class AccuRev2Git(object):
     def __init__(self, config):
         self.config = config
         self.transactionHandlers = { "add": OnAdd, "chstream": OnChstream, "co": OnCo, "defunct": OnDefunct, "keep": OnKeep, "promote": OnPromote, "move": OnMove, "mkstream": OnMkstream, "purge": OnPurge, "undefunct": OnUndefunct, "defcomp": OnDefcomp }
+        self.cwd = None
         
     def GetLastAccuRevTransaction(self):
         # TODO: Fix me! We don't have a way of retrieving the last accurev transaction that we
@@ -217,7 +295,7 @@ class AccuRev2Git(object):
             timeSpec = "{0}.{1}".format(timeSpec, maxTransactions)
         
         print "Querying history"
-        arHist = accurev.History(depot=self.config.accurev.depot, timeSpec=timeSpec)
+        arHist = accurev.History(depot=self.config.accurev.depot, timeSpec=timeSpec, allElementsFlag=True)
         
         for transaction in arHist.transactions:
             self.ProcessAccuRevTransaction(transaction)
@@ -230,7 +308,7 @@ class AccuRev2Git(object):
                 sys.stderr.write("Are you sure you want to overwrite? (yes/no)\n> ")
                 input = raw_input()
                 while input not in [ "yes", "no" ]:
-                    sys.stderr.write("Please enter yes or no\n")
+                    sys.stderr.write("Please enter yes or no\n> ")
                     input = raw_input()
 
                 if input == "no":
@@ -239,34 +317,53 @@ class AccuRev2Git(object):
                 print "Removing existing git repository"
                 shutil.rmtree(os.path.join(gitRepoPath, ".git"))
         
-        print "Creating new git repository"
-        repo = Repo.init(gitRepoPath, bare=False)
+            print "Creating new git repository"
+            repo = Repo.init(gitRepoPath, bare=False)
         
-        return repo
+            # Create an empty first commit so that we can create branches as we please.
+            self.cwd = os.getcwd()
+            os.chdir(gitRepoPath)
+            command = subprocess.Popen([ 'git', 'commit', '--allow-empty', '-m', 'initial commit' ], stdout=subprocess.PIPE)
+            command.wait()
+            if command.returncode != 0:
+                print "Error creating initial commit!"
+                sys.exit(1)
+            
+            return repo
+        else:
+            sys.stderr.write("{0} not found.\n".format(gitRootDir))
+            
+        return None
     
     def GetExistingGitRepo(self, gitRepoPath):
         gitRootDir, gitRepoDir = os.path.split(gitRepoPath)
         if os.path.isdir(gitRootDir):
             if os.path.isdir(os.path.join(gitRepoPath, ".git")):
+                self.cwd = os.getcwd()
+                os.chdir(gitRepoPath)
                 print "Opening git repository"
                 return Repo(gitRepoPath)
 
-        print "Failed to find git repository at:", gitRepoPath
+        sys.stderr.write("Failed to find git repository at: {0}\n".format(gitRepoPath))
         return None
         
     # Start
     #   Begins a new AccuRev to Git conversion process discarding the old repository (if any).
     def Start(self):
         global gitRepo
+        global gitRepoPath
         
         print "Starting a new conversion operation"
         
         gitRepo = self.NewGitRepo(self.config.git.repoPath)
+        gitRepoPath = self.config.git.repoPath
         
         if accurev.Login(self.config.accurev.username, self.config.accurev.password):
             print "Login successful"
             
             self.ProcessAccuRevTransactionRange(startTransaction=self.config.accurev.startTransaction, endTransaction=self.config.accurev.endTransaction)
+            
+            os.chdir(self.cwd)
             
             if accurev.Logout():
                 print "Logout successful"
@@ -280,11 +377,13 @@ class AccuRev2Git(object):
     
     def Resume(self):
         global gitRepo
+        global gitRepoPath
         
         # For now the resume feature is not supported and causes us to start from scratch again.
         print "Resuming last conversion operation"
         
         gitRepo = self.GetExistingGitRepo(self.config.git.repoPath)
+        gitRepoPath = self.config.git.repoPath
         
         # TODO: Start by verifying where we have stopped last time and restoring state.
         
@@ -294,6 +393,8 @@ class AccuRev2Git(object):
             
             # TODO: Figure out at which transaction we have stopped and use it as the startTransaction.
             self.ProcessAccuRevTransactionRange(startTransaction=self.GetLastAccuRevTransaction(), endTransaction=self.config.accurev.endTransaction)
+            
+            os.chdir(self.cwd)
             
             if accurev.Logout():
                 print "Logout successful"
