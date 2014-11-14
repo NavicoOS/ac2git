@@ -26,25 +26,21 @@ from git import *
 # ################################################################################################ #
 # Script Globals.                                                                                  #
 # ################################################################################################ #
-# gitRepo - is a git.Repo object. See https://pythonhosted.org/GitPython/0.3.1/tutorial.html#initialize-a-repo-object
-#   It is guaranteed NOT to be None when the Handlers execute (or at least it is an error if this
-#   object is not a valid/initialised/existing git repo when the handlers are called)
-gitRepo = None
-gitRepoPath = None
+state = None
 
 # ################################################################################################ #
 # Script Core. Git helper functions                                                                #
 # ################################################################################################ #
 def CheckoutBranch(branchName):
-    global gitRepo
+    global state
     
     branch = None
     
     try:
-        branch = getattr(gitRepo.heads, branchName)
+        branch = getattr(state.gitRepo.heads, branchName)
         #print "branch:", branchName, "exists"
     except:
-        branch = gitRepo.create_head(branchName)
+        branch = state.gitRepo.create_head(branchName)
         #print "branch:", branchName, "created"
         
     return branch
@@ -59,28 +55,46 @@ def GetGitElementPath(accurevDepotElementPath, gitRepoPath=None, isAbsolute=Fals
             return os.path.abspath(relpath)
     return relpath
 
-def PopulateHack():
+def PopulateThroughVersionCache(verSpec, location, element):
     # Note: If the pop command is used with the -v option, and any element specified in the
-    #   <list-file> or <element-list> has status (defunct) in the stream’s default group, the
+    #   <list-file> or <element-list> has status (defunct) in the stream's default group, the
     #   command will fail. If you are using a script to generate a list of files to pop, check for
     #   this potential error condition.
     #  Source: http://www.accurev.com/download/ac_current_release/AccuRev_WebHelp/wwhelp/wwhimpl/js/html/wwhelp.htm#href=AccuRev_User_CLI/cli_ref_pop.html
     #  
-    #  However, it seems that AccuRev allows you to populate an already defuncted directory at the
-    #  given version so lets do that when Populate fails...
+    #  However, it seems that AccuRev allows you to populate a defuncted directory at the given
+    #  version so lets do that when Populate fails...
+    #  Source: http://www.accurev.com/ubbthreads/ubbthreads.php/topics/3678/How_to_pull_a_copy_of_code_out
     #  
     #  The exact error with which it fails is:
     #  
     #  accurev populate error:
     #  No element named <path-to-element>
-    #  
-    #  So look for that.
-    pass
+    global state
+    if not os.path.isdir(state.accuRevVersionCachePath):
+        os.mkdir(state.accuRevVersionCachePath)
+    
+    verPath = os.path.join(state.accuRevVersionCachePath, repr(verSpec))
+    if not os.path.isdir(verPath):
+        os.makedirs(verPath)
+    
+    elementDepotPathPrefix = element[:3]
+    elementDepotPath = element[3:] # Strip the \.\ AccuRev Depot root prefix.
+    elementRoot, elementFilename = os.path.split(elementDepotPath)
+    cachedPath = os.path.join(verPath, elementDepotPath)
+    
+    if not os.path.exists(cachedPath):
+        if not accurev.Populate(isRecursive=True, verSpec=repr(verSpec), location=verPath, elementList="{0}{1}".format(elementDepotPathPrefix, elementRoot)):
+            print "accurev pop -v", verSpec, "-L", verPath, "{0}{1}".format(elementDepotPathPrefix, elementRoot), "failed"
+            return False
+    
+    return shutil.copy2(cachedPath, location)
     
 # ################################################################################################ #
 # Script Core. AccuRev transaction to Git conversion handlers.                                     #
 # ################################################################################################ #
 def OnAdd(transaction):
+    global state
     print "OnAdd:", transaction
     if len(transaction.versions) > 0:
         print "Branch:", transaction.versions[0].virtualNamedVersion.stream
@@ -91,22 +105,23 @@ def OnAdd(transaction):
             # Populate it only if it is not a directory.
             if version.dir != "yes":
                 print "Version:", version
-                print "gitRepoPath:", gitRepoPath
+                print "gitRepoPath:", state.gitRepoPath
                 print "VersionPath:", version.path
-                print "ElementPath:", GetGitElementPath(version.path, gitRepoPath)
+                print "ElementPath:", GetGitElementPath(version.path, state.gitRepoPath)
             
-                if accurev.Populate(isRecursive=True, verSpec=repr(version.virtualNamedVersion), location=gitRepoPath, elementList=version.path):
-                    gitRepo.index.add([GetGitElementPath(version.path)])
+                if accurev.Populate(isRecursive=True, verSpec=repr(version.virtualNamedVersion), location=state.gitRepoPath, elementList=version.path):
+                    state.gitRepo.index.add([GetGitElementPath(version.path)])
                     addCount += 1
                 else:
-                    # 
-                    print "Populate failed"
+                    print "Populate failed, trying through cache..."
+                    PopulateThroughVersionCache(version.virtualNamedVersion, state.gitRepoPath, version.path)
+                    
             else:
-                accurev.Populate(isRecursive=True, verSpec=repr(version.virtualNamedVersion), timeSpec=transaction.id, location=gitRepoPath, elementList=version.path)
+                accurev.Populate(isRecursive=True, verSpec=repr(version.virtualNamedVersion), timeSpec=transaction.id, location=state.gitRepoPath, elementList=version.path)
                 print "Skipp:", version
         
         if addCount > 0:
-            gitRepo.index.commit(message=transaction.comment)
+            state.gitRepo.index.commit(message=transaction.comment)
 
 def OnChstream(transaction):
     print "OnChstream:", transaction
@@ -270,6 +285,13 @@ class AccuRev2Git(object):
         self.transactionHandlers = { "add": OnAdd, "chstream": OnChstream, "co": OnCo, "defunct": OnDefunct, "keep": OnKeep, "promote": OnPromote, "move": OnMove, "mkstream": OnMkstream, "purge": OnPurge, "undefunct": OnUndefunct, "defcomp": OnDefcomp }
         self.cwd = None
         
+        # gitRepo - is a git.Repo object. See https://pythonhosted.org/GitPython/0.3.1/tutorial.html#initialize-a-repo-object
+        #   It is guaranteed NOT to be None when the Handlers execute (or at least it is an error if this
+        #   object is not a valid/initialised/existing git repo when the handlers are called)
+        self.gitRepo = None
+        self.gitRepoPath = None
+        self.accuRevVersionCachePath = None
+        
     def GetLastAccuRevTransaction(self):
         # TODO: Fix me! We don't have a way of retrieving the last accurev transaction that we
         #               processed yet. This will most likely involve parsing the git history in some
@@ -355,8 +377,9 @@ class AccuRev2Git(object):
         
         print "Starting a new conversion operation"
         
-        gitRepo = self.NewGitRepo(self.config.git.repoPath)
-        gitRepoPath = self.config.git.repoPath
+        self.gitRepo = self.NewGitRepo(self.config.git.repoPath)
+        self.gitRepoPath = self.config.git.repoPath
+        self.accuRevVersionCachePath = os.path.join(self.cwd, ".accuRevVersionCache")
         
         if accurev.Login(self.config.accurev.username, self.config.accurev.password):
             print "Login successful"
@@ -382,8 +405,9 @@ class AccuRev2Git(object):
         # For now the resume feature is not supported and causes us to start from scratch again.
         print "Resuming last conversion operation"
         
-        gitRepo = self.GetExistingGitRepo(self.config.git.repoPath)
-        gitRepoPath = self.config.git.repoPath
+        self.gitRepo = self.GetExistingGitRepo(self.config.git.repoPath)
+        self.gitRepoPath = self.config.git.repoPath
+        self.accuRevVersionCachePath = os.path.join(self.cwd, ".accuRevVersionCache")
         
         # TODO: Start by verifying where we have stopped last time and restoring state.
         
@@ -467,6 +491,8 @@ def LoadConfigOrDefaults(scriptName):
 # Script Main                                                                                      #
 # ################################################################################################ #
 def AccuRev2GitMain(argv):
+    global state
+    
     config = LoadConfigOrDefaults(argv[0])
     
     # Set-up and parse the command line arguments. Examples from https://docs.python.org/dev/library/argparse.html
@@ -498,12 +524,12 @@ def AccuRev2GitMain(argv):
     if not ValidateConfig(config):
         return 1
 
-    accurev2git = AccuRev2Git(config)
+    state = AccuRev2Git(config)
     
     if args.resume == "true":
-        return accurev2git.Resume()
+        return state.Resume()
     else:
-        return accurev2git.Start()
+        return state.Start()
         
 # ################################################################################################ #
 # Script Start                                                                                     #
