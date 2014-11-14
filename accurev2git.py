@@ -54,48 +54,34 @@ def GetGitElementPath(accurevDepotElementPath, gitRepoPath=None, isAbsolute=Fals
         else:
             return os.path.abspath(relpath)
     return relpath
-
-def PopulateThroughVersionCache(verSpec, location, element):
-    # Note: If the pop command is used with the -v option, and any element specified in the
-    #   <list-file> or <element-list> has status (defunct) in the stream's default group, the
-    #   command will fail. If you are using a script to generate a list of files to pop, check for
-    #   this potential error condition.
-    #  Source: http://www.accurev.com/download/ac_current_release/AccuRev_WebHelp/wwhelp/wwhimpl/js/html/wwhelp.htm#href=AccuRev_User_CLI/cli_ref_pop.html
-    #  
-    #  However, it seems that AccuRev allows you to populate a defuncted directory at the given
-    #  version so lets do that when Populate fails...
-    #  Source: http://www.accurev.com/ubbthreads/ubbthreads.php/topics/3678/How_to_pull_a_copy_of_code_out
-    #  
-    #  The exact error with which it fails is:
-    #  
-    #  accurev populate error:
-    #  No element named <path-to-element>
-    global state
-    if not os.path.isdir(state.accuRevVersionCachePath):
-        os.mkdir(state.accuRevVersionCachePath)
-    
-    verPath = os.path.join(state.accuRevVersionCachePath, repr(verSpec))
-    if not os.path.isdir(verPath):
-        os.makedirs(verPath)
-    
-    elementDepotPathPrefix = element[:3]
-    elementDepotPath = element[3:] # Strip the \.\ AccuRev Depot root prefix.
-    elementRoot, elementFilename = os.path.split(elementDepotPath)
-    cachedPath = os.path.join(verPath, elementDepotPath)
-    
-    if not os.path.exists(cachedPath):
-        if not accurev.Populate(isRecursive=True, verSpec=repr(verSpec), location=verPath, elementList="{0}{1}".format(elementDepotPathPrefix, elementRoot)):
-            print "accurev pop -v", verSpec, "-L", verPath, "{0}{1}".format(elementDepotPathPrefix, elementRoot), "failed"
-            return False
-    
-    return shutil.copy2(cachedPath, location)
     
 # ################################################################################################ #
 # Script Core. AccuRev transaction to Git conversion handlers.                                     #
 # ################################################################################################ #
 def OnAdd(transaction):
+    # Due to the fact that the accurev pop operation cannot retrieve defunct files when we use it
+    # outside of a workspace and that workspaces cannot reparent themselves under workspaces
+    # we must restrict ourselves to only processing stream operations, promotions.
+    print "Ignored transaction #{0}: add".format(transaction.id), transaction
+
+def OnChstream(transaction):
+    # We determine which branch something needs to go to on the basis of the real/virtual version
+    # there is no need to track all the stream changes.
+    print "Ignored transaction #{0}: chstream".format(transaction.id)
+    
+def OnCo(transaction):
+    # The co (checkout) transaction can be safely ignored.
+    print "Ignored transaction #{0}: co".format(transaction.id)
+
+def OnKeep(transaction):
+    # Due to the fact that the accurev pop operation cannot retrieve defunct files when we use it
+    # outside of a workspace and that workspaces cannot reparent themselves under workspaces
+    # we must restrict ourselves to only processing stream operations, promotions.
+    print "Ignored transaction #{0}: keep".format(transaction.id)
+
+def OnPromote(transaction):
     global state
-    print "OnAdd:", transaction
+    print "OnPromote:", transaction
     if len(transaction.versions) > 0:
         print "Branch:", transaction.versions[0].virtualNamedVersion.stream
         
@@ -109,35 +95,18 @@ def OnAdd(transaction):
                 print "VersionPath:", version.path
                 print "ElementPath:", GetGitElementPath(version.path, state.gitRepoPath)
             
-                if accurev.Populate(isRecursive=True, verSpec=repr(version.virtualNamedVersion), location=state.gitRepoPath, elementList=version.path):
+                if accurev.pop(isRecursive=True, verSpec=repr(version.virtualNamedVersion), location=state.gitRepoPath, elementList=version.path):
                     state.gitRepo.index.add([GetGitElementPath(version.path)])
                     addCount += 1
                 else:
                     print "Populate failed, trying through cache..."
-                    PopulateThroughVersionCache(version.virtualNamedVersion, state.gitRepoPath, version.path)
                     
             else:
-                accurev.Populate(isRecursive=True, verSpec=repr(version.virtualNamedVersion), timeSpec=transaction.id, location=state.gitRepoPath, elementList=version.path)
+                accurev.pop(isRecursive=True, verSpec=repr(version.virtualNamedVersion), timeSpec=transaction.id, location=state.gitRepoPath, elementList=version.path)
                 print "Skipp:", version
         
         if addCount > 0:
             state.gitRepo.index.commit(message=transaction.comment)
-
-def OnChstream(transaction):
-    print "OnChstream:", transaction
-    
-def OnCo(transaction):
-    # The co (checkout) transaction can be safely ignored.
-    print "Ignored transaction #{0}: co".format(transaction.id)
-
-def OnDefunct(transaction):
-    print "OnDefunct:", transaction
-
-def OnKeep(transaction):
-    print "OnKeep:", transaction
-
-def OnPromote(transaction):
-    print "OnPromote:", transaction
 
 def OnMove(transaction):
     print "OnMove:", transaction
@@ -148,13 +117,14 @@ def OnMkstream(transaction):
     print "Ignored transaction #{0}: mkstream".format(transaction.id)
 
 def OnPurge(transaction):
-    print "OnPurge:", transaction
+    print "Ignored transaction #{0}: purge".format(transaction.id)
+    # If done on a stream, must be translated to a checkout of the original element from the basis.
 
 def OnDefunct(transaction):
     print "OnDefunct:", transaction
 
 def OnUndefunct(transaction):
-    print "OnDefunct:", transaction
+    print "OnUndefunct:", transaction
 
 def OnDefcomp(transaction):
     # The defcomp command is not visible to the user; it is used in the implementation of the 
@@ -317,7 +287,7 @@ class AccuRev2Git(object):
             timeSpec = "{0}.{1}".format(timeSpec, maxTransactions)
         
         print "Querying history"
-        arHist = accurev.History(depot=self.config.accurev.depot, timeSpec=timeSpec, allElementsFlag=True)
+        arHist = accurev.hist(depot=self.config.accurev.depot, timeSpec=timeSpec, allElementsFlag=True)
         
         for transaction in arHist.transactions:
             self.ProcessAccuRevTransaction(transaction)
@@ -381,14 +351,14 @@ class AccuRev2Git(object):
         self.gitRepoPath = self.config.git.repoPath
         self.accuRevVersionCachePath = os.path.join(self.cwd, ".accuRevVersionCache")
         
-        if accurev.Login(self.config.accurev.username, self.config.accurev.password):
+        if accurev.login(self.config.accurev.username, self.config.accurev.password):
             print "Login successful"
             
             self.ProcessAccuRevTransactionRange(startTransaction=self.config.accurev.startTransaction, endTransaction=self.config.accurev.endTransaction)
             
             os.chdir(self.cwd)
             
-            if accurev.Logout():
+            if accurev.logout():
                 print "Logout successful"
                 return 0
             else:
@@ -412,7 +382,7 @@ class AccuRev2Git(object):
         # TODO: Start by verifying where we have stopped last time and restoring state.
         
         # TODO: Do exactly what Start does but start in the middle...
-        if accurev.Login(self.config.accurev.username, self.config.accurev.password):
+        if accurev.login(self.config.accurev.username, self.config.accurev.password):
             print "Login successful"
             
             # TODO: Figure out at which transaction we have stopped and use it as the startTransaction.
@@ -420,7 +390,7 @@ class AccuRev2Git(object):
             
             os.chdir(self.cwd)
             
-            if accurev.Logout():
+            if accurev.logout():
                 print "Logout successful"
                 return 0
             else:
