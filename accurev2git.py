@@ -15,6 +15,8 @@ import os
 import shutil
 import subprocess
 import xml.etree.ElementTree as ElementTree
+import datetime
+import time
 
 import accurev
 
@@ -72,82 +74,114 @@ def OnAdd(transaction):
     # Due to the fact that the accurev pop operation cannot retrieve defunct files when we use it
     # outside of a workspace and that workspaces cannot reparent themselves under workspaces
     # we must restrict ourselves to only processing stream operations, promotions.
-    print "Ignored transaction #{0}: add".format(transaction.id)
+    state.config.logger.dbg( "Ignored transaction #{0}: add".format(transaction.id) )
 
 def OnChstream(transaction):
     # We determine which branch something needs to go to on the basis of the real/virtual version
     # there is no need to track all the stream changes.
-    print "Ignored transaction #{0}: chstream".format(transaction.id)
+    state.config.logger.dbg( "Ignored transaction #{0}: chstream".format(transaction.id) )
     
 def OnCo(transaction):
     # The co (checkout) transaction can be safely ignored.
-    print "Ignored transaction #{0}: co".format(transaction.id)
+    state.config.logger.dbg( "Ignored transaction #{0}: co".format(transaction.id) )
 
 def OnKeep(transaction):
     # Due to the fact that the accurev pop operation cannot retrieve defunct files when we use it
     # outside of a workspace and that workspaces cannot reparent themselves under workspaces
     # we must restrict ourselves to only processing stream operations, promotions.
-    print "Ignored transaction #{0}: keep".format(transaction.id)
+    state.config.logger.dbg( "Ignored transaction #{0}: keep".format(transaction.id) )
 
 def OnPromote(transaction):
     global state
-    print "OnPromote: #{0}".format(transaction.id)
+    state.config.logger.dbg( "OnPromote: #{0}".format(transaction.id) )
     if len(transaction.versions) > 0:
-        print "Branch:", transaction.versions[0].virtualNamedVersion.stream
+        state.config.logger.dbg( "Branch:", transaction.versions[0].virtualNamedVersion.stream )
         
         CheckoutBranch(transaction.versions[0].virtualNamedVersion.stream)
         addCount = 0
         for version in transaction.versions:
             # Populate it only if it is not a directory.
             if version.dir != "yes":
-                print "Version:", version.virtualNamedVersion
-                print "gitRepoPath:", state.gitRepoPath
-                print "VersionPath:", version.path
-                print "ElementPath:", GetGitElementPath(version.path, state.gitRepoPath)
+                state.config.logger.dbg( "accurev path:", version.path )
+                state.config.logger.dbg( "git path    :", GetGitElementPath(version.path, state.gitRepoPath) )
             
                 if GetAccurevFile(elementId=version.eid, depotName=state.config.accurev.depot, verSpec=str(version.virtual), element=version.path, gitPath=state.gitRepoPath):
-                    state.gitRepo.index.add([GetGitElementPath(version.path)])
+                    state.gitRepo.git.add([GetGitElementPath(version.path)])
                     addCount += 1
                 else:
-                    print "Cat failed for {0}".format(version.path)
+                    state.config.logger.dbg( "Cat failed for {0}".format(version.path) )
                     
             else:
-                print "Skip:", version
+                state.config.logger.dbg( "Skip:", version.path )
         
         if addCount > 0:
-            state.gitRepo.index.commit(message=transaction.comment)
-            sys.exit(0)
+            state.gitRepo.git.commit(m=transaction.comment)
+            state.config.logger.dbg( "Committed", addCount, "files to", state.gitRepo.head.reference.commit )
         else:
-            print "Did not commit"
+            state.config.logger.dbg( "Did not commit" )
 
 def OnMove(transaction):
-    print "OnMove:", transaction
+    state.config.logger.dbg( "OnMove:", transaction )
 
 def OnMkstream(transaction):
     # The mkstream command doesn't contain enough information to create a branch in git.
     # Silently ignore.
-    print "Ignored transaction #{0}: mkstream".format(transaction.id)
+    state.config.logger.dbg( "Ignored transaction #{0}: mkstream".format(transaction.id) )
 
 def OnPurge(transaction):
-    print "Ignored transaction #{0}: purge".format(transaction.id)
+    state.config.logger.dbg( "Ignored transaction #{0}: purge".format(transaction.id) )
     # If done on a stream, must be translated to a checkout of the original element from the basis.
 
 def OnDefunct(transaction):
-    print "OnDefunct:", transaction
+    state.config.logger.dbg( "OnDefunct:", transaction.id )
 
 def OnUndefunct(transaction):
-    print "OnUndefunct:", transaction
+    state.config.logger.dbg( "OnUndefunct:", transaction.id )
 
 def OnDefcomp(transaction):
     # The defcomp command is not visible to the user; it is used in the implementation of the 
     # include/exclude facility CLI commands incl, excl, incldo, and clear.
     # Source: http://www.accurev.com/download/docs/5.5.0_books/AccuRev_WebHelp/AccuRev_Admin/wwhelp/wwhimpl/common/html/wwhelp.htm#context=admin&file=pre_op_trigs.html
-    print "Ignored transaction #{0}: defcomp".format(transaction.id)
+    state.config.logger.dbg( "Ignored transaction #{0}: defcomp".format(transaction.id) )
 
 # ################################################################################################ #
 # Script Classes                                                                                   #
 # ################################################################################################ #
 class Config(object):
+    class Logger(object):
+        def __init__(self):
+            self.referenceTime = None
+            self.isDbgEnabled = False
+            self.isInfoEnabled = True
+            self.isErrEnabled = True
+        
+        def _FormatMessage(self, messages):
+            if self.referenceTime:
+                outMessage = "{0: >6.2f}s:".format(time.clock() - self.referenceTime)
+            else:
+                outMessage = None
+            
+            for msg in messages:
+                if outMessage is not None:
+                    outMessage = "{0} {1}".format(outMessage, msg)
+                else:
+                    outMessage = "{0}".format(msg)
+            
+            return outMessage
+        
+        def info(self, *message):
+            if self.isInfoEnabled:
+                print self._FormatMessage(message)
+
+        def dbg(self, *message):
+            if self.isDbgEnabled:
+                print self._FormatMessage(message)
+        
+        def error(self, *message):
+            if self.isErrEnabled:
+                sys.stderr.write(self._FormatMessage(message))
+                sys.stderr.write("\n")
+        
     class AccuRev(object):
         @classmethod
         def fromxmlelement(cls, xmlElement):
@@ -252,6 +286,7 @@ class Config(object):
         self.accurev  = accurev
         self.git      = git
         self.usermaps = usermaps
+        self.logger   = Config.Logger()
         
     def __repr__(self):
         str = "Config(accurev=" + repr(self.accurev)
@@ -287,7 +322,7 @@ class AccuRev2Git(object):
         if handler is not None:
             handler(transaction)
         else:
-            sys.stderr.write("Error: No handler for [\"{0}\"] transactions\n".format(transaction.Type))
+            state.config.logger.error("Error: No handler for [\"{0}\"] transactions\n".format(transaction.Type))
         
     # ProcessAccuRevTransactionRange
     #   Iterates over accurev transactions between the startTransaction and endTransaction processing
@@ -298,7 +333,7 @@ class AccuRev2Git(object):
         if maxTransactions is not None and maxTransactions > 0:
             timeSpec = "{0}.{1}".format(timeSpec, maxTransactions)
         
-        print "Querying history"
+        state.config.logger.info( "Querying history" )
         arHist = accurev.hist(depot=self.config.accurev.depot, timeSpec=timeSpec, allElementsFlag=True)
         
         for transaction in arHist.transactions:
@@ -308,20 +343,10 @@ class AccuRev2Git(object):
         gitRootDir, gitRepoDir = os.path.split(gitRepoPath)
         if os.path.isdir(gitRootDir):
             if os.path.isdir(os.path.join(gitRepoPath, ".git")):
-                sys.stderr.write("Found an existing git repository.\n")
-                sys.stderr.write("Are you sure you want to overwrite? (yes/no)\n> ")
-                input = raw_input()
-                while input not in [ "yes", "no" ]:
-                    sys.stderr.write("Please enter yes or no\n> ")
-                    input = raw_input()
-
-                if input == "no":
-                    return None
-                
-                print "Removing existing git repository"
-                shutil.rmtree(os.path.join(gitRepoPath, ".git"))
+                state.config.logger.error("Found an existing git repository. Please use the --resume option.\n")
+                sys.exit(1)
         
-            print "Creating new git repository"
+            state.config.logger.info( "Creating new git repository" )
             repo = Repo.init(gitRepoPath, bare=False)
         
             # Create an empty first commit so that we can create branches as we please.
@@ -330,12 +355,12 @@ class AccuRev2Git(object):
             command = subprocess.Popen([ 'git', 'commit', '--allow-empty', '-m', 'initial commit' ], stdout=subprocess.PIPE)
             command.wait()
             if command.returncode != 0:
-                print "Error creating initial commit!"
+                state.config.logger.info( "Error creating initial commit!" )
                 sys.exit(1)
             
             return repo
         else:
-            sys.stderr.write("{0} not found.\n".format(gitRootDir))
+            state.config.logger.error("{0} not found.\n".format(gitRootDir))
             
         return None
     
@@ -345,10 +370,10 @@ class AccuRev2Git(object):
             if os.path.isdir(os.path.join(gitRepoPath, ".git")):
                 self.cwd = os.getcwd()
                 os.chdir(gitRepoPath)
-                print "Opening git repository"
+                state.config.logger.info( "Opening git repository" )
                 return Repo(gitRepoPath)
-
-        sys.stderr.write("Failed to find git repository at: {0}\n".format(gitRepoPath))
+            
+        state.config.logger.error("Failed to find git repository at: {0}\n".format(gitRepoPath))
         return None
         
     # Start
@@ -357,60 +382,68 @@ class AccuRev2Git(object):
         global gitRepo
         global gitRepoPath
         
-        print "Starting a new conversion operation"
+        state.config.logger.info( "Starting a new conversion operation" )
         
         self.gitRepo = self.NewGitRepo(self.config.git.repoPath)
-        self.gitRepoPath = self.config.git.repoPath
-        self.accuRevVersionCachePath = os.path.join(self.cwd, ".accuRevVersionCache")
         
-        if accurev.login(self.config.accurev.username, self.config.accurev.password):
-            print "Login successful"
+        if self.gitRepo is not None:
+            self.gitRepoPath = self.config.git.repoPath
+            self.accuRevVersionCachePath = os.path.join(self.cwd, ".accuRevVersionCache")
             
-            self.ProcessAccuRevTransactionRange(startTransaction=self.config.accurev.startTransaction, endTransaction=self.config.accurev.endTransaction)
-            
-            os.chdir(self.cwd)
-            
-            if accurev.logout():
-                print "Logout successful"
-                return 0
+            if accurev.login(self.config.accurev.username, self.config.accurev.password):
+                state.config.logger.info( "Login successful" )
+                
+                self.ProcessAccuRevTransactionRange(startTransaction=self.config.accurev.startTransaction, endTransaction=self.config.accurev.endTransaction)
+                
+                os.chdir(self.cwd)
+                
+                if accurev.logout():
+                    state.config.logger.info( "Logout successful" )
+                    return 0
+                else:
+                    state.config.logger.error("Logout failed\n")
+                    return 1
             else:
-                sys.stderr.write("Logout failed\n")
+                state.config.logger.error("AccuRev login failed.\n")
                 return 1
         else:
-            sys.stderr.write("AccuRev login failed.\n")
-            return 1
-    
+            state.config.logger.error( "Could not create git repository." )
+            
     def Resume(self):
         global gitRepo
         global gitRepoPath
         
         # For now the resume feature is not supported and causes us to start from scratch again.
-        print "Resuming last conversion operation"
+        state.config.logger.info( "Resuming last conversion operation" )
         
         self.gitRepo = self.GetExistingGitRepo(self.config.git.repoPath)
-        self.gitRepoPath = self.config.git.repoPath
-        self.accuRevVersionCachePath = os.path.join(self.cwd, ".accuRevVersionCache")
         
-        # TODO: Start by verifying where we have stopped last time and restoring state.
-        
-        # TODO: Do exactly what Start does but start in the middle...
-        if accurev.login(self.config.accurev.username, self.config.accurev.password):
-            print "Login successful"
+        if self.gitRepo is not None:
+            self.gitRepoPath = self.config.git.repoPath
+            self.accuRevVersionCachePath = os.path.join(self.cwd, ".accuRevVersionCache")
             
-            # TODO: Figure out at which transaction we have stopped and use it as the startTransaction.
-            self.ProcessAccuRevTransactionRange(startTransaction=self.GetLastAccuRevTransaction(), endTransaction=self.config.accurev.endTransaction)
+            # TODO: Start by verifying where we have stopped last time and restoring state.
             
-            os.chdir(self.cwd)
-            
-            if accurev.logout():
-                print "Logout successful"
-                return 0
+            # TODO: Do exactly what Start does but start in the middle...
+            if accurev.login(self.config.accurev.username, self.config.accurev.password):
+                state.config.logger.info( "Login successful" )
+                
+                # TODO: Figure out at which transaction we have stopped and use it as the startTransaction.
+                self.ProcessAccuRevTransactionRange(startTransaction=self.GetLastAccuRevTransaction(), endTransaction=self.config.accurev.endTransaction)
+                
+                os.chdir(self.cwd)
+                
+                if accurev.logout():
+                    state.config.logger.info( "Logout successful" )
+                    return 0
+                else:
+                    state.config.logger.error("Logout failed\n")
+                    return 1
             else:
-                sys.stderr.write("Logout failed\n")
+                state.config.logger.error("AccuRev login failed.\n")
                 return 1
         else:
-            sys.stderr.write("AccuRev login failed.\n")
-            return 1
+            state.config.logger.error( "Cannot resume last conversion operation. No git repository." )
         
 # ################################################################################################ #
 # Script Functions                                                                                 #
@@ -433,16 +466,16 @@ def ValidateConfig(config):
     # Validate the program args and configuration up to this point.
     isValid = True
     if config.accurev.username is None:
-        sys.stderr.write("No AccuRev username specified.\n")
+        state.config.logger.error("No AccuRev username specified.\n")
         isValid = False
     if config.accurev.password is None:
-        sys.stderr.write("No AccuRev password specified.\n")
+        state.config.logger.error("No AccuRev password specified.\n")
         isValid = False
     if config.accurev.depot is None:
-        sys.stderr.write("No AccuRev depot specified.\n")
+        state.config.logger.error("No AccuRev depot specified.\n")
         isValid = False
     if config.git.repoPath is None:
-        sys.stderr.write("No Git repository specified.\n")
+        state.config.logger.error("No Git repository specified.\n")
         isValid = False
     
     return isValid
@@ -484,6 +517,7 @@ def AccuRev2GitMain(argv):
     parser.add_argument('--accurev-depot',    nargs='?', dest='accurevDepot',    default=config.accurev.depot)
     parser.add_argument('--git-repo-path',    nargs='?', dest='gitRepoPath',     default=config.git.repoPath)
     parser.add_argument('--resume',    nargs='?', dest='resume', const="true")
+    parser.add_argument('--debug',    nargs='?', dest='debug', const="true")
     parser.add_argument('--dump-example-config', nargs='?', dest='exampleConfigFilename', const='no-filename', default=None)
     
     args = parser.parse_args()
@@ -508,6 +542,8 @@ def AccuRev2GitMain(argv):
 
     state = AccuRev2Git(config)
     
+    state.config.logger.isDbgEnabled = ( args.debug == "true" )
+        
     if args.resume == "true":
         return state.Resume()
     else:
