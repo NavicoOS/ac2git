@@ -12,6 +12,8 @@
 import sys
 import subprocess
 import xml.etree.ElementTree as ElementTree
+import datetime
+import re
 
 # ################################################################################################ #
 # Script Globals                                                                                   #
@@ -26,12 +28,24 @@ def GetXmlContents(xmlElement):
         return xmlElement.text + ''.join(ElementTree.tostring(e) for e in xmlElement)
     return None
 
+def IntOrNone(value):
+    if value is None:
+        return None
+    return int(value)
+
+def UTCDateTimeOrNone(value):
+    if value is None:
+        return None
+    if type(value) is str or type(value) is int:
+        value = float(value)
+    return datetime.datetime.utcfromtimestamp(value)
+    
 class AccuRevWorkspace(object):
     def __init__(self, storage, host, targetTransaction, fileModTime, EOL, Type):
         self.storage           = storage
         self.host              = host
-        self.targetTransaction = targetTransaction
-        self.fileModTime       = fileModTime
+        self.targetTransaction = IntOrNone(targetTransaction)
+        self.fileModTime       = UTCDateTimeOrNone(fileModTime)
         self.EOL               = EOL
         self.Type              = Type
         
@@ -63,17 +77,17 @@ class AccuRevWorkspace(object):
 class AccuRevStream(object):
     def __init__(self, name, streamNumber, depotName, Type, basis=None, basisStreamNumber=None, time=None, prevTime=None, prevBasis=None, prevBasisStreamNumber=None, workspace=None, startTime=None, isDynamic=None, hasDefaultGroup=None):
         self.name                  = name
-        self.streamNumber          = streamNumber
+        self.streamNumber          = IntOrNone(streamNumber)
         self.depotName             = depotName
         self.Type                  = Type
         self.basis                 = basis
-        self.basisStreamNumber     = basisStreamNumber
-        self.time                  = time
-        self.prevTime              = prevTime
+        self.basisStreamNumber     = IntOrNone(basisStreamNumber)
+        self.time                  = UTCDateTimeOrNone(time)
+        self.prevTime              = UTCDateTimeOrNone(prevTime)
         self.prevBasis             = prevBasis
-        self.prevBasisStreamNumber = prevBasisStreamNumber
+        self.prevBasisStreamNumber = IntOrNone(prevBasisStreamNumber)
         self.workspace             = workspace
-        self.startTime             = startTime
+        self.startTime             = UTCDateTimeOrNone(startTime)
         self.isDynamic             = isDynamic
         self.hasDefaultGroup       = hasDefaultGroup
         
@@ -156,7 +170,9 @@ class AccuRevVersion(object):
             versionParts = versionString.split('/')
             if len(versionParts) == 2:
                 stream  = versionParts[0]
-                version = versionParts[1]
+                if re.match('^[0-9]+$', stream):
+                    stream = int(stream)
+                version = int(versionParts[1])
                 
                 return cls(stream, version)
         
@@ -165,7 +181,7 @@ class AccuRevVersion(object):
 class AccuRevElementVersion(object):
     def __init__(self, path, eid, virtual, real, virtualNamedVersion, realNamedVersion, ancestor=None, ancestorNamedVersion=None, mergedAgainst=None, mergedAgainstNamedVersion=None, elemType=None, dir=None):
         self.path                      = path
-        self.eid                       = eid
+        self.eid                       = IntOrNone(eid)
         self.virtual                   = AccuRevVersion.fromstring(virtual)
         self.real                      = AccuRevVersion.fromstring(real)
         self.virtualNamedVersion       = AccuRevVersion.fromstring(virtualNamedVersion)
@@ -218,9 +234,9 @@ class AccuRevElementVersion(object):
         
 class AccuRevTransaction(object):
     def __init__(self, id, Type, time, user, comment, versions = [], moves = [], stream = None):
-        self.id       = id
+        self.id       = IntOrNone(id)
         self.Type     = Type
-        self.time     = time
+        self.time     = UTCDateTimeOrNone(time)
         self.user     = user
         self.comment  = comment
         self.versions = versions
@@ -269,7 +285,7 @@ class AccuRevTransaction(object):
     
 class AccuRevhistory(object):
     def __init__(self, taskId = None, transactions = [], streams = []):
-        self.taskId       = taskId
+        self.taskId       = IntOrNone(taskId)
         self.transactions = transactions
         self.streams      = streams
     
@@ -309,7 +325,7 @@ class AccuRevhistory(object):
 
 class AccuRevUser(object):
     def __init__(self, number = None, name = None, kind = None):
-        self.number = number
+        self.number = IntOrNone(number)
         self.name   = name
         self.kind   = kind
         
@@ -334,7 +350,7 @@ class AccuRevUser(object):
             
 class AccuRevShowUsers(object):
     def __init__(self, taskId = None, users = []):
-        self.taskId = taskId
+        self.taskId = IntOrNone(taskId)
         self.users  = users
     
     def __repr__(self):
@@ -365,7 +381,7 @@ class AccuRevShowUsers(object):
             
 class AccuRevDepot(object):
     def __init__(self, number=None, name=None, slice=None, exclusiveLocking=None, case=None, locWidth=None, replStatus=None):
-        self.number           = number
+        self.number           = IntOrNone(number)
         self.name             = name
         self.slice            = slice
         self.exclusiveLocking = exclusiveLocking
@@ -402,7 +418,7 @@ class AccuRevDepot(object):
             
 class AccuRevShowDepots(object):
     def __init__(self, taskId = None, depots = []):
-        self.taskId = taskId
+        self.taskId = IntOrNone(taskId)
         self.depots = depots
     
     def __repr__(self):
@@ -433,7 +449,7 @@ class AccuRevShowDepots(object):
             
 class AccuRevShowStreams(object):
     def __init__(self, taskId = None, streams = []):
-        self.taskId = taskId
+        self.taskId = IntOrNone(taskId)
         self.streams = streams
     
     def __repr__(self):
@@ -466,8 +482,8 @@ class AccuRevAncestor(object):
     def __init__(self, location = None, stream = None, version = None, virtualVersion = None):
         self.location       = location
         self.stream         = stream
-        self.version        = version
-        self.virtualVersion = virtualVersion
+        self.version        = AccuRevVersion.fromstring(version)
+        self.virtualVersion = AccuRevVersion.fromstring(virtualVersion)
     
     def __repr__(self):
         str = "AccuRevUpdate(location=" + repr(self.location)
@@ -504,7 +520,7 @@ class AccuRevCommandProgress(object):
     def __init__(self, phase = None, increment = None, number = None):
         self.phase     = phase
         self.increment = increment
-        self.number    = number
+        self.number    = IntOrNone(number)
     
     def __repr__(self):
         str = "AccuRevUpdate(phase=" + repr(self.phase)
@@ -544,7 +560,7 @@ class AccuRevUpdateElement(object):
 
 class AccuRevUpdate(object):
     def __init__(self, taskId = None, progressItems = None, messages = None, elements = None):
-        self.taskId        = taskId
+        self.taskId        = IntOrNone(taskId)
         self.progressItems = streams
         self.messages      = messages
         self.elements      = elements
@@ -722,7 +738,7 @@ class raw(object):
             cmd.extend([ '-R', directoryTreePath ])
         
         if stream is not None:
-            cmd.extend([ '-s', stream ])
+            cmd.extend([ '-s', str(stream) ])
         
         if listFile is not None:
             cmd.extend([ '-l', listFile ])
@@ -744,9 +760,13 @@ class raw(object):
         if depot is not None:
             cmd.extend([ "-p", depot ])
         if stream is not None:
-            cmd.extend([ "-s", stream ])
+            cmd.extend([ "-s", str(stream) ])
         if timeSpec is not None:
-            cmd.extend([ "-t", timeSpec ])
+            if type(timeSpec) is datetime.datetime:
+                timeSpecStr = "{:%Y/%m/%d %H:%M:%S}".format(timeSpec)
+            else:
+                timeSpecStr = str(timeSpec)
+            cmd.extend(["-t", str(timeSpecStr)])
         if listFile is not None:
             if isListFileXml:
                 cmd.append("-Fx")
@@ -759,7 +779,7 @@ class raw(object):
         if allElementsFlag:
             cmd.append("-a")
         if elementId is not None:
-            cmd.extend([ "-e", elementId ])
+            cmd.extend([ "-e", str(elementId) ])
         if transactionKind is not None:
             cmd.extend([ "-k", transactionKind ])
         if commentString is not None:
@@ -782,7 +802,7 @@ class raw(object):
             cmd.append("-R")
         
         if location is not None and verSpec is not None:
-            cmd.extend(["-v", verSpec, "-L", location])
+            cmd.extend(["-v", str(verSpec), "-L", location])
             if dontBuildDirTree:
                 cmd.append("-D")
         elif location is not None or verSpec is not None:
@@ -791,7 +811,11 @@ class raw(object):
     must be specified if it is provided""")
         
         if timeSpec is not None:
-            cmd.extend(["-t", timeSpec])
+            if type(timeSpec) is datetime.datetime:
+                timeSpecStr = "{:%Y/%m/%d %H:%M:%S}".format(timeSpec)
+            else:
+                timeSpecStr = str(timeSpec)
+            cmd.extend(["-t", str(timeSpecStr)])
         
         if isXmlOutput:
             cmd.append("-fx")
@@ -816,13 +840,13 @@ class raw(object):
         if selectAllModified:
             cmd.append('-n')
         if verSpec is not None:
-            cmd.extend([ '-v', verSpec ])
+            cmd.extend([ '-v', str(verSpec) ])
         if isRecursive:
             cmd.append('-R')
         if transactionNumber is not None:
             cmd.extend([ '-t', transactionNumber ])
         if elementId is not None:
-            cmd.extend([ '-e', elementId ])
+            cmd.extend([ '-e', str(elementId) ])
         if listFile is not None:
             cmd.extend([ '-l', listFile ])
         if elementList is not None:
@@ -838,12 +862,12 @@ class raw(object):
         cmd = [ raw._accurevCmd, "cat" ]
         
         if verSpec is not None:
-            cmd.extend([ '-v', verSpec ])
+            cmd.extend([ '-v', str(verSpec) ])
         if depotName is not None:
             cmd.extend([ '-p', depotName ])
         
         if elementId is not None:
-            cmd.extend([ '-e', elementId ])
+            cmd.extend([ '-e', str(elementId) ])
         elif element is not None:
             cmd.append(element)
         else:
@@ -858,7 +882,7 @@ class raw(object):
         if comment is not None:
             cmd.extend([ '-c', comment ])
         if stream is not None:
-            cmd.extend([ '-s', stream ])
+            cmd.extend([ '-s', str(stream) ])
         if issueNumber is not None:
             cmd.extend([ '-I', issueNumber ])
         if elementList is not None:
@@ -869,7 +893,7 @@ class raw(object):
         if listFile is not None:
             cmd.extend([ '-l', listFile ])
         if elementId is not None:
-            cmd.extend([ '-e', elementId ])
+            cmd.extend([ '-e', str(elementId) ])
         
         return raw._runCommand(cmd)
     
@@ -904,7 +928,7 @@ class raw(object):
     
     @staticmethod
     def chstream(stream, newBackingStream=None, timeSpec=None, newName=None):
-        cmd = [ raw._accurevCmd, "chstream", "-s", stream ]
+        cmd = [ raw._accurevCmd, "chstream", "-s", str(stream) ]
         
         if newName is not None and (newBackingStream is not None or timeSpec is not None):
             raise Exception('accurev.raw.Chstream does not accept the newName parameter if any other parameter is passed!')
@@ -912,7 +936,11 @@ class raw(object):
             if newBackingStream is not None:
                 cmd.extend([ '-b', newBackingStream ])
             if timeSpec is not None:
-                cmd.extend([ '-t', timeSpec ])
+                if type(timeSpec) is datetime.datetime:
+                    timeSpecStr = "{:%Y/%m/%d %H:%M:%S}".format(timeSpec)
+                else:
+                    timeSpecStr = str(timeSpec)
+                cmd.extend(["-t", str(timeSpecStr)])
             if newName is not None:
                 renameCmd.append(newName)
             
@@ -1014,9 +1042,13 @@ class raw(object):
             if depot is not None:
                 cmd.extend([ "-p", depot ])
             if timeSpec is not None:
-                cmd.extend([ "-t", timeSpec ])
+                if type(timeSpec) is datetime.datetime:
+                    timeSpecStr = "{:%Y/%m/%d %H:%M:%S}".format(timeSpec)
+                else:
+                    timeSpecStr = str(timeSpec)
+                cmd.extend(["-t", str(timeSpecStr)])
             if stream is not None:
-                cmd.extend([ "-s", stream ])
+                cmd.extend([ "-s", str(stream) ])
             if matchType is not None:
                 cmd.extend([ "-m", matchType ])
             if listFile is not None:

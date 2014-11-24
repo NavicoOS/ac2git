@@ -47,7 +47,9 @@ def CheckoutBranch(branchName):
         
     return branch
 
-def GetGitElementPath(accurevDepotElementPath, gitRepoPath=None, isAbsolute=False):
+# LocalElementPath converts a depot relative accurev path into either an absolute or a relative path
+# i.e. removes the \.\ from the front and sensibly converts the path...
+def LocalElementPath(accurevDepotElementPath, gitRepoPath=None, isAbsolute=False):
     # All accurev depot paths start with \.\ or /./ so strip that before joining.
     relpath = accurevDepotElementPath[3:]
     if isAbsolute:
@@ -57,8 +59,39 @@ def GetGitElementPath(accurevDepotElementPath, gitRepoPath=None, isAbsolute=Fals
             return os.path.abspath(relpath)
     return relpath
 
-def GetAccurevFile(elementId=None, depotName=None, verSpec=None, element=None, gitPath=None, isBinary=False):
-    filePath = GetGitElementPath(accurevDepotElementPath=element, gitRepoPath=gitPath)
+def GetTransactionDestStream(transaction):
+    if transaction is not None:
+        if transaction.versions is not None and len(transaction.versions) > 0:
+            return transaction.versions[0].virtual.stream
+    return None
+
+def GetTransactionElements(transaction, skipDirs=True):
+    if transaction is not None:
+        if transaction.versions is not None:
+            elemList = []
+            for version in transaction.versions:
+                # Populate it only if it is not a directory.
+                if not skipDirs or version.dir != "yes":
+                    elemList.append(version.path)
+            
+            return elemList
+    return None
+                
+def PopAccurevTransaction(transaction, dstPath='.', skipDirs=True):
+    if transaction is not None and len(transaction.versions) > 0:
+        stream = GetTransactionDestStream(transaction)
+        elemList = GetTransactionElements(transaction, skipDirs)
+        
+        if elemList is not None and len(elemList) > 0:
+            state.config.logger.dbg( "pop #{0}: {1} files to {2}".format(transaction.id, len(elemList), dstPath) )
+            return accurev.pop(isOverride=True, verSpec=stream, location=dstPath, timeSpec=transaction.id, elementList=elemList)
+        else:
+            state.config.logger.dbg( "Did not pop transaction", transaction.id )
+    return False
+
+def CatAccurevFile(elementId=None, depotName=None, verSpec=None, element=None, gitPath=None, isBinary=False):
+    # TODO: Change back to using accurev pop -v <stream-name> -t <transaction-number> -L <git-repo-path> <element-list>
+    filePath = LocalElementPath(accurevDepotElementPath=element, gitRepoPath=gitPath)
     fileDir  = os.path.dirname(filePath)
     if fileDir is not None and len(fileDir) > 0 and not os.path.exists(fileDir):
         os.makedirs(fileDir)
@@ -66,7 +99,8 @@ def GetAccurevFile(elementId=None, depotName=None, verSpec=None, element=None, g
     if success is None:
         return False
     return True
-                
+
+
 # ################################################################################################ #
 # Script Core. AccuRev transaction to Git conversion handlers.                                     #
 # ################################################################################################ #
@@ -99,20 +133,8 @@ def OnPromote(transaction):
         
         CheckoutBranch(transaction.versions[0].virtualNamedVersion.stream)
         addCount = 0
-        for version in transaction.versions:
-            # Populate it only if it is not a directory.
-            if version.dir != "yes":
-                state.config.logger.dbg( "accurev path:", version.path )
-                state.config.logger.dbg( "git path    :", GetGitElementPath(version.path, state.gitRepoPath) )
-            
-                if GetAccurevFile(elementId=version.eid, depotName=state.config.accurev.depot, verSpec=str(version.virtual), element=version.path, gitPath=state.gitRepoPath):
-                    state.gitRepo.git.add([GetGitElementPath(version.path)])
-                    addCount += 1
-                else:
-                    state.config.logger.dbg( "Cat failed for {0}".format(version.path) )
-                    
-            else:
-                state.config.logger.dbg( "Skip:", version.path )
+        
+        PopAccurevTransaction(transaction, state.gitRepoPath)
         
         if addCount > 0:
             state.gitRepo.git.commit(m=transaction.comment)
@@ -161,11 +183,7 @@ class Config(object):
             else:
                 outMessage = None
             
-            for msg in messages:
-                if outMessage is not None:
-                    outMessage = "{0} {1}".format(outMessage, msg)
-                else:
-                    outMessage = "{0}".format(msg)
+            outMessage = " ".join([str(x) for x in messages])
             
             return outMessage
         
