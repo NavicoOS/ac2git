@@ -594,20 +594,19 @@ class raw(object):
     
     @staticmethod
     def _runCommand(cmd, outputFilename=None):
-        accurevCommand = subprocess.Popen(cmd, stdout=subprocess.PIPE, stdin=subprocess.PIPE)
-        
         outputFile = None
         if outputFilename is not None:
             outputFile = open(outputFilename, "w")
-        
+            accurevCommand = subprocess.Popen(cmd, stdout=outputFile, stdin=subprocess.PIPE)
+        else:
+            accurevCommand = subprocess.Popen(cmd, stdout=subprocess.PIPE, stdin=subprocess.PIPE)
+            
         xmlOutput = ''
         accurevCommand.poll()
         while accurevCommand.returncode is None:
             stdoutdata, stderrdata = accurevCommand.communicate()
             if outputFile is None:
                 xmlOutput += stdoutdata
-            else:
-                outputFile.write(stdoutdata)
             accurevCommand.poll()
         
         raw._lastCommand = accurevCommand
@@ -615,6 +614,7 @@ class raw(object):
         if outputFile is None:
             return xmlOutput
         else:
+            outputFile.close()
             return 'Written to ' + outputFilename
 
     @staticmethod
@@ -834,7 +834,7 @@ class raw(object):
         return raw._runCommand(cmd)
         
     @staticmethod
-    def cat(elementId=None, element=None, depotName=None, verSpec=None):
+    def cat(elementId=None, element=None, depotName=None, verSpec=None, outputFilename=None):
         cmd = [ raw._accurevCmd, "cat" ]
         
         if verSpec is not None:
@@ -849,7 +849,7 @@ class raw(object):
         else:
             raise Exception('accurev cat command needs either an <element> or an <eid> to be specified')
             
-        return raw._runCommand(cmd)
+        return raw._runCommand(cmd, outputFilename)
         
     @staticmethod
     def purge(comment=None, stream=None, issueNumber=None, elementList=None, listFile=None, elementId=None):
@@ -1103,9 +1103,11 @@ def co(comment=None, selectAllModified=False, verSpec=None, isRecursive=False, t
         return (raw._lastCommand.returncode == 0)
     return None
 
-def cat(elementId=None, element=None, depotName=None, verSpec=None):
-    output = raw.cat(elementId=elementId, element=element, depotName=depotName, verSpec=verSpec)
-    return output
+def cat(elementId=None, element=None, depotName=None, verSpec=None, outputFilename=None):
+    output = raw.cat(elementId=elementId, element=element, depotName=depotName, verSpec=verSpec, outputFilename=outputFilename)
+    if raw._lastCommand is not None:
+        return output
+    return None
 
 def purge(comment=None, stream=None, issueNumber=None, elementList=None, listFile=None, elementId=None):
     output = raw.purge(comment=comment, stream=stream, issueNumber=issueNumber, elementList=elementList, listFile=listFile, elementId=elementId)

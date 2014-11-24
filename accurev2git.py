@@ -54,7 +54,17 @@ def GetGitElementPath(accurevDepotElementPath, gitRepoPath=None, isAbsolute=Fals
         else:
             return os.path.abspath(relpath)
     return relpath
-    
+
+def GetAccurevFile(elementId=None, depotName=None, verSpec=None, element=None, gitPath=None, isBinary=False):
+    filePath = GetGitElementPath(accurevDepotElementPath=element, gitRepoPath=gitPath)
+    fileDir  = os.path.dirname(filePath)
+    if fileDir is not None and len(fileDir) > 0 and not os.path.exists(fileDir):
+        os.makedirs(fileDir)
+    success = accurev.cat(elementId=elementId, depotName=depotName, verSpec=str(verSpec), outputFilename=filePath)
+    if success is None:
+        return False
+    return True
+                
 # ################################################################################################ #
 # Script Core. AccuRev transaction to Git conversion handlers.                                     #
 # ################################################################################################ #
@@ -62,7 +72,7 @@ def OnAdd(transaction):
     # Due to the fact that the accurev pop operation cannot retrieve defunct files when we use it
     # outside of a workspace and that workspaces cannot reparent themselves under workspaces
     # we must restrict ourselves to only processing stream operations, promotions.
-    print "Ignored transaction #{0}: add".format(transaction.id), transaction
+    print "Ignored transaction #{0}: add".format(transaction.id)
 
 def OnChstream(transaction):
     # We determine which branch something needs to go to on the basis of the real/virtual version
@@ -81,7 +91,7 @@ def OnKeep(transaction):
 
 def OnPromote(transaction):
     global state
-    print "OnPromote:", transaction
+    print "OnPromote: #{0}".format(transaction.id)
     if len(transaction.versions) > 0:
         print "Branch:", transaction.versions[0].virtualNamedVersion.stream
         
@@ -90,23 +100,25 @@ def OnPromote(transaction):
         for version in transaction.versions:
             # Populate it only if it is not a directory.
             if version.dir != "yes":
-                print "Version:", version
+                print "Version:", version.virtualNamedVersion
                 print "gitRepoPath:", state.gitRepoPath
                 print "VersionPath:", version.path
                 print "ElementPath:", GetGitElementPath(version.path, state.gitRepoPath)
             
-                if accurev.pop(isRecursive=True, verSpec=repr(version.virtualNamedVersion), location=state.gitRepoPath, elementList=version.path):
+                if GetAccurevFile(elementId=version.eid, depotName=state.config.accurev.depot, verSpec=str(version.virtual), element=version.path, gitPath=state.gitRepoPath):
                     state.gitRepo.index.add([GetGitElementPath(version.path)])
                     addCount += 1
                 else:
-                    print "Populate failed, trying through cache..."
+                    print "Cat failed for {0}".format(version.path)
                     
             else:
-                accurev.pop(isRecursive=True, verSpec=repr(version.virtualNamedVersion), timeSpec=transaction.id, location=state.gitRepoPath, elementList=version.path)
-                print "Skipp:", version
+                print "Skip:", version
         
         if addCount > 0:
             state.gitRepo.index.commit(message=transaction.comment)
+            sys.exit(0)
+        else:
+            print "Did not commit"
 
 def OnMove(transaction):
     print "OnMove:", transaction
@@ -271,11 +283,11 @@ class AccuRev2Git(object):
     # ProcessAccuRevTransaction
     #   Processes an individual AccuRev transaction by calling its corresponding handler.
     def ProcessAccuRevTransaction(self, transaction):
-        handler = self.transactionHandlers.get(transaction.type)
+        handler = self.transactionHandlers.get(transaction.Type)
         if handler is not None:
             handler(transaction)
         else:
-            sys.stderr.write("Error: No handler for [\"{0}\"] transactions\n".format(transaction.type))
+            sys.stderr.write("Error: No handler for [\"{0}\"] transactions\n".format(transaction.Type))
         
     # ProcessAccuRevTransactionRange
     #   Iterates over accurev transactions between the startTransaction and endTransaction processing
