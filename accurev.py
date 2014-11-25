@@ -39,7 +39,71 @@ def UTCDateTimeOrNone(value):
     if type(value) is str or type(value) is int:
         value = float(value)
     return datetime.datetime.utcfromtimestamp(value)
-    
+
+class AccuRevBool(object):
+    def __init__(self, value):
+        if type(value) is bool:
+            self.value = value
+            self.originalStr = None
+        elif type(value) is str:
+            self.value = AccuRevBool.string2bool(value)
+            self.originalStr = value
+        else:
+            raise Exception("Unknown type to convert to AccuRevBool")
+
+    def __nonzero__(self):
+        return self.value
+
+    def __bool__(self):
+        return self.value
+
+    def __repr__(self):
+        if self.originalStr is None:
+            return self.toString()
+        else:
+            return self.originalStr
+
+    def toString(self, toTrueFalse=True, toYesNo=False, toUpper=False, toLower=False):
+        rv = None
+        if toTrueFalse:
+            if self.value:
+                rv = "True"
+            else:
+                rv = "False"
+        else: # toYesNo:
+            if self.value:
+                rv = "Yes"
+            else:
+                rv = "No"
+        if toLower:
+            rv = rv.lower()
+        elif toUpper:
+            rv = rv.upper()
+        
+        return rv
+        
+    @staticmethod
+    def string2bool(string):
+        rv = None
+        string = string.lower()
+
+        if string == "yes" or string == "true":
+            rv = True
+        elif string == "no" or string == "false":
+            rv = False
+        else:
+            raise Exception("AccurevBool value invalid")
+
+        return rv
+
+    @classmethod
+    def fromstring(cls, string):
+        if string is not None:
+            rv = AccuRevBool.string2bool(string)
+            return cls(rv)
+        return None
+
+
 class AccuRevWorkspace(object):
     def __init__(self, storage, host, targetTransaction, fileModTime, EOL, Type):
         self.storage           = storage
@@ -88,9 +152,9 @@ class AccuRevStream(object):
         self.prevBasisStreamNumber = IntOrNone(prevBasisStreamNumber)
         self.workspace             = workspace
         self.startTime             = UTCDateTimeOrNone(startTime)
-        self.isDynamic             = isDynamic
-        self.hasDefaultGroup       = hasDefaultGroup
-        
+        self.isDynamic             = AccuRevBool.fromstring(isDynamic)
+        self.hasDefaultGroup       = AccuRevBool.fromstring(hasDefaultGroup)
+
     def __repr__(self):
         str = "AccuRevStream(name="       + repr(self.name)
         str += ", streamNumber="          + repr(self.streamNumber)
@@ -167,7 +231,7 @@ class AccuRevVersion(object):
     @classmethod
     def fromstring(cls, versionString):
         if versionString is not None:
-            versionParts = versionString.split('/')
+            versionParts = versionString.replace('\\', '/').split('/')
             if len(versionParts) == 2:
                 stream  = versionParts[0]
                 if re.match('^[0-9]+$', stream):
@@ -191,8 +255,8 @@ class AccuRevElementVersion(object):
         self.mergedAgainst             = AccuRevVersion.fromstring(mergedAgainst)
         self.mergedAgainstNamedVersion = AccuRevVersion.fromstring(mergedAgainstNamedVersion)
         self.elemType                  = elemType
-        self.dir                       = dir
-    
+        self.dir                       = AccuRevBool.fromstring(dir)
+
     def __repr__(self):
         str = "AccuRevElementVersion(path="    + repr(self.path)
         str += ", eid="                 + repr(self.eid)
@@ -267,58 +331,172 @@ class AccuRevTransaction(object):
             time = xmlElement.attrib.get('time')
             user = xmlElement.attrib.get('user')
             comment = GetXmlContents(xmlElement.find('comment'))
-            
+
             versions = []
             for versionElement in xmlElement.findall('version'):
                 versions.append(AccuRevElementVersion.fromxmlelement(versionElement))
-            
+
             moves = []
             for moveElement in xmlElement.findall('move'):
                 moves.append(AccuRevMove.fromxmlelement(moveElement))
-            
+
             streamElement = xmlElement.find('stream')
             stream = AccuRevStream.fromxmlelement(streamElement)
-            
+
             return cls(id, Type, time, user, comment, versions, moves, stream)
-        
+
         return None
-    
-class AccuRevhistory(object):
+
+class AccuRevHistory(object):
     def __init__(self, taskId = None, transactions = [], streams = []):
         self.taskId       = IntOrNone(taskId)
         self.transactions = transactions
         self.streams      = streams
-    
+
     def __repr__(self):
-        str = "AccuRevTransaction(taskId=" + repr(self.taskId)
+        str = "AccuRevHistory(taskId=" + repr(self.taskId)
         str += ", transactions="           + repr(self.transactions)
         str += ", streams="                + repr(self.streams)
         str += ")"
-        
+
         return str
-        
+
     @classmethod
     def fromxmlstring(cls, xmlText):
         # Load the XML
         xmlRoot = ElementTree.fromstring(xmlText)
         #xpathPredicate = ".//AcResponse[@Command='hist']"
-        
+
         if xmlRoot is not None and xmlRoot.tag == "AcResponse" and xmlRoot.get("Command") == "hist":
             # Build the class
             taskId = xmlRoot.attrib.get('TaskId')
-            
+
             transactions = []
             for transactionElement in xmlRoot.findall('transaction'):
                 transactions.append(AccuRevTransaction.fromxmlelement(transactionElement))
-            
+
             streams = []
             streamsElement = xmlRoot.find('streams')
             if streamsElement is not None:
                 for streamElement in streamsElement:
                     streams.append(AccuRevStream.fromxmlelement(streamElement))
-            
-            
+
+
             return cls(taskId=taskId, transactions=transactions, streams=streams)
+        else:
+            # Invalid XML for an AccuRev hist command response.
+            return None
+
+class AccuRevStatElement(object):
+    def __init__(self, location=None, isDir=False, isExecutable=False, id=None, elemType=None, size=None, modTime=None, hierType=None, virtualVersion=None, namedVersion=None, realVersion=None, status=None):
+        self.location       = location
+        self.isDir          = AccuRevBool.fromstring(isDir)
+        self.isExecutable   = AccuRevBool.fromstring(isExecutable)
+        self.id             = IntOrNone(id)
+        self.elemType       = elemType
+        self.size           = IntOrNone(size)
+        self.modTime        = UTCDateTimeOrNone(modTime)
+        self.hierType       = hierType
+        self.virtualVersion = AccuRevVersion.fromstring(virtualVersion)
+        self.namedVersion   = AccuRevVersion.fromstring(namedVersion)
+        self.realVersion    = AccuRevVersion.fromstring(realVersion)
+        self.status         = status
+        self.statusList     = self._ParseStatusIntoList(status)
+
+    def __repr__(self):
+        str = "AccuRevStatElement(location=" + repr(self.location)
+        str += ", isDir="                    + repr(self.isDir)
+        str += ", isExecutable="             + repr(self.isExecutable)
+        str += ", id="                       + repr(self.id)
+        str += ", elemType="                 + repr(self.elemType)
+        str += ", size="                     + repr(self.size)
+        str += ", modTime="                  + repr(self.modTime)
+        str += ", hierType="                 + repr(self.hierType)
+        str += ", virtualVersion="           + repr(self.virtualVersion)
+        str += ", namedVersion="             + repr(self.namedVersion)
+        str += ", realVersion="              + repr(self.realVersion)
+        str += ", status="                   + repr(self.status)
+        str += ", statusList="               + repr(self.statusList)
+        str += ")"
+
+        return str
+
+    def _ParseStatusIntoList(self, status):
+        if status is not None:
+            statusList = []
+            statusItem = None
+            # The following regex takes a parenthesised text like (member)(defunct) and matches it
+            # putting the first matched parenthesised expression (of which there could be more than one)
+            # into the capture group one.
+            # Regex: Match open bracket, consume all characters that are NOT a closed bracket, match the
+            #        closed bracket and return the capture group.
+            reStatusToken = re.compile("(\\([^\\)]+\\))")
+            
+            matchObj = reStatusToken.match(status)
+            while matchObj and len(status) > 0:
+                statusItem = matchObj.group(1)
+                statusList.append(statusItem)
+                status = status[len(statusItem):]
+                matchObj = reStatusToken.match(status)
+            
+            if len(status) != 0:
+                sys.stderr.write("Error: invalidly parsed status! Remaining text is \"{0}\"\n".format(status))
+                return None
+            return statusList
+        return None
+        
+    @classmethod
+    def fromxmlelement(cls, xmlElement):
+        if xmlElement is not None and xmlElement.tag == "element":
+            # Build the class
+            location       = xmlElement.attrib.get('location')
+            isDir          = xmlElement.attrib.get('dir')
+            isExecutable   = xmlElement.attrib.get('executable')
+            id             = xmlElement.attrib.get('id')
+            elemType       = xmlElement.attrib.get('elemType')
+            size           = xmlElement.attrib.get('size')
+            modTime        = xmlElement.attrib.get('modTime')
+            hierType       = xmlElement.attrib.get('hierType')
+            virtualVersion = xmlElement.attrib.get('Virtual')
+            namedVersion   = xmlElement.attrib.get('namedVersion')
+            realVersion    = xmlElement.attrib.get('Real')
+            status         = xmlElement.attrib.get('status')
+
+            return cls(location=location, isDir=isDir, isExecutable=isExecutable, id=id, elemType=elemType, size=size, modTime=modTime, hierType=hierType, virtualVersion=virtualVersion, namedVersion=namedVersion, realVersion=realVersion, status=status)
+        else:
+            # Invalid XML for an AccuRev hist command response.
+            return None
+
+class AccuRevStat(object):
+    def __init__(self, taskId=None, directory=None, elements=[]):
+        self.taskId    = IntOrNone(taskId)
+        self.directory = directory
+        self.elements  = elements
+
+    def __repr__(self):
+        str = "AccuRevStat(taskId=" + repr(self.taskId)
+        str += ", directory="       + repr(self.directory)
+        str += ", elements="        + repr(self.elements)
+        str += ")"
+
+        return str
+
+    @classmethod
+    def fromxmlstring(cls, xmlText):
+        # Load the XML
+        xmlRoot = ElementTree.fromstring(xmlText)
+        #xpathPredicate = ".//AcResponse[@Command='hist']"
+
+        if xmlRoot is not None and xmlRoot.tag == "AcResponse" and xmlRoot.get("Command") == "stat":
+            # Build the class
+            taskId    = xmlRoot.attrib.get('TaskId')
+            directory = xmlRoot.attrib.get('Directory')
+
+            elements = []
+            for element in xmlRoot.findall('element'):
+                elements.append(AccuRevStatElement.fromxmlelement(element))
+
+            return cls(taskId=taskId, directory=directory, elements=elements)
         else:
             # Invalid XML for an AccuRev hist command response.
             return None
@@ -673,9 +851,9 @@ class raw(object):
             , modifiedElementsOnly=False, missingElementsOnly=False, overlapedElementsOnly=False
             , underlapedElementsOnly=False, pendingElementsOnly=False, dontOptimizeSearch=False
             , directoryTreePath=None, stream=None, externalOnly=False, showExcluded=False
-            , listFile=None, elementList=None, outputFilename=None):
+            , timeSpec=None, ignorePatternsList=[], listFile=None, elementList=None, outputFilename=None):
         cmd = [ raw._accurevCmd, "stat" ]
-        
+
         if all:
             cmd.append('-a')
         if inBackingStream:
@@ -689,11 +867,13 @@ class raw(object):
         
         # Construct the format string
         format = '-f'
-        
-        if absolutePaths:
-            format += 'a'
-        else:
-            format += 'r'
+
+        if stream is None:
+            # -fa and -fr are not supported when using -s
+            if absolutePaths:
+                format += 'a'
+            else:
+                format += 'r'
         if filesOnly:
             format += 'f'
         elif directoriesOnly:
@@ -727,35 +907,39 @@ class raw(object):
             cmd.append('-U')
         elif externalOnly:
             cmd.append('-x')
-            
+
+        # Remaining parameters
         if dontOptimizeSearch:
             cmd.append('-O')
-        
         if showExcluded:
             cmd.append('-X')
-        
         if directoryTreePath is not None:
             cmd.extend([ '-R', directoryTreePath ])
-        
         if stream is not None:
             cmd.extend([ '-s', str(stream) ])
+        if timeSpec is not None:
+            cmd.extend([ '-t', str(timeSpec)])
+        for ignorePattern in ignorePatternsList:
+            cmd.append('--ignore=\"{0}\"'.format(ignorePattern))
         
-        if listFile is not None:
-            cmd.extend([ '-l', listFile ])
-        
-        if elementList is not None:
-            if type(elementList) is list:
-                cmd.extend(elementList)
-            else:
-                cmd.append(elementList)
-        
+        if not all and (listFile is None and elementList is None):
+            cmd.append('*')
+        else:
+            if listFile is not None:
+                cmd.extend([ '-l', listFile ])
+            if elementList is not None:
+                if type(elementList) is list:
+                    cmd.extend(elementList)
+                else:
+                    cmd.append(elementList)
+
         return raw._runCommand(cmd, outputFilename)
-        
+
     # AccuRev history command
     @staticmethod
     def hist(depot=None, stream=None, timeSpec=None, listFile=None, isListFileXml=False, elementList=None, allElementsFlag=False, elementId=None, transactionKind=None, commentString=None, username=None, isXmlOutput=False, outputFilename=None):
         cmd = [ raw._accurevCmd, "hist" ]
-        
+
         # Interpret options
         if depot is not None:
             cmd.extend([ "-p", depot ])
@@ -905,7 +1089,7 @@ class raw(object):
         #  * the version that preceded a particular version in a specified stream
         #  * the basis version corresponding to a particular version
         #  * the common ancestor of two versions
-        # In its simplest form (no command-line options), anc reports the direct ancestor of the version in 
+        # In its simplest form (no command-line options), anc reports the direct ancestor of the version in
         # your workspace for the specified element.
         cmd = [ raw._accurevCmd, "anc" ]
         
@@ -1021,7 +1205,7 @@ class raw(object):
         @staticmethod
         def _runSimpleShowSubcommand(subcommand, isXmlOutput=False, includeDeactivatedItems=False):
             if subcommand is not None:
-                cmd = raw.Show._getShowBaseCommand(isXmlOutput=isXmlOutput, includeDeactivatedItems=includeDeactivatedItems)
+                cmd = raw.show._getShowBaseCommand(isXmlOutput=isXmlOutput, includeDeactivatedItems=includeDeactivatedItems)
                 cmd.append(subcommand)
                 return raw._runCommand(cmd)
                 
@@ -1033,12 +1217,12 @@ class raw(object):
         
         @staticmethod
         def depots(isXmlOutput=False, includeDeactivatedItems=False):
-            return raw.Show._runSimpleShowSubcommand(subcommand="depots", isXmlOutput=isXmlOutput, includeDeactivatedItems=includeDeactivatedItems)
-        
+            return raw.show._runSimpleShowSubcommand(subcommand="depots", isXmlOutput=isXmlOutput, includeDeactivatedItems=includeDeactivatedItems)
+
         @staticmethod
         def streams(depot=None, timeSpec=None, stream=None, matchType=None, listFile=None, listPathAndChildren=False, listChildren=False, listImmediateChildren=False, nonEmptyDefaultGroupsOnly=False, isXmlOutput=False, includeDeactivatedItems=False, includeOldDefinitions=False, includeHasDefaultGroupAttribute=False):
-            cmd = raw.Show._getShowBaseCommand(isXmlOutput=isXmlOutput, includeDeactivatedItems=includeDeactivatedItems, includeOldDefinitions=includeOldDefinitions, includeHasDefaultGroupAttribute=includeHasDefaultGroupAttribute)
-            
+            cmd = raw.show._getShowBaseCommand(isXmlOutput=isXmlOutput, includeDeactivatedItems=includeDeactivatedItems, includeOldDefinitions=includeOldDefinitions, includeHasDefaultGroupAttribute=includeHasDefaultGroupAttribute)
+
             if depot is not None:
                 cmd.extend([ "-p", depot ])
             if timeSpec is not None:
@@ -1094,7 +1278,7 @@ def stat(all=False, inBackingStream=False, dispBackingChain=False, defaultGroupO
         , modifiedElementsOnly=False, missingElementsOnly=False, overlapedElementsOnly=False
         , underlapedElementsOnly=False, pendingElementsOnly=False, dontOptimizeSearch=False
         , directoryTreePath=None, stream=None, externalOnly=False, showExcluded=False
-        , listFile=None, elementList=None, outputFilename=None):
+        , timeSpec=None, ignorePatternsList=[], listFile=None, elementList=None, outputFilename=None):
     outputXml = raw.stat(all=all, inBackingStream=inBackingStream, dispBackingChain=dispBackingChain, defaultGroupOnly=defaultGroupOnly
         , defunctOnly=defunctOnly, absolutePaths=absolutePaths, filesOnly=filesOnly, directoriesOnly=directoriesOnly
         , locationsOnly=locationsOnly, twoLineListing=twoLineListing, showLinkTarget=showLinkTarget, isXmlOutput=True
@@ -1102,20 +1286,18 @@ def stat(all=False, inBackingStream=False, dispBackingChain=False, defaultGroupO
         , modifiedElementsOnly=modifiedElementsOnly, missingElementsOnly=missingElementsOnly, overlapedElementsOnly=overlapedElementsOnly
         , underlapedElementsOnly=underlapedElementsOnly, pendingElementsOnly=pendingElementsOnly, dontOptimizeSearch=dontOptimizeSearch
         , directoryTreePath=directoryTreePath, stream=stream, externalOnly=externalOnly, showExcluded=showExcluded
-        , listFile=listFile, elementList=elementList, outputFilename=outputFilename)
-    
-    # TODO: Implement parsing of AccuRev stat XML output.
-    return outputXml
-    
+        , timeSpec=timeSpec, ignorePatternsList=ignorePatternsList, listFile=listFile, elementList=elementList, outputFilename=outputFilename)
+    return AccuRevStat.fromxmlstring(outputXml)
+
 # AccuRev history command
 def hist(depot=None, stream=None, timeSpec=None, listFile=None, isListFileXml=False, elementList=None, allElementsFlag=False, elementId=None, transactionKind=None, commentString=None, username=None, outputFilename=None):
     xmlOutput = raw.hist(depot=depot, stream=stream, timeSpec=timeSpec, listFile=listFile, isListFileXml=isListFileXml, elementList=elementList, allElementsFlag=allElementsFlag, elementId=elementId, transactionKind=transactionKind, commentString=commentString, username=username, isXmlOutput=True, outputFilename=outputFilename)
-    return AccuRevhistory.fromxmlstring(xmlOutput)
+    return AccuRevHistory.fromxmlstring(xmlOutput)
 
 # AccuRev Populate command
 def pop(isRecursive=False, isOverride=False, verSpec=None, location=None, dontBuildDirTree=False, timeSpec=None, listFile=None, elementList=None):
     output = raw.pop(isRecursive=isRecursive, isOverride=isOverride, verSpec=verSpec, location=location, dontBuildDirTree=dontBuildDirTree, timeSpec=timeSpec, isXmlOutput=True, listFile=listFile, elementList=elementList)
-    
+
     xmlElement = ElementTree.fromstring(output)
     if xmlElement is not None:
         message = xmlElement.find('message')
@@ -1171,17 +1353,17 @@ def update(refTree=None, doPreview=False, transactionNumber=None, mergeOnUpdate=
 class show(object):
     @staticmethod
     def users():
-        xmlOutput = raw.Show.Users(isXmlOutput=True)
+        xmlOutput = raw.show.users(isXmlOutput=True)
         return AccuRevShowUsers.fromxmlstring(xmlOutput)
     
     @staticmethod
     def depots():
-        xmlOutput = raw.Show.Depots(isXmlOutput=True)
+        xmlOutput = raw.show.depots(isXmlOutput=True)
         return AccuRevShowDepots.fromxmlstring(xmlOutput)
 
     @staticmethod
     def streams(depot=None, timeSpec=None, stream=None, matchType=None, listFile=None, listPathAndChildren=False, listChildren=False, listImmediateChildren=False, nonEmptyDefaultGroupsOnly=False, includeDeactivatedItems=False, includeOldDefinitions=False):
-        xmlOutput = raw.Show.Streams(depot=depot, timeSpec=timeSpec, stream=stream, matchType=matchType, listFile=listFile, listPathAndChildren=listPathAndChildren, listChildren=listChildren, listImmediateChildren=listImmediateChildren, nonEmptyDefaultGroupsOnly=nonEmptyDefaultGroupsOnly, isXmlOutput=True, includeDeactivatedItems=includeDeactivatedItems, includeOldDefinitions=includeOldDefinitions, includeHasDefaultGroupAttribute=True)
+        xmlOutput = raw.show.streams(depot=depot, timeSpec=timeSpec, stream=stream, matchType=matchType, listFile=listFile, listPathAndChildren=listPathAndChildren, listChildren=listChildren, listImmediateChildren=listImmediateChildren, nonEmptyDefaultGroupsOnly=nonEmptyDefaultGroupsOnly, isXmlOutput=True, includeDeactivatedItems=includeDeactivatedItems, includeOldDefinitions=includeOldDefinitions, includeHasDefaultGroupAttribute=True)
         return AccuRevShowStreams.fromxmlstring(xmlOutput)
 
 class replica(object):

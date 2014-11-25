@@ -17,13 +17,10 @@ import subprocess
 import xml.etree.ElementTree as ElementTree
 import datetime
 import time
+import re
 
 import accurev
-
-# GitPython is used to interact with git. Its project page is: https://gitorious.org/git-python
-# The repo it was cloned from: git://gitorious.org/git-python/mainline.git at commit 5eb7fd3f0dd99dc6c49da6fd7e78a392c4ef1b33
-# You might also need: https://pypi.python.org/pypi/setuptools#installation-instructions
-from git import *
+import git
 
 # ################################################################################################ #
 # Script Globals.                                                                                  #
@@ -39,11 +36,12 @@ def CheckoutBranch(branchName):
     branch = None
     
     try:
-        branch = getattr(state.gitRepo.heads, branchName)
-        #print "branch:", branchName, "exists"
+        subprocess.check_output('git checkout {0}'.format(branchName))
     except:
-        branch = state.gitRepo.create_head(branchName)
-        #print "branch:", branchName, "created"
+        try:
+            subprocess.check_output('git checkout -b {0}'.format(branchName))
+        except:
+            return None
         
     return branch
 
@@ -134,7 +132,12 @@ def OnPromote(transaction):
         CheckoutBranch(transaction.versions[0].virtualNamedVersion.stream)
         addCount = 0
         
-        PopAccurevTransaction(transaction, state.gitRepoPath)
+        # 1. Get list of defunct, twin or otherwise ambiguous elements
+        # 2. Populate only active elements for the stream
+        # 3. Remove the defunct elements from git.
+        # 4. Add the new/modified elements to git
+        
+        # PopAccurevTransaction(transaction, state.gitRepoPath)
         
         if addCount > 0:
             state.gitRepo.git.commit(m=transaction.comment)
@@ -254,9 +257,17 @@ class Config(object):
         @classmethod
         def fromxmlelement(cls, xmlElement):
             if xmlElement is not None and xmlElement.tag == 'map-user':
-                accurevUsername = xmlElement.attrib.get('accurev-username')
-                gitName         = xmlElement.attrib.get('git-name')
-                gitEmail        = xmlElement.attrib.get('git-email')
+                accurevUsername = None
+                gitName         = None
+                gitEmail        = None
+                
+                accurevElement = xmlElement.find('accurev')
+                if accurevElement is not None:
+                    accurevUsername = accurevElement.attrib.get('username')
+                gitElement = xmlElement.find('git')
+                if gitElement is not None:
+                    gitName  = gitElement.attrib.get('name')
+                    gitEmail = gitElement.attrib.get('email')
                 
                 return cls(accurevUsername, gitName, gitEmail)
             else:
@@ -320,18 +331,25 @@ class AccuRev2Git(object):
         self.transactionHandlers = { "add": OnAdd, "chstream": OnChstream, "co": OnCo, "defunct": OnDefunct, "keep": OnKeep, "promote": OnPromote, "move": OnMove, "mkstream": OnMkstream, "purge": OnPurge, "undefunct": OnUndefunct, "defcomp": OnDefcomp }
         self.cwd = None
         
-        # gitRepo - is a git.Repo object. See https://pythonhosted.org/GitPython/0.3.1/tutorial.html#initialize-a-repo-object
-        #   It is guaranteed NOT to be None when the Handlers execute (or at least it is an error if this
-        #   object is not a valid/initialised/existing git repo when the handlers are called)
-        self.gitRepo = None
-        self.gitRepoPath = None
-        self.accuRevVersionCachePath = None
-        
     def GetLastAccuRevTransaction(self):
         # TODO: Fix me! We don't have a way of retrieving the last accurev transaction that we
         #               processed yet. This will most likely involve parsing the git history in some
         #               way.
-        return self.config.accurev.startTransaction
+        status = subprocess.check_output('git status')
+        if status.find('Initial commit') >= 0:
+            # This is an initial commit so we need to start from the beginning.
+            return self.config.accurev.startTransaction
+        else:
+            lastbranch = subprocess.check_output('git config accurev.lastbranch').strip()
+            subprocess.check_output('git checkout {0}'.format(lastbranch))
+            lastCommit = subprocess.check_output('git log {0} -1'.format(lastbranch)).strip()
+        
+            reMsgTemplate = re.compile('AccuRev Transaction #([0-9]+)')
+            reMatchObj = reMsgTemplate.match(lastCommit)
+            if reMatchObj:
+                return reMatchObj.group(1)
+        
+        return None
         
     # ProcessAccuRevTransaction
     #   Processes an individual AccuRev transaction by calling its corresponding handler.
@@ -354,72 +372,55 @@ class AccuRev2Git(object):
         state.config.logger.info( "Querying history" )
         arHist = accurev.hist(depot=self.config.accurev.depot, timeSpec=timeSpec, allElementsFlag=True)
         
+        sys.exit(0)
         for transaction in arHist.transactions:
             self.ProcessAccuRevTransaction(transaction)
         
-    def NewGitRepo(self, gitRepoPath):
+    def InitGitRepo(self, gitRepoPath):
         gitRootDir, gitRepoDir = os.path.split(gitRepoPath)
         if os.path.isdir(gitRootDir):
-            if os.path.isdir(os.path.join(gitRepoPath, ".git")):
-                state.config.logger.error("Found an existing git repository. Please use the --resume option.\n")
-                sys.exit(1)
+            if git.isRepo(gitRepoPath):
+                # Found an existing repo, just use that.
+                state.config.logger.info( "Using existing git repository." )
+                return True
         
             state.config.logger.info( "Creating new git repository" )
-            repo = Repo.init(gitRepoPath, bare=False)
-        
-            # Create an empty first commit so that we can create branches as we please.
-            self.cwd = os.getcwd()
-            os.chdir(gitRepoPath)
-            command = subprocess.Popen([ 'git', 'commit', '--allow-empty', '-m', 'initial commit' ], stdout=subprocess.PIPE)
-            command.wait()
-            if command.returncode != 0:
-                state.config.logger.info( "Error creating initial commit!" )
-                sys.exit(1)
             
-            return repo
+            # Create an empty first commit so that we can create branches as we please.
+            git.init(directory=gitRepoPath)
+            state.config.logger.info( "Created a new git repository." )
+            return True
         else:
             state.config.logger.error("{0} not found.\n".format(gitRootDir))
             
-        return None
+        return False
     
-    def GetExistingGitRepo(self, gitRepoPath):
-        gitRootDir, gitRepoDir = os.path.split(gitRepoPath)
-        if os.path.isdir(gitRootDir):
-            if os.path.isdir(os.path.join(gitRepoPath, ".git")):
-                self.cwd = os.getcwd()
-                os.chdir(gitRepoPath)
-                state.config.logger.info( "Opening git repository" )
-                return Repo(gitRepoPath)
-            
-        state.config.logger.error("Failed to find git repository at: {0}\n".format(gitRepoPath))
-        return None
-        
     # Start
     #   Begins a new AccuRev to Git conversion process discarding the old repository (if any).
-    def Start(self):
-        global gitRepo
-        global gitRepoPath
+    def Start(self, isRestart=False):
+        if isRestart:
+            state.config.logger.info( "Restarting the conversion operation." )
+            state.config.logger.info( "Deleting old git repository." )
+            git.delete(self.config.git.repoPath)
         
-        state.config.logger.info( "Starting a new conversion operation" )
+        # From here on we will operate from the git repository.
+        self.cwd = os.getcwd()
+        os.chdir(self.config.git.repoPath)
         
-        self.gitRepo = self.NewGitRepo(self.config.git.repoPath)
-        
-        if self.gitRepo is not None:
-            self.gitRepoPath = self.config.git.repoPath
-            self.accuRevVersionCachePath = os.path.join(self.cwd, ".accuRevVersionCache")
-            
+        if self.InitGitRepo(self.config.git.repoPath):
             if accurev.login(self.config.accurev.username, self.config.accurev.password):
-                state.config.logger.info( "Login successful" )
+                state.config.logger.info( "Accurev login successful" )
                 
-                self.ProcessAccuRevTransactionRange(startTransaction=self.config.accurev.startTransaction, endTransaction=self.config.accurev.endTransaction)
+                continueFromTransaction = self.GetLastAccuRevTransaction()
+                self.ProcessAccuRevTransactionRange(startTransaction=continueFromTransaction, endTransaction=self.config.accurev.endTransaction)
                 
                 os.chdir(self.cwd)
                 
                 if accurev.logout():
-                    state.config.logger.info( "Logout successful" )
+                    state.config.logger.info( "Accurev logout successful" )
                     return 0
                 else:
-                    state.config.logger.error("Logout failed\n")
+                    state.config.logger.error("Accurev logout failed\n")
                     return 1
             else:
                 state.config.logger.error("AccuRev login failed.\n")
@@ -427,41 +428,8 @@ class AccuRev2Git(object):
         else:
             state.config.logger.error( "Could not create git repository." )
             
-    def Resume(self):
-        global gitRepo
-        global gitRepoPath
-        
-        # For now the resume feature is not supported and causes us to start from scratch again.
-        state.config.logger.info( "Resuming last conversion operation" )
-        
-        self.gitRepo = self.GetExistingGitRepo(self.config.git.repoPath)
-        
-        if self.gitRepo is not None:
-            self.gitRepoPath = self.config.git.repoPath
-            self.accuRevVersionCachePath = os.path.join(self.cwd, ".accuRevVersionCache")
-            
-            # TODO: Start by verifying where we have stopped last time and restoring state.
-            
-            # TODO: Do exactly what Start does but start in the middle...
-            if accurev.login(self.config.accurev.username, self.config.accurev.password):
-                state.config.logger.info( "Login successful" )
-                
-                # TODO: Figure out at which transaction we have stopped and use it as the startTransaction.
-                self.ProcessAccuRevTransactionRange(startTransaction=self.GetLastAccuRevTransaction(), endTransaction=self.config.accurev.endTransaction)
-                
-                os.chdir(self.cwd)
-                
-                if accurev.logout():
-                    state.config.logger.info( "Logout successful" )
-                    return 0
-                else:
-                    state.config.logger.error("Logout failed\n")
-                    return 1
-            else:
-                state.config.logger.error("AccuRev login failed.\n")
-                return 1
-        else:
-            state.config.logger.error( "Cannot resume last conversion operation. No git repository." )
+    def Restart(self):
+        return self.Start(isRestart=True)
         
 # ################################################################################################ #
 # Script Functions                                                                                 #
@@ -472,7 +440,7 @@ def DumpExampleConfigFile(outputFilename):
     <accurev username="joe_bloggs" password="joanna" depot="Trunk" />
     <git repo-path="/put/the/git/repo/here" />
     <usermaps>
-        <map-user accurev-username="joe_bloggs" git-name="Joe Bloggs" git-email="joe@bloggs.com" />
+        <map-user><accurev username="joe_bloggs" /><git name="Joe Bloggs" email="joe@bloggs.com" /></map-user>
     </usermaps>
 </accurev2git>
 """
@@ -534,7 +502,7 @@ def AccuRev2GitMain(argv):
     parser.add_argument('--accurev-password', nargs='?', dest='accurevPassword', default=config.accurev.password)
     parser.add_argument('--accurev-depot',    nargs='?', dest='accurevDepot',    default=config.accurev.depot)
     parser.add_argument('--git-repo-path',    nargs='?', dest='gitRepoPath',     default=config.git.repoPath)
-    parser.add_argument('--resume',    nargs='?', dest='resume', const="true")
+    parser.add_argument('--restart',    nargs='?', dest='restart', const="true")
     parser.add_argument('--debug',    nargs='?', dest='debug', const="true")
     parser.add_argument('--dump-example-config', nargs='?', dest='exampleConfigFilename', const='no-filename', default=None)
     
@@ -543,7 +511,7 @@ def AccuRev2GitMain(argv):
     # Dump example config if specified
     if args.exampleConfigFilename is not None:
         if args.exampleConfigFilename == 'no-filename':
-            exampleConfigFilename = configFilename + '.example'
+            exampleConfigFilename = Config.FilenameFromScriptName(scriptName) + '.example'
         else:
             exampleConfigFilename = args.exampleConfigFilename
         
@@ -562,8 +530,8 @@ def AccuRev2GitMain(argv):
     
     state.config.logger.isDbgEnabled = ( args.debug == "true" )
         
-    if args.resume == "true":
-        return state.Resume()
+    if args.restart == "true":
+        return state.Restart()
     else:
         return state.Start()
         
