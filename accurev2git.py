@@ -57,12 +57,14 @@ def LocalElementPath(accurevDepotElementPath, gitRepoPath=None, isAbsolute=False
             return os.path.abspath(relpath)
     return relpath
 
+# Gets the stream name/id from the virtual version of one of the elements.
 def GetTransactionDestStream(transaction):
     if transaction is not None:
         if transaction.versions is not None and len(transaction.versions) > 0:
             return transaction.versions[0].virtual.stream
     return None
 
+# Gets all the elements (as path strings) that are participating in a transaction
 def GetTransactionElements(transaction, skipDirs=True):
     if transaction is not None:
         if transaction.versions is not None:
@@ -74,7 +76,10 @@ def GetTransactionElements(transaction, skipDirs=True):
             
             return elemList
     return None
-                
+
+# TODO: Make this function more aware of promotions of (defunct) files. The accurev pop command will
+#       fail for defunct files. So use accurev stat at a particular transaction to split the list
+#       of files into defunct ones and the ones to pop.
 def PopAccurevTransaction(transaction, dstPath='.', skipDirs=True):
     if transaction is not None and len(transaction.versions) > 0:
         stream = GetTransactionDestStream(transaction)
@@ -87,6 +92,8 @@ def PopAccurevTransaction(transaction, dstPath='.', skipDirs=True):
             state.config.logger.dbg( "Did not pop transaction", transaction.id )
     return False
 
+# CatAccurevFile is used if you only want to get the file contents of the accurev file. The only
+# difference between cat and co/pop is that cat doesn't set the executable bits on Linux.
 def CatAccurevFile(elementId=None, depotName=None, verSpec=None, element=None, gitPath=None, isBinary=False):
     # TODO: Change back to using accurev pop -v <stream-name> -t <transaction-number> -L <git-repo-path> <element-list>
     filePath = LocalElementPath(accurevDepotElementPath=element, gitRepoPath=gitPath)
@@ -132,12 +139,7 @@ def OnPromote(transaction):
         CheckoutBranch(transaction.versions[0].virtualNamedVersion.stream)
         addCount = 0
         
-        # 1. Get list of defunct, twin or otherwise ambiguous elements
-        # 2. Populate only active elements for the stream
-        # 3. Remove the defunct elements from git.
-        # 4. Add the new/modified elements to git
-        
-        # PopAccurevTransaction(transaction, state.gitRepoPath)
+        PopAccurevTransaction(transaction, state.gitRepoPath)
         
         if addCount > 0:
             state.gitRepo.git.commit(m=transaction.comment)
