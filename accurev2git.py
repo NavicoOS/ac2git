@@ -30,19 +30,35 @@ state = None
 # ################################################################################################ #
 # Script Core. Git helper functions                                                                #
 # ################################################################################################ #
+branchList = None
 def CheckoutBranch(branchName):
     global state
+    global branchList
     
-    branch = None
+    if branchList is None:
+        branchList = state.gitRepo.branch_list()
+    
+    for branch in branchList:
+        if branch.name == branchName:
+            try:
+                subprocess.check_output('git checkout {0}'.format(branchName))
+                return branch
+            except:
+                return None
     
     try:
-        subprocess.check_output('git checkout {0}'.format(branchName))
+        subprocess.check_output('git checkout -b {0}'.format(branchName))
+        branchList = state.gitRepo.branch_list()
+        for branch in branchList:
+            if branch.name == branchName:
+                return branch
     except:
-        try:
-            subprocess.check_output('git checkout -b {0}'.format(branchName))
-        except:
-            return None
+        return None
         
+    # If we are here, we are in a state of Initial Commit and there are no branches to speak of yet.
+    branch = git.GitBranchListItem(name=branchName, shortHash=None, remote=None, shortComment="Initial Commit", isCurrent=True)
+    branchList = [ branch ]
+    
     return branch
 
 # LocalElementPath converts a depot relative accurev path into either an absolute or a relative path
@@ -61,7 +77,7 @@ def LocalElementPath(accurevDepotElementPath, gitRepoPath=None, isAbsolute=False
 def GetTransactionDestStream(transaction):
     if transaction is not None:
         if transaction.versions is not None and len(transaction.versions) > 0:
-            return transaction.versions[0].virtual.stream
+            return transaction.versions[0].virtualNamedVersion.stream
     return None
 
 # Gets all the elements (as path strings) that are participating in a transaction
@@ -71,26 +87,66 @@ def GetTransactionElements(transaction, skipDirs=True):
             elemList = []
             for version in transaction.versions:
                 # Populate it only if it is not a directory.
-                if not skipDirs or version.dir != "yes":
+                if not skipDirs or not version.dir:
                     elemList.append(version.path)
+            #    else:
+            #        state.config.logger.dbg( "GetTransactionElements: skipping dir [{0}] {1}".format(version.dir, version.path) )
+            #
+            #state.config.logger.dbg( "GetTransactionElements:  {0}".format(elemList) )
             
             return elemList
+        else:
+            state.config.logger.dbg( "GetTransactionElements: transaction.versions is None" )
+    else:
+        state.config.logger.dbg( "GetTransactionElements: transaction is None" )
+
     return None
 
-# TODO: Make this function more aware of promotions of (defunct) files. The accurev pop command will
-#       fail for defunct files. So use accurev stat at a particular transaction to split the list
-#       of files into defunct ones and the ones to pop.
-def PopAccurevTransaction(transaction, dstPath='.', skipDirs=True):
-    if transaction is not None and len(transaction.versions) > 0:
-        stream = GetTransactionDestStream(transaction)
-        elemList = GetTransactionElements(transaction, skipDirs)
+def SplitElementsByDefunctStatus(stream, transactionId, elemList):
+    info = accurev.stat(all=True, stream=stream, timeSpec=transactionId, defunctOnly=True)
+    
+    if info is not None:
+        defunctList = []
+        nonDefunctList = []
         
-        if elemList is not None and len(elemList) > 0:
-            state.config.logger.dbg( "pop #{0}: {1} files to {2}".format(transaction.id, len(elemList), dstPath) )
-            return accurev.pop(isOverride=True, verSpec=stream, location=dstPath, timeSpec=transaction.id, elementList=elemList)
+        for elem in elemList:
+            # Try and find the element in the defunct element list
+            isDefunct = False
+            for defunctElem in info.elements:
+                if defunctElem.location == elem:
+                    isDefunct = True
+                    break
+            # Add it to the correct sublist
+            if isDefunct:
+                defunctList.append(elem)
+            else:
+                nonDefunctList.append(elem)
+        
+        return nonDefunctList, defunctList
+    else:
+        state.config.logger.dbg( "SplitElementsByDefunctStatus: info is None" )
+        return elemList, []
+
+def PopAccurevTransaction(stream, transactionId, elemList, dstPath='.', skipDirs=True):
+    if stream is not None and transactionId is not None and elemList is not None and len(elemList) > 0:
+        state.config.logger.dbg( "pop #{0}: {1} files to {2}".format(transactionId, len(elemList), dstPath) )
+        
+        # If the element list is large, use the list file feature of AccuRev
+        if len(elemList) > 25:
+            tmpFilename = '.pop_list'
+            tmpFile = open(name='.pop_list', mode='w')
+            for elem in elemList:
+                tmpFile.write('{0}\n'.format(elem))
+            tmpFile.close()
+            rv = accurev.pop(isOverride=True, verSpec=stream, location=dstPath, timeSpec=transactionId, listFile=tmpFilename)
+            os.remove(tmpFilename)
+            return rv
+        # Otherwise just pass the element list directly
         else:
-            state.config.logger.dbg( "Did not pop transaction", transaction.id )
-    return False
+            return accurev.pop(isOverride=True, verSpec=stream, location=dstPath, timeSpec=transactionId, elementList=elemList)
+    else:
+        state.config.logger.dbg( "Did not pop transaction #{0}, stream {1}, elements {2}".format(transactionId, stream, elemList) )
+        return False
 
 # CatAccurevFile is used if you only want to get the file contents of the accurev file. The only
 # difference between cat and co/pop is that cat doesn't set the executable bits on Linux.
@@ -134,18 +190,65 @@ def OnPromote(transaction):
     global state
     state.config.logger.dbg( "OnPromote: #{0}".format(transaction.id) )
     if len(transaction.versions) > 0:
-        state.config.logger.dbg( "Branch:", transaction.versions[0].virtualNamedVersion.stream )
+        stream = GetTransactionDestStream(transaction)
+        elemList = GetTransactionElements(transaction, skipDirs=True)
         
-        CheckoutBranch(transaction.versions[0].virtualNamedVersion.stream)
-        addCount = 0
+        if stream is not None and state.config.accurev.streamList is not None:
+            if stream not in state.config.accurev.streamList:
+                state.config.logger.dbg( "Skipped transaction #{0}. Stream {1} is not in the stream list.".format(transaction.id, stream) )
+                return False
         
-        PopAccurevTransaction(transaction, state.gitRepoPath)
-        
-        if addCount > 0:
-            state.gitRepo.git.commit(m=transaction.comment)
-            state.config.logger.dbg( "Committed", addCount, "files to", state.gitRepo.head.reference.commit )
+        if stream is not None and elemList is not None:
+            state.config.logger.dbg( "Branch:", transaction.versions[0].virtualNamedVersion.stream )
+            
+            CheckoutBranch(transaction.versions[0].virtualNamedVersion.stream)
+            
+            memberList, defunctList = SplitElementsByDefunctStatus(stream, transaction.id, elemList)
+            PopAccurevTransaction(stream, transaction.id, memberList, state.config.git.repoPath)
+            
+            if len(memberList) > 0:
+                addList = []
+                for elem in memberList:
+                    addList.append(LocalElementPath(accurevDepotElementPath=elem, gitRepoPath=state.config.git.repoPath, isAbsolute=False))
+                    if len(addList) > 25:
+                        state.gitRepo.add(addList)
+                        addList = []
+                if len(addList) > 0:
+                    state.gitRepo.add(addList)
+            if len(defunctList) > 0:
+                rmList = []
+                for elem in defunctList:
+                    rmList.append(LocalElementPath(accurevDepotElementPath=elem, gitRepoPath=state.config.git.repoPath, isAbsolute=False))
+                    if len(rmList) > 25:
+                        state.gitRepo.rm(rmList)
+                        rmList = []
+                if len(rmList) > 0:
+                    state.gitRepo.rm(rmList)
+            
+            dbgFileMsg = "+{0}/-{1}".format(str(len(memberList)), str(len(defunctList)))
+            
+            if len(memberList) > 0 or len(defunctList) > 0:
+                transTag = "[AccuRev Transaction #{0}]"
+                comment = "[no original comment]"
+                if transaction.comment is not None:
+                    comment = transaction.comment
+                
+                commitMessage = "{0}\n\n{1}".format(comment, transTag)
+                    
+                status = state.gitRepo.commit(message=commitMessage)
+                if status:
+                    state.config.logger.dbg( "Committed", dbgFileMsg, "files" )
+                else:
+                    state.config.logger.dbg( "Failed to commit {0} files.\n{1}".format(dbgFileMsg, state.gitRepo.lastError.output) )
+                return status
+            else:
+                state.config.logger.dbg( "Did not commit empty transaction #{0}.".format(transaction.id) )
         else:
-            state.config.logger.dbg( "Did not commit" )
+            state.config.logger.dbg( "Transaction #{0}. Could not interpret stream or elements.".format(transaction.id) )
+    else:
+        state.config.logger.dbg( "Transaction #{0} has no elements.".format(transaction.id) )
+        
+    return False
 
 def OnMove(transaction):
     state.config.logger.dbg( "OnMove:", transaction )
@@ -215,16 +318,25 @@ class Config(object):
                 startTransaction = xmlElement.attrib.get('start-transaction')
                 endTransaction   = xmlElement.attrib.get('end-transaction')
                 
-                return cls(depot, username, password, startTransaction, endTransaction)
+                streamList = None
+                streamListElement = xmlElement.find('stream-list')
+                if streamListElement is not None:
+                    streamList = []
+                    streamElementList = streamListElement.findall('stream')
+                    for streamElement in streamElementList:
+                        streamList.append(streamElement.text)
+                
+                return cls(depot, username, password, startTransaction, endTransaction, streamList)
             else:
                 return None
             
-        def __init__(self, depot, username = None, password = None, startTransaction = None, endTransaction = None):
+        def __init__(self, depot, username = None, password = None, startTransaction = None, endTransaction = None, streamList = None):
             self.depot    = depot
             self.username = username
             self.password = password
             self.startTransaction = startTransaction
             self.endTransaction   = endTransaction
+            self.streamList = streamList
     
         def __repr__(self):
             str = "Config.AccuRev(depot=" + repr(self.depot)
@@ -232,6 +344,8 @@ class Config(object):
             str += ", password="          + repr(self.password)
             str += ", startTransaction="  + repr(self.startTransaction)
             str += ", endTransaction="    + repr(self.endTransaction)
+            if streamList is not None:
+                str += ", streamList="    + repr(self.streamList)
             str += ")"
             
             return str
@@ -332,7 +446,19 @@ class AccuRev2Git(object):
         self.config = config
         self.transactionHandlers = { "add": OnAdd, "chstream": OnChstream, "co": OnCo, "defunct": OnDefunct, "keep": OnKeep, "promote": OnPromote, "move": OnMove, "mkstream": OnMkstream, "purge": OnPurge, "undefunct": OnUndefunct, "defcomp": OnDefcomp }
         self.cwd = None
+        self.gitRepo = None
+        self.accurevStreams = None
+    
+    def GetStreamNameFromId(self, streamId):
+        if self.accurevStreams is None:
+            self.accurevStreams = accurev.show.streams(depot=self.config.accurev.depot)
+            
+        for stream in self.accurevStreams:
+            if str(streamId) == str(stream.streamNumber):
+                return stream.name
         
+        return None
+    
     def GetLastAccuRevTransaction(self):
         # TODO: Fix me! We don't have a way of retrieving the last accurev transaction that we
         #               processed yet. This will most likely involve parsing the git history in some
@@ -342,14 +468,14 @@ class AccuRev2Git(object):
             # This is an initial commit so we need to start from the beginning.
             return self.config.accurev.startTransaction
         else:
-            lastbranch = subprocess.check_output('git config accurev.lastbranch').strip()
-            subprocess.check_output('git checkout {0}'.format(lastbranch))
+            #lastbranch = subprocess.check_output('git config accurev.lastbranch').strip()
+            #subprocess.check_output('git checkout {0}'.format(lastbranch))
             lastCommit = subprocess.check_output('git log {0} -1'.format(lastbranch)).strip()
         
             reMsgTemplate = re.compile('AccuRev Transaction #([0-9]+)')
             reMatchObj = reMsgTemplate.match(lastCommit)
             if reMatchObj:
-                return reMatchObj.group(1)
+                return int(reMatchObj.group(1))
         
         return None
         
@@ -374,7 +500,6 @@ class AccuRev2Git(object):
         state.config.logger.info( "Querying history" )
         arHist = accurev.hist(depot=self.config.accurev.depot, timeSpec=timeSpec, allElementsFlag=True)
         
-        sys.exit(0)
         for transaction in arHist.transactions:
             self.ProcessAccuRevTransaction(transaction)
         
@@ -389,7 +514,7 @@ class AccuRev2Git(object):
             state.config.logger.info( "Creating new git repository" )
             
             # Create an empty first commit so that we can create branches as we please.
-            git.init(directory=gitRepoPath)
+            git.init(path=gitRepoPath)
             state.config.logger.info( "Created a new git repository." )
             return True
         else:
@@ -410,6 +535,7 @@ class AccuRev2Git(object):
         os.chdir(self.config.git.repoPath)
         
         if self.InitGitRepo(self.config.git.repoPath):
+            self.gitRepo = git.open(self.config.git.repoPath)
             if accurev.login(self.config.accurev.username, self.config.accurev.password):
                 state.config.logger.info( "Accurev login successful" )
                 
@@ -439,7 +565,17 @@ class AccuRev2Git(object):
 def DumpExampleConfigFile(outputFilename):
     exampleContents = """
 <accurev2git>
-    <accurev username="joe_bloggs" password="joanna" depot="Trunk" />
+    <accurev 
+        username="joe_bloggs"
+        password="joanna"
+        depot="Trunk"
+        start-transaction="1"
+        end-transaction="500" >
+        <!-- The stream-list is optional. If not given all streams are processed -->
+        <stream-list>
+            <stream>NOS</stream>
+        </stream-list>
+    </accurev>
     <git repo-path="/put/the/git/repo/here" />
     <usermaps>
         <map-user><accurev username="joe_bloggs" /><git name="Joe Bloggs" email="joe@bloggs.com" /></map-user>
@@ -490,6 +626,24 @@ def LoadConfigOrDefaults(scriptName):
         
     return config
 
+def PrintConfigSummary(config):
+    if config is not None:
+        config.logger.info('Config info:')
+        config.logger.info('  git')
+        config.logger.info('    repo path:{0}'.format(config.git.repoPath))
+        config.logger.info('  accurev:')
+        config.logger.info('    depot: {0}'.format(config.accurev.depot))
+        if config.accurev.streamList is not None:
+            config.logger.info('    stream list:')
+            for stream in config.accurev.streamList:
+                config.logger.info('      - {0}'.format(stream))
+        else:
+            config.logger.info('    stream list: all included')
+        config.logger.info('    start tran.: #{0}'.format(config.accurev.startTransaction))
+        config.logger.info('    end tran.:   #{0}'.format(config.accurev.endTransaction))
+        config.logger.info('    username: {0}'.format(config.accurev.username))
+        config.logger.info('  usermaps: {0}'.format(len(config.usermaps)))
+    
 # ################################################################################################ #
 # Script Main                                                                                      #
 # ################################################################################################ #
@@ -528,6 +682,8 @@ def AccuRev2GitMain(argv):
     if not ValidateConfig(config):
         return 1
 
+    PrintConfigSummary(config)
+    
     state = AccuRev2Git(config)
     
     state.config.logger.isDbgEnabled = ( args.debug == "true" )

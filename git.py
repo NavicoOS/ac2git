@@ -188,6 +188,7 @@ class repo(object):
     def __init__(self, path):
         self.path = path
         self._cwdQueue = []
+        self.lastError = None
         
     def _pushd(self, newPath):
         self._cwdQueue.insert(0, os.getcwd())
@@ -202,7 +203,8 @@ class repo(object):
             self._pushd(self.path)
             output = subprocess.check_output(cmd)
             self._popd()
-        except:
+        except subprocess.CalledProcessError as e:
+            self.lastError = e
             return None
         return output
         
@@ -296,7 +298,7 @@ def open(path):
 def delete(path=None):
     if path is None:
         path = os.getcwd()
-    if IsRepo(path=path):
+    if isRepo(path=path):
         for root, dirs, files in os.walk(path, topdown=False):
             for name in files:
                 os.remove(os.path.join(root, name))

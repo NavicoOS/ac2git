@@ -933,6 +933,7 @@ class raw(object):
                 else:
                     cmd.append(elementList)
 
+        
         return raw._runCommand(cmd, outputFilename)
 
     # AccuRev history command
@@ -1287,7 +1288,10 @@ def stat(all=False, inBackingStream=False, dispBackingChain=False, defaultGroupO
         , underlapedElementsOnly=underlapedElementsOnly, pendingElementsOnly=pendingElementsOnly, dontOptimizeSearch=dontOptimizeSearch
         , directoryTreePath=directoryTreePath, stream=stream, externalOnly=externalOnly, showExcluded=showExcluded
         , timeSpec=timeSpec, ignorePatternsList=ignorePatternsList, listFile=listFile, elementList=elementList, outputFilename=outputFilename)
-    return AccuRevStat.fromxmlstring(outputXml)
+    if raw._lastCommand.returncode == 0:
+        return AccuRevStat.fromxmlstring(outputXml)
+    else:
+        return None
 
 # AccuRev history command
 def hist(depot=None, stream=None, timeSpec=None, listFile=None, isListFileXml=False, elementList=None, allElementsFlag=False, elementId=None, transactionKind=None, commentString=None, username=None, outputFilename=None):
