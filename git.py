@@ -196,42 +196,77 @@ class repo(object):
     def _popd(self):
         os.chdir(self._cwdQueue.pop(0))
     
+    def _docmd(self, cmd):
+        try:
+            #strCmd = ' '.join(cmd)
+            self._pushd(self.path)
+            output = subprocess.check_output(cmd)
+            self._popd()
+        except:
+            return None
+        return output
+        
     def checkout(self):
         pass
 
     def branch(self):
         pass
     
-    def branch_list(self):
-        try:
-            cmd = [ gitCmd, 'branch', '-vv' ]
+    def rm(self, fileList = []):
+        if len(fileList) > 0:
+            cmd = [ gitCmd, 'rm', '--' ]
+            cmd.extend(fileList)
             
-            strCmd = ' '.join(cmd)
-            self._pushd(self.path)
-            output = subprocess.check_output(strCmd)
-            self._popd()
-        except:
-            return None
+            output = self._docmd(cmd)
+            
+            return (output is not None)
+        else:
+            raise Exception('Error, tried to add empty file list')
+    
+    def add(self, fileList = []):
+        if len(fileList) > 0:
+            cmd = [ gitCmd, 'add', '--' ]
+            cmd.extend(fileList)
+            
+            output = self._docmd(cmd)
+            
+            return (output is not None)
+        else:
+            raise Exception('Error, tried to add empty file list')
+    
+    def commit(self, message = ''):
+        if message is not None and len(message) > 0:
+            cmd = [ gitCmd, 'commit' ]
+            
+            cmd.extend([ '-m', str(message) ])
+            
+            output = self._docmd(cmd)
+            
+            return (output is not None)
+        else:
+            raise Exception('Error, tried to commit with empty message')
+    
+    def branch_list(self):
+        cmd = [ gitCmd, 'branch', '-vv' ]
+            
+        output = self._docmd(cmd)
         
-        branchList = []
-        outputLines = output.split('\n')
-        for line in outputLines:
-            if len(line.strip()) > 0:
-                branchList.append(GitBranchListItem.fromgitbranchoutput(line))
-        return branchList
+        if output is not None:
+            branchList = []
+            outputLines = output.split('\n')
+            for line in outputLines:
+                if len(line.strip()) > 0:
+                    branchList.append(GitBranchListItem.fromgitbranchoutput(line))
+            return branchList
+        return None
 
     def status(self):
-        try:
-            cmd = [ gitCmd, 'status' ]
+        cmd = [ gitCmd, 'status' ]
             
-            strCmd = ' '.join(cmd)
-            self._pushd(self.path)
-            output = subprocess.check_output(strCmd)
-            self._popd()
-        except:
-            return None
-        
-        return GitStatus.fromgitoutput(output)
+        output = self._docmd(cmd)
+        if output is not None:
+            return GitStatus.fromgitoutput(output)
+        return None
 
 def isRepo(path=None):
     if path is not None and os.path.isdir(path):
