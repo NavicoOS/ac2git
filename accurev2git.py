@@ -39,8 +39,11 @@ def CheckoutBranch(gitRepo, branchName):
     if branchList is None:
         branchList = gitRepo.branch_list()
     
-    if branchList is None:
+    if branchList is None or len(branchList) == 0:
         # If we are here, we are in a state of Initial Commit and there are no branches to speak of yet.
+        status = gitRepo.status()
+        if status is not None and status.branch != branchName:
+            gitRepo.checkout(branchName=branchName, isNewBranch=True)
         branch = git.GitBranchListItem(name=branchName, shortHash=None, remote=None, shortComment="Initial Commit", isCurrent=True)
         branchList = [ branch ]
         
@@ -55,9 +58,7 @@ def CheckoutBranch(gitRepo, branchName):
                 isNewBranch = False
                 break
     gitRepo.checkout(branchName=branchName, isNewBranch=isNewBranch)
-    
-    if isNewBranch:
-        branchList = gitRepo.branch_list()
+    branchList = gitRepo.branch_list()
     
     for branch in branchList:
         if branch.isCurrent:
@@ -106,7 +107,65 @@ def GetTransactionElements(transaction, skipDirs=True):
 
     return None
 
-def SplitElementsByDefunctStatus(stream, transactionId, elemList):
+def DiffChangeWhatPriority(changeWhat):
+    if changeWhat == "defuncted":
+        return 4
+    elif changeWhat == "moved":
+        return 3
+    elif changeWhat == "version":
+        return 2
+    elif changeWhat == "created":
+        # warning: this element doesn't have a change.stream1!
+        return 1
+    else:
+        return 0
+    
+def SplitElementsByStatusViaDiff(stream, transactionId, elemList):
+    lastTransactionId = state.GetLastAccuRevTransaction()
+    
+    diffResult = accurev.diff(all=True, informationOnly=True, verSpec1=stream, verSpec2=stream, transactionRange="{0}-{1}".format(lastTransactionId, transactionId))
+    
+    # All items in the elem list are depot relative path names. Here we convert them to absolute paths
+    if len(elemList) > 0:
+        depotRelativePrefix = elemList[0][:2]
+        
+        if diffResult is not None:
+            memberList = []
+            defunctList = []
+            for diffElem in diffResult.elements:
+                mostRecentChange = None
+                # Pick the most resent or the most pressing change!
+                for change in diffElem.changes:
+                    if mostRecentChange is None or mostRecentChange.stream2.version.version < change.stream2.version.version:
+                        mostRecentChange = change
+                    elif mostRecentChange.stream2.version.version == change.stream2.version.version:
+                        if DiffChangeWhatPriority(mostRecentChange.what) < DiffChangeWhatPriority(change.what):
+                            mostRecentChange = change
+
+                stream2Name = "{0}{1}".format(depotRelativePrefix, mostRecentChange.stream2.name)
+                stream1Name = None
+                if mostRecentChange.stream1 is not None:
+                    stream1Name = "{0}{1}".format(depotRelativePrefix, mostRecentChange.stream1.name)
+                
+                if stream2Name in elemList:
+                    if mostRecentChange.what == "version":
+                        memberList.append(stream2Name)
+                    elif mostRecentChange.what == "defuncted":
+                        defunctList.append(stream2Name)
+                    elif mostRecentChange.what == "created":
+                        # warning: this element doesn't have a mostRecentChange.stream1!
+                        memberList.append(stream2Name)
+                    elif mostRecentChange.what == "moved":
+                        defunctList.append(stream1Name)
+                        memberList.append(stream2Name)
+                    else:
+                        raise Exception("SplitElementsByStatusViaDiff: Unexpected [{0}] value for Change element's What attribute found!")
+            
+            return memberList, defunctList
+        raise Exception("SplitElementsByStatusViaDiff: could not diff stream {0} transaction range {1}-{2}".format(stream, lastTransactionId, transactionId))
+    return [], []
+    
+def SplitElementsByStatusViaStat(stream, transactionId, elemList):
     if len(elemList) > maxCmdItems:
         tmpFilename = '.stat_list'
         tmpFile = open(name=tmpFilename, mode='w')
@@ -139,9 +198,9 @@ def SplitElementsByDefunctStatus(stream, transactionId, elemList):
         
         return nonDefunctList, defunctList
     else:
-        #state.config.logger.dbg( "SplitElementsByDefunctStatus: info is None" )
+        #state.config.logger.dbg( "SplitElementsByStatusViaStat: info is None" )
         #return elemList, []
-        raise Exception("Error in SplitElementsByDefunctStatus: accurev.stat(stream={0}, timeSpec={1}, elementList={2}) returned None".format(stream, transactionId, elemList))
+        raise Exception("Error in SplitElementsByStatusViaStat: accurev.stat(stream={0}, timeSpec={1}, elementList={2}) returned None".format(stream, transactionId, elemList))
 
 def PopAccurevTransaction(stream, transactionId, elemList, dstPath='.', skipDirs=True):
     state.config.logger.dbg( "pop #{0}: {1} files to {2}".format(transactionId, len(elemList), dstPath) )
@@ -199,6 +258,7 @@ def GitCommit(gitRepo, branch, author, date, message, addList, rmList):
     
     return gitRepo.commit(message=message, author=author, date=date)
 
+# GetGitUserDetails returns the git information from the config mapping for the given accurev user.
 def GetGitUserDetails(accurevUsername):
     if accurevUsername is not None:
         for usermap in state.config.usermaps:
@@ -207,6 +267,8 @@ def GetGitUserDetails(accurevUsername):
                 
     return None, None
 
+# AccurevUser2GitAuthor converts an accurev username into a git username by using the provided mapping and
+# it also handles usernames which aren't in the mapping by creating one for them.
 def AccurevUser2GitAuthor(accurevUser):
     name, email = GetGitUserDetails(accurevUser)
     if name is None:
@@ -215,6 +277,8 @@ def AccurevUser2GitAuthor(accurevUser):
         email = "{0}@no-email.com".format(accurevUser)
     return "{0} <{1}>".format(name, email)
 
+# AccurevComment2GitMessage tags the commit message from AccuRev with information regarding the transaction
+# from which the given commit has been generated.
 def AccurevComment2GitMessage(accurevTransaction):
     transTag = "[AccuRev Transaction #{0}]".format(accurevTransaction.id)
     comment = "[no original comment]"
@@ -249,6 +313,7 @@ def OnKeep(transaction):
 def OnPromote(transaction):
     global state
     state.config.logger.dbg( "Transaction #{0} (promote)".format(transaction.id) )
+    
     if len(transaction.versions) > 0:
         stream = GetTransactionDestStream(transaction)
         elemList = GetTransactionElements(transaction, skipDirs=True)
@@ -262,7 +327,7 @@ def OnPromote(transaction):
             state.config.logger.dbg( "Branch:", stream )
             
             # Generate the lists of files to add and remove
-            memberList, defunctList = SplitElementsByDefunctStatus(stream, transaction.id, elemList)
+            memberList, defunctList = SplitElementsByStatusViaDiff(stream, transaction.id, elemList)
             
             addList = []
             if memberList is not None and len(memberList) > 0:
