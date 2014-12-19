@@ -501,6 +501,122 @@ class AccuRevStat(object):
             # Invalid XML for an AccuRev hist command response.
             return None
 
+class AccuRevStreamChange(object):
+    def __init__(self, name, eid, version, namedVersion, isDir, elemType):
+        self.name         = name
+        self.eid          = IntOrNone(eid)
+        self.version      = AccuRevVersion.fromstring(version)
+        self.namedVersion = AccuRevVersion.fromstring(namedVersion)
+        self.isDir        = AccuRevBool.fromstring(isDir)
+        self.elemType     = elemType
+    
+    def __repr__(self):
+        str = "AccuRevStreamChange(name=" + repr(self.name)
+        str += ", eid="            + repr(self.eid)
+        str += ", version="        + repr(self.version)
+        str += ", namedVersion="   + repr(self.namedVersion)
+        str += ", isDir="          + repr(self.isDir)
+        str += ", elemType="       + repr(self.elemType)
+        str += ")"
+
+        return str
+    
+    @classmethod
+    def fromxmlelement(cls, xmlElement):
+        if xmlElement is not None and re.match('^Stream[12]$', xmlElement.tag) is not None:
+            name         = xmlElement.attrib.get('Name')
+            eid          = xmlElement.attrib.get('eid')
+            version      = xmlElement.attrib.get('Version')
+            namedVersion = xmlElement.attrib.get('NamedVersion')
+            isDir        = xmlElement.attrib.get('IsDir')
+            elemType     = xmlElement.attrib.get('elemType')
+            
+            return cls(name=name, eid=eid, version=version, namedVersion=namedVersion, isDir=isDir, elemType=elemType)
+        
+        return None
+    
+class AccuRevChange(object):
+    def __init__(self, what, stream1, stream2):
+        self.what    = what
+        self.stream1 = stream1
+        self.stream2 = stream2
+    
+    def __repr__(self):
+        str = "AccuRevChange(what=" + repr(self.what)
+        str += ", stream1="        + repr(self.stream1)
+        str += ", stream2="        + repr(self.stream2)
+        str += ")"
+
+        return str
+    
+    @classmethod
+    def fromxmlelement(cls, xmlElement):
+        if xmlElement is not None and xmlElement.tag == 'Change':
+            what = xmlElement.attrib.get('What')
+            stream1Elem = xmlElement.find('Stream1')
+            stream1 = AccuRevStreamChange.fromxmlelement(stream1Elem)
+            stream2Elem = xmlElement.find('Stream2')
+            stream2 = AccuRevStreamChange.fromxmlelement(stream2Elem)
+            
+            return cls(what=what, stream1=stream1, stream2=stream2)
+        
+        return None
+    
+class AccuRevDiffElement(object):
+    def __init__(self, changes = []):
+        self.changes = changes
+    
+    def __repr__(self):
+        str = "AccuRevDiffElement(changes=" + repr(self.changes)
+        str += ")"
+
+        return str
+    
+    @classmethod
+    def fromxmlelement(cls, xmlElement):
+        if xmlElement is not None and xmlElement.tag == 'Element':
+            changes = []
+            for change in xmlElement.findall('Change'):
+                changes.append(AccuRevChange.fromxmlelement(change))
+            
+            return cls(changes=changes)
+        
+        return None
+    
+class AccuRevDiff(object):
+    def __init__(self, taskId, elements=[]):
+        self.taskId    = IntOrNone(taskId)
+        self.elements  = elements
+    
+    def __repr__(self):
+        str = "AccuRevDiff(taskId=" + repr(self.taskId)
+        str += ", elements="        + repr(self.elements)
+        str += ")"
+
+        return str
+        
+    @classmethod
+    def fromxmlstring(cls, xmlText):
+        # This parser has been made from an example given by running:
+        #   accurev diff -a -i -v Stream -V Stream -t 11-16 -fx
+        
+        # Load the XML
+        xmlRoot = ElementTree.fromstring(xmlText)
+        #xpathPredicate = ".//AcResponse[@Command='hist']"
+
+        if xmlRoot is not None and xmlRoot.tag == "AcResponse" and xmlRoot.get("Command") == "diff":
+            # Build the class
+            taskId    = xmlRoot.attrib.get('TaskId')
+
+            elements = []
+            for element in xmlRoot.findall('Element'):
+                elements.append(AccuRevDiffElement.fromxmlelement(element))
+
+            return cls(taskId=taskId, elements=elements)
+        else:
+            # Invalid XML for an AccuRev hist command response.
+            return None
+    
 class AccuRevUser(object):
     def __init__(self, number = None, name = None, kind = None):
         self.number = IntOrNone(number)
@@ -976,6 +1092,66 @@ class raw(object):
         
         return raw._runCommand(cmd, outputFilename)
 
+    @staticmethod
+    def diff( verSpec1=None, verSpec2=None, transactionRange=None, toBacking=False, toOtherBasisVersion=False, toPrevious=False
+            , all=False, onlyDefaultGroup=False, onlyKept=False, onlyModified=False, onlyExtModified=False, onlyOverlapped=False, onlyPending=False
+            , ignoreBlankLines=False, isContextDiff=False, informationOnly=False, ignoreCase=False, ignoreWhitespace=False, ignoreAmountOfWhitespace=False, useGUI=False
+            , extraParams=None, isXmlOutput=False):
+        cmd = [ raw._accurevCmd, "diff" ]
+        
+        if all:
+            cmd.append('-a')
+        if onlyDefaultGroup:
+            cmd.append('-d')
+        if onlyKept:
+            cmd.append('-k')
+        elif onlyModified:
+            cmd.append('-m')
+        elif onlyExtModified:
+            cmd.append('-n')
+        if onlyOverlapped:
+            cmd.append('-o')
+        if onlyPending:
+            cmd.append('-p')
+        
+        if toBacking:
+            cmd.append('-b')
+        
+        if verSpec1 is not None:
+            cmd.extend([ '-v', verSpec1 ])
+        if verSpec2 is not None:
+            cmd.extend([ '-V', verSpec2 ])
+        if transactionRange is not None:
+            cmd.extend([ '-t', transactionRange ])
+        
+        if isXmlOutput:
+            cmd.append('-fx')
+        
+        if toOtherBasisVersion:
+            cmd.append('-j')
+        if toPrevious:
+            cmd.append('-1')
+        
+        if ignoreBlankLines:
+            cmd.append('-B')
+        if isContextDiff:
+            cmd.append('-c')
+        if informationOnly:
+            cmd.append('-i')
+        if ignoreCase:
+            cmd.append('-I')
+        if ignoreWhitespace:
+            cmd.append('-w')
+        if ignoreAmountOfWhitespace:
+            cmd.append('-W')
+        if useGUI:
+            cmd.append('-G')
+        
+        if extraParams is not None:
+            cmd.extend([ '--', extraParams ])
+        
+        return raw._runCommand(cmd)
+        
     # AccuRev populate command
     @staticmethod
     def pop(isRecursive=False, isOverride=False, verSpec=None, location=None, dontBuildDirTree=False, timeSpec=None, isXmlOutput=False, listFile=None, elementList=None):
@@ -1297,6 +1473,17 @@ def stat(all=False, inBackingStream=False, dispBackingChain=False, defaultGroupO
 def hist(depot=None, stream=None, timeSpec=None, listFile=None, isListFileXml=False, elementList=None, allElementsFlag=False, elementId=None, transactionKind=None, commentString=None, username=None, outputFilename=None):
     xmlOutput = raw.hist(depot=depot, stream=stream, timeSpec=timeSpec, listFile=listFile, isListFileXml=isListFileXml, elementList=elementList, allElementsFlag=allElementsFlag, elementId=elementId, transactionKind=transactionKind, commentString=commentString, username=username, isXmlOutput=True, outputFilename=outputFilename)
     return AccuRevHistory.fromxmlstring(xmlOutput)
+
+# AccuRev diff command
+def diff(verSpec1=None, verSpec2=None, transactionRange=None, toBacking=False, toOtherBasisVersion=False, toPrevious=False
+        , all=False, onlyDefaultGroup=False, onlyKept=False, onlyModified=False, onlyExtModified=False, onlyOverlapped=False, onlyPending=False
+        , ignoreBlankLines=False, isContextDiff=False, informationOnly=False, ignoreCase=False, ignoreWhitespace=False, ignoreAmountOfWhitespace=False, useGUI=False
+        , extraParams=None):
+    xmlOutput = raw.diff(verSpec1=verSpec1, verSpec2=verSpec2, transactionRange=transactionRange, toBacking=toBacking, toOtherBasisVersion=toOtherBasisVersion, toPrevious=toPrevious
+        , all=all, onlyDefaultGroup=onlyDefaultGroup, onlyKept=onlyKept, onlyModified=onlyModified, onlyExtModified=onlyExtModified, onlyOverlapped=onlyOverlapped, onlyPending=onlyPending
+        , ignoreBlankLines=ignoreBlankLines, isContextDiff=isContextDiff, informationOnly=informationOnly, ignoreCase=ignoreCase, ignoreWhitespace=ignoreWhitespace, ignoreAmountOfWhitespace=ignoreAmountOfWhitespace, useGUI=useGUI
+        , extraParams=extraParams, isXmlOutput=True)
+    return AccuRevDiff.fromxmlstring(xmlOutput)
 
 # AccuRev Populate command
 def pop(isRecursive=False, isOverride=False, verSpec=None, location=None, dontBuildDirTree=False, timeSpec=None, listFile=None, elementList=None):

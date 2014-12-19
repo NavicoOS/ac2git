@@ -209,8 +209,16 @@ class repo(object):
             return None
         return output
         
-    def checkout(self):
-        pass
+    def checkout(self, branchName=None, isNewBranch=False):
+        cmd = [ gitCmd, 'checkout' ]
+        
+        if isNewBranch:
+            cmd.append('-b')
+        
+        if branchName is not None:
+            cmd.append(branchName)
+        
+        return self._docmd(cmd)
 
     def branch(self):
         pass

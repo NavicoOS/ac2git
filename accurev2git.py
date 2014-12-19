@@ -33,35 +33,37 @@ maxCmdItems = 25
 # Script Core. Git helper functions                                                                #
 # ################################################################################################ #
 branchList = None
-def CheckoutBranch(branchName):
-    global state
+def CheckoutBranch(gitRepo, branchName):
     global branchList
     
     if branchList is None:
-        branchList = state.gitRepo.branch_list()
+        branchList = gitRepo.branch_list()
     
+    if branchList is None:
+        # If we are here, we are in a state of Initial Commit and there are no branches to speak of yet.
+        branch = git.GitBranchListItem(name=branchName, shortHash=None, remote=None, shortComment="Initial Commit", isCurrent=True)
+        branchList = [ branch ]
+        
+        return branch
+    
+    isNewBranch = True
     for branch in branchList:
         if branch.name == branchName:
-            if not branch.isCurrent:
-                try:
-                    subprocess.check_output('git checkout {0}'.format(branchName))
-                except:
-                    return None
-            return branch
-    try:
-        subprocess.check_output('git checkout -b {0}'.format(branchName))
-        branchList = state.gitRepo.branch_list()
-        for branch in branchList:
-            if branch.name == branchName:
-                return branch
-    except:
-        return None
-        
-    # If we are here, we are in a state of Initial Commit and there are no branches to speak of yet.
-    branch = git.GitBranchListItem(name=branchName, shortHash=None, remote=None, shortComment="Initial Commit", isCurrent=True)
-    branchList = [ branch ]
+            if branch.isCurrent:
+               return branch 
+            else:
+                isNewBranch = False
+                break
+    gitRepo.checkout(branchName=branchName, isNewBranch=isNewBranch)
     
-    return branch
+    if isNewBranch:
+        branchList = gitRepo.branch_list()
+    
+    for branch in branchList:
+        if branch.isCurrent:
+            return branch
+    
+    raise Exception("CheckoutBranch: Unexpected termination, there must be at least one current git branch!")
 
 # LocalElementPath converts a depot relative accurev path into either an absolute or a relative path
 # i.e. removes the \.\ from the front and sensibly converts the path...
@@ -89,7 +91,7 @@ def GetTransactionElements(transaction, skipDirs=True):
             elemList = []
             for version in transaction.versions:
                 # Populate it only if it is not a directory. (note: symlinks can be classed as directories even though they are not)
-                if not skipDirs or (not version.dir and not version.elemType != "elink" and not version.elemType != "slink"):
+                if not skipDirs or not version.dir or version.elemType == "elink" or version.elemType == "slink":
                     elemList.append(version.path)
             #    else:
             #        state.config.logger.dbg( "GetTransactionElements: skipping dir [{0}] {1}".format(version.dir, version.path) )
@@ -173,7 +175,7 @@ def CatAccurevFile(elementId=None, depotName=None, verSpec=None, element=None, g
 
 def GitCommit(gitRepo, branch, author, date, message, addList, rmList):
     if branch is not None:
-        CheckoutBranch(branch)
+        CheckoutBranch(gitRepo, branch)
     
     maxItems = maxCmdItems
     
@@ -204,7 +206,21 @@ def GetGitUserDetails(accurevUsername):
                 return (usermap.gitName, usermap.gitEmail)
                 
     return None, None
-    
+
+def AccurevUser2GitAuthor(accurevUser):
+    name, email = GetGitUserDetails(accurevUser)
+    if name is None:
+        name = accurevUser
+    if email is None:
+        email = "{0}@no-email.com".format(accurevUser)
+    return "{0} <{1}>".format(name, email)
+
+def AccurevComment2GitMessage(accurevTransaction):
+    transTag = "[AccuRev Transaction #{0}]".format(accurevTransaction.id)
+    comment = "[no original comment]"
+    if accurevTransaction.comment is not None:
+        comment = accurevTransaction.comment
+    return "{0}\n\n{1}".format(comment, transTag)
 
 # ################################################################################################ #
 # Script Core. AccuRev transaction to Git conversion handlers.                                     #
@@ -232,7 +248,7 @@ def OnKeep(transaction):
 
 def OnPromote(transaction):
     global state
-    state.config.logger.dbg( "OnPromote: #{0}".format(transaction.id) )
+    state.config.logger.dbg( "Transaction #{0} (promote)".format(transaction.id) )
     if len(transaction.versions) > 0:
         stream = GetTransactionDestStream(transaction)
         elemList = GetTransactionElements(transaction, skipDirs=True)
@@ -243,8 +259,7 @@ def OnPromote(transaction):
                 return False
         
         if stream is not None and elemList is not None and len(elemList) > 0:
-            branch = transaction.versions[0].virtualNamedVersion.stream
-            state.config.logger.dbg( "Branch:", branch )
+            state.config.logger.dbg( "Branch:", stream )
             
             # Generate the lists of files to add and remove
             memberList, defunctList = SplitElementsByDefunctStatus(stream, transaction.id, elemList)
@@ -270,22 +285,13 @@ def OnPromote(transaction):
             # If we have something to commit then:
             if len(addList) > 0 or len(rmList) > 0:
                 # Generate the commit message
-                transTag = "[AccuRev Transaction #{0}]".format(transaction.id)
-                comment = "[no original comment]"
-                if transaction.comment is not None:
-                    comment = transaction.comment
-                commitMessage = "{0}\n\n{1}".format(comment, transTag)
+                commitMessage = AccurevComment2GitMessage(transaction)
 
                 # Generate the git Author
-                name, email = GetGitUserDetails(transaction.user)
-                if name is None:
-                    name = transaction.user
-                if email is None:
-                    email = "{0}@no-email.com".format(transaction.user)
-                gitAuthor = "{0} <{1}>".format(name, email)
+                gitAuthor = AccurevUser2GitAuthor(transaction.user)
                 
                 # Do the commit
-                status = GitCommit(gitRepo=state.gitRepo, branch=branch, author=gitAuthor, date=transaction.time, message=commitMessage, addList=addList, rmList=rmList)
+                status = GitCommit(gitRepo=state.gitRepo, branch=stream, author=gitAuthor, date=transaction.time, message=commitMessage, addList=addList, rmList=rmList)
 
                 if status:
                     state.config.logger.info( "Committed transaction #{0}. {1} files".format(transaction.id, dbgFileMsg) )
@@ -305,7 +311,30 @@ def OnPromote(transaction):
     return False
 
 def OnMove(transaction):
-    state.config.logger.dbg( "OnMove:", transaction )
+    state.config.logger.dbg( "Transaction #{0} (move) [ignored]".format(transaction.id) )
+    # stream = GetTransactionDestStream(transaction)
+    # addList = []
+    # for move in transaction.moves:
+    #     if os.path.exists(move.dest):
+    #         state.config.logger.error( "Transaction #{0}. Moves {1} to an existing file/dir {2}".format(transaction.id, move.source, move.dest) )
+    #         sys.exit(1)
+    #     else:
+    #         try:
+    #             os.rename(move.source, move.dest)
+    #         except OSError:
+    #             state.config.logger.error( "Transaction #{0}. Failed to move {1} to {2}".format(transaction.id, move.source, move.dest) )
+    #             sys.exit(1)
+    #         
+    #         addList.append(move.dest)
+    # 
+    # # Generate the commit message
+    # commitMessage = AccurevComment2GitMessage(transaction)
+    # 
+    # # Generate the git Author
+    # gitAuthor = AccurevUser2GitAuthor(transaction.user)
+    # 
+    # # Do the commit
+    # status = GitCommit(gitRepo=state.gitRepo, branch=stream, author=gitAuthor, date=transaction.time, message=commitMessage, addList=addList, rmList=[])
 
 def OnMkstream(transaction):
     # The mkstream command doesn't contain enough information to create a branch in git.
