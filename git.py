@@ -284,6 +284,27 @@ class repo(object):
             return GitStatus.fromgitoutput(output)
         return None
 
+    def reset(self, branch=None, isHard=False, isSoft=False):
+        cmd = [ gitCmd, 'reset' ]
+        
+        if isHard:
+            cmd.append('--hard')
+        if isSoft:
+            cmd.append('--soft')
+        
+        if branch is not None:
+            cmd.append(branch)
+        
+        return self._docmd(cmd)
+    
+    def clean(self, force=False):
+        cmd = [ gitCmd, 'clean' ]
+    
+        if force:
+            cmd.append('-f')
+        
+        return self._docmd(cmd)
+        
 def isRepo(path=None):
     if path is not None and os.path.isdir(path):
         if os.path.isdir(os.path.join(path, ".git")):

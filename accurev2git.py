@@ -27,6 +27,7 @@ import git
 # Script Globals.                                                                                  #
 # ################################################################################################ #
 state = None
+maxCmdItems = 25
 
 # ################################################################################################ #
 # Script Core. Git helper functions                                                                #
@@ -104,7 +105,7 @@ def GetTransactionElements(transaction, skipDirs=True):
     return None
 
 def SplitElementsByDefunctStatus(stream, transactionId, elemList):
-    if len(elemList) > 25:
+    if len(elemList) > maxCmdItems:
         tmpFilename = '.stat_list'
         tmpFile = open(name=tmpFilename, mode='w')
         for elem in elemList:
@@ -141,7 +142,7 @@ def PopAccurevTransaction(stream, transactionId, elemList, dstPath='.', skipDirs
     state.config.logger.dbg( "pop #{0}: {1} files to {2}".format(transactionId, len(elemList), dstPath) )
     
     # If the element list is large, use the list file feature of AccuRev
-    if len(elemList) > 25:
+    if len(elemList) > maxCmdItems:
         tmpFilename = '.pop_list'
         tmpFile = open(name=tmpFilename, mode='w')
         for elem in elemList:
@@ -171,12 +172,12 @@ def GitCommit(gitRepo, branch, author, date, message, addList, rmList):
     if branch is not None:
         CheckoutBranch(branch)
     
-    maxItems = 25
+    maxItems = maxCmdItems
     
     # Add the items in groups of maxItems so that we don't exceed the max number of command line args.
     while True:
-        tmpList = addList[:max(maxItems, len(addList))]
-        addList = addList[max(maxItems, len(addList)):]
+        tmpList = addList[:min(maxItems, len(addList))]
+        addList = addList[min(maxItems, len(addList)):]
         if len(tmpList) > 0:
             gitRepo.add(tmpList, force=True)
         else:
@@ -184,8 +185,8 @@ def GitCommit(gitRepo, branch, author, date, message, addList, rmList):
     
     # Remove the items in groups of maxItems so that we don't exceed the max number of command line args.
     while True:
-        tmpList = rmList[:max(maxItems, len(rmList))]
-        rmList  = rmList[max(maxItems, len(rmList)):]
+        tmpList = rmList[:min(maxItems, len(rmList))]
+        rmList  = rmList[min(maxItems, len(rmList)):]
         if len(tmpList) > 0:
             gitRepo.rm(tmpList)
         else:
@@ -518,13 +519,13 @@ class AccuRev2Git(object):
         else:
             #lastbranch = subprocess.check_output('git config accurev.lastbranch').strip()
             #subprocess.check_output('git checkout {0}'.format(lastbranch))
-            lastCommit = subprocess.check_output('git log {0} -1'.format(lastbranch)).strip()
-        
+            lastCommit = subprocess.check_output('git log -1').strip()
             reMsgTemplate = re.compile('AccuRev Transaction #([0-9]+)')
-            reMatchObj = reMsgTemplate.match(lastCommit)
+            reMatchObj = reMsgTemplate.search(lastCommit)
             if reMatchObj:
-                return int(reMatchObj.group(1))
-        
+                transactionId = int(reMatchObj.group(1))
+                return transactionId + 1 # continue from the next transaction
+                
         return None
         
     # ProcessAccuRevTransaction
@@ -534,7 +535,7 @@ class AccuRev2Git(object):
         if handler is not None:
             handler(transaction)
         else:
-            state.config.logger.error("Error: No handler for [\"{0}\"] transactions\n".format(transaction.Type))
+            self.config.logger.error("Error: No handler for [\"{0}\"] transactions\n".format(transaction.Type))
         
     # ProcessAccuRevTransactionRange
     #   Iterates over accurev transactions between the startTransaction and endTransaction processing
@@ -545,7 +546,7 @@ class AccuRev2Git(object):
         if maxTransactions is not None and maxTransactions > 0:
             timeSpec = "{0}.{1}".format(timeSpec, maxTransactions)
         
-        state.config.logger.info( "Querying history" )
+        self.config.logger.info( "Querying history" )
         arHist = accurev.hist(depot=self.config.accurev.depot, timeSpec=timeSpec, allElementsFlag=True)
         
         for transaction in arHist.transactions:
@@ -556,17 +557,17 @@ class AccuRev2Git(object):
         if os.path.isdir(gitRootDir):
             if git.isRepo(gitRepoPath):
                 # Found an existing repo, just use that.
-                state.config.logger.info( "Using existing git repository." )
+                self.config.logger.info( "Using existing git repository." )
                 return True
         
-            state.config.logger.info( "Creating new git repository" )
+            self.config.logger.info( "Creating new git repository" )
             
             # Create an empty first commit so that we can create branches as we please.
             git.init(path=gitRepoPath)
-            state.config.logger.info( "Created a new git repository." )
+            self.config.logger.info( "Created a new git repository." )
             return True
         else:
-            state.config.logger.error("{0} not found.\n".format(gitRootDir))
+            self.config.logger.error("{0} not found.\n".format(gitRootDir))
             
         return False
     
@@ -574,20 +575,33 @@ class AccuRev2Git(object):
     #   Begins a new AccuRev to Git conversion process discarding the old repository (if any).
     def Start(self, isRestart=False):
         if isRestart:
-            state.config.logger.info( "Restarting the conversion operation." )
-            state.config.logger.info( "Deleting old git repository." )
+            self.config.logger.info( "Restarting the conversion operation." )
+            self.config.logger.info( "Deleting old git repository." )
             git.delete(self.config.git.repoPath)
-        
+            
         # From here on we will operate from the git repository.
         self.cwd = os.getcwd()
         os.chdir(self.config.git.repoPath)
         
         if self.InitGitRepo(self.config.git.repoPath):
             self.gitRepo = git.open(self.config.git.repoPath)
+            if not isRestart:
+                #self.gitRepo.reset(isHard=True)
+                self.gitRepo.clean(force=True)
+            
+            continueFromTransaction = self.GetLastAccuRevTransaction()
+            if continueFromTransaction is None:
+                state.config.logger.error( "Could not determine at which transaction to continue." )
+                state.config.logger.error( "Error in parsing the git repo history. Conversion aborted!" )
+                return 1
+            elif self.config.accurev.startTransaction == continueFromTransaction:
+                state.config.logger.info( "Starting from transaction: #{0}".format(continueFromTransaction) )
+            else:
+                state.config.logger.info( "Continuing from transaction: #{0}".format(continueFromTransaction) )
+            
             if accurev.login(self.config.accurev.username, self.config.accurev.password):
                 state.config.logger.info( "Accurev login successful" )
                 
-                continueFromTransaction = self.GetLastAccuRevTransaction()
                 self.ProcessAccuRevTransactionRange(startTransaction=continueFromTransaction, endTransaction=self.config.accurev.endTransaction)
                 
                 os.chdir(self.cwd)
