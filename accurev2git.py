@@ -18,6 +18,7 @@ import xml.etree.ElementTree as ElementTree
 import datetime
 import time
 import re
+import types
 
 import accurev
 import git
@@ -40,12 +41,12 @@ def CheckoutBranch(branchName):
     
     for branch in branchList:
         if branch.name == branchName:
-            try:
-                subprocess.check_output('git checkout {0}'.format(branchName))
-                return branch
-            except:
-                return None
-    
+            if not branch.isCurrent:
+                try:
+                    subprocess.check_output('git checkout {0}'.format(branchName))
+                except:
+                    return None
+            return branch
     try:
         subprocess.check_output('git checkout -b {0}'.format(branchName))
         branchList = state.gitRepo.branch_list()
@@ -103,8 +104,17 @@ def GetTransactionElements(transaction, skipDirs=True):
     return None
 
 def SplitElementsByDefunctStatus(stream, transactionId, elemList):
-    info = accurev.stat(all=True, stream=stream, timeSpec=transactionId, defunctOnly=True)
-    
+    if len(elemList) > 25:
+        tmpFilename = '.stat_list'
+        tmpFile = open(name=tmpFilename, mode='w')
+        for elem in elemList:
+            tmpFile.write('{0}\n'.format(elem))
+        tmpFile.close()
+        info = accurev.stat(stream=stream, timeSpec=transactionId, listFile=tmpFilename)
+        os.remove(tmpFilename)
+    else:
+        info = accurev.stat(stream=stream, timeSpec=transactionId, elementList=elemList)
+
     if info is not None:
         defunctList = []
         nonDefunctList = []
@@ -112,9 +122,9 @@ def SplitElementsByDefunctStatus(stream, transactionId, elemList):
         for elem in elemList:
             # Try and find the element in the defunct element list
             isDefunct = False
-            for defunctElem in info.elements:
-                if defunctElem.location == elem:
-                    isDefunct = True
+            for infoElem in info.elements:
+                if infoElem.location == elem:
+                    isDefunct = ("(defunct)" in infoElem.statusList)
                     break
             # Add it to the correct sublist
             if isDefunct:
@@ -128,26 +138,22 @@ def SplitElementsByDefunctStatus(stream, transactionId, elemList):
         return elemList, []
 
 def PopAccurevTransaction(stream, transactionId, elemList, dstPath='.', skipDirs=True):
-    if stream is not None and transactionId is not None and elemList is not None and len(elemList) > 0:
-        state.config.logger.dbg( "pop #{0}: {1} files to {2}".format(transactionId, len(elemList), dstPath) )
-        
-        # If the element list is large, use the list file feature of AccuRev
-        if len(elemList) > 25:
-            tmpFilename = '.pop_list'
-            tmpFile = open(name='.pop_list', mode='w')
-            for elem in elemList:
-                tmpFile.write('{0}\n'.format(elem))
-            tmpFile.close()
-            rv = accurev.pop(isOverride=True, verSpec=stream, location=dstPath, timeSpec=transactionId, listFile=tmpFilename)
-            os.remove(tmpFilename)
-            return rv
-        # Otherwise just pass the element list directly
-        else:
-            return accurev.pop(isOverride=True, verSpec=stream, location=dstPath, timeSpec=transactionId, elementList=elemList)
+    state.config.logger.dbg( "pop #{0}: {1} files to {2}".format(transactionId, len(elemList), dstPath) )
+    
+    # If the element list is large, use the list file feature of AccuRev
+    if len(elemList) > 25:
+        tmpFilename = '.pop_list'
+        tmpFile = open(name=tmpFilename, mode='w')
+        for elem in elemList:
+            tmpFile.write('{0}\n'.format(elem))
+        tmpFile.close()
+        rv = accurev.pop(isOverride=True, verSpec=stream, location=dstPath, timeSpec=transactionId, listFile=tmpFilename)
+        os.remove(tmpFilename)
+        return rv
+    # Otherwise just pass the element list directly
     else:
-        state.config.logger.dbg( "Did not pop transaction #{0}, stream {1}, elements {2}".format(transactionId, stream, elemList) )
-        return False
-
+        return accurev.pop(isOverride=True, verSpec=stream, location=dstPath, timeSpec=transactionId, elementList=elemList)
+    
 # CatAccurevFile is used if you only want to get the file contents of the accurev file. The only
 # difference between cat and co/pop is that cat doesn't set the executable bits on Linux.
 def CatAccurevFile(elementId=None, depotName=None, verSpec=None, element=None, gitPath=None, isBinary=False):
@@ -161,6 +167,40 @@ def CatAccurevFile(elementId=None, depotName=None, verSpec=None, element=None, g
         return False
     return True
 
+def GitCommit(gitRepo, branch, author, date, message, addList, rmList):
+    if branch is not None:
+        CheckoutBranch(branch)
+    
+    maxItems = 25
+    
+    # Add the items in groups of maxItems so that we don't exceed the max number of command line args.
+    while True:
+        tmpList = addList[:max(maxItems, len(addList))]
+        addList = addList[max(maxItems, len(addList)):]
+        if len(tmpList) > 0:
+            gitRepo.add(tmpList, force=True)
+        else:
+            break
+    
+    # Remove the items in groups of maxItems so that we don't exceed the max number of command line args.
+    while True:
+        tmpList = rmList[:max(maxItems, len(rmList))]
+        rmList  = rmList[max(maxItems, len(rmList)):]
+        if len(tmpList) > 0:
+            gitRepo.rm(tmpList)
+        else:
+            break
+    
+    return gitRepo.commit(message=message, author=author, date=date)
+
+def GetGitUserDetails(accurevUsername):
+    if accurevUsername is not None:
+        for usermap in state.config.usermaps:
+            if usermap.accurevUsername == accurevUsername:
+                return (usermap.gitName, usermap.gitEmail)
+                
+    return None, None
+    
 
 # ################################################################################################ #
 # Script Core. AccuRev transaction to Git conversion handlers.                                     #
@@ -199,47 +239,55 @@ def OnPromote(transaction):
                 return False
         
         if stream is not None and elemList is not None:
-            state.config.logger.dbg( "Branch:", transaction.versions[0].virtualNamedVersion.stream )
+            branch = transaction.versions[0].virtualNamedVersion.stream
+            state.config.logger.dbg( "Branch:", branch )
             
-            CheckoutBranch(transaction.versions[0].virtualNamedVersion.stream)
-            
+            # Generate the lists of files to add and remove
             memberList, defunctList = SplitElementsByDefunctStatus(stream, transaction.id, elemList)
-            PopAccurevTransaction(stream, transaction.id, memberList, state.config.git.repoPath)
             
-            if len(memberList) > 0:
-                addList = []
-                for elem in memberList:
-                    addList.append(LocalElementPath(accurevDepotElementPath=elem, gitRepoPath=state.config.git.repoPath, isAbsolute=False))
-                    if len(addList) > 25:
-                        state.gitRepo.add(addList)
-                        addList = []
-                if len(addList) > 0:
-                    state.gitRepo.add(addList)
+            addList = []
+            if memberList is not None and len(memberList) > 0:
+                if PopAccurevTransaction(stream, transaction.id, memberList, state.config.git.repoPath):
+                    for elem in memberList:
+                        addList.append(LocalElementPath(accurevDepotElementPath=elem, gitRepoPath=state.config.git.repoPath, isAbsolute=False))
+                else:
+                    state.config.logger.error( "Failed to populate transaction #{0}.".format(transaction.id) )
+                    sys.exit(1)
+            else:
+                state.config.logger.dbg( "Did not pop transaction #{0}, stream {1}, elements {2}".format(transaction.id, stream, memberList) )
+                    
+            rmList = []
             if len(defunctList) > 0:
-                rmList = []
                 for elem in defunctList:
                     rmList.append(LocalElementPath(accurevDepotElementPath=elem, gitRepoPath=state.config.git.repoPath, isAbsolute=False))
-                    if len(rmList) > 25:
-                        state.gitRepo.rm(rmList)
-                        rmList = []
-                if len(rmList) > 0:
-                    state.gitRepo.rm(rmList)
             
             dbgFileMsg = "+{0}/-{1}".format(str(len(memberList)), str(len(defunctList)))
             
-            if len(memberList) > 0 or len(defunctList) > 0:
-                transTag = "[AccuRev Transaction #{0}]"
+            # If we have something to commit then:
+            if len(addList) > 0 or len(rmList) > 0:
+                # Generate the commit message
+                transTag = "[AccuRev Transaction #{0}]".format(transaction.id)
                 comment = "[no original comment]"
                 if transaction.comment is not None:
                     comment = transaction.comment
-                
                 commitMessage = "{0}\n\n{1}".format(comment, transTag)
-                    
-                status = state.gitRepo.commit(message=commitMessage)
+
+                # Generate the git Author
+                name, email = GetGitUserDetails(transaction.user)
+                if name is None:
+                    name = transaction.user
+                if email is None:
+                    email = "{0}@no-email.com".format(transaction.user)
+                gitAuthor = "{0} <{1}>".format(name, email)
+                
+                # Do the commit
+                status = GitCommit(gitRepo=state.gitRepo, branch=branch, author=gitAuthor, date=transaction.time, message=commitMessage, addList=addList, rmList=rmList)
+
                 if status:
-                    state.config.logger.dbg( "Committed", dbgFileMsg, "files" )
+                    state.config.logger.info( "Committed transaction #{0}. {1} files".format(transaction.id, dbgFileMsg) )
                 else:
-                    state.config.logger.dbg( "Failed to commit {0} files.\n{1}".format(dbgFileMsg, state.gitRepo.lastError.output) )
+                    state.config.logger.error( "Failed to commit transaction #{0}. {1} files.\n{2}".format(transaction.id, dbgFileMsg, state.gitRepo.lastError.output) )
+                    sys.exit(1)
                 return status
             else:
                 state.config.logger.dbg( "Did not commit empty transaction #{0}.".format(transaction.id) )

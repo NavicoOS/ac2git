@@ -15,6 +15,7 @@ import subprocess
 import xml.etree.ElementTree as ElementTree
 import datetime
 import re
+import types
 
 gitCmd = 'git'
 
@@ -225,9 +226,14 @@ class repo(object):
         else:
             raise Exception('Error, tried to add empty file list')
     
-    def add(self, fileList = []):
+    def add(self, fileList = [], force=False):
         if len(fileList) > 0:
-            cmd = [ gitCmd, 'add', '--' ]
+            cmd = [ gitCmd, 'add' ]
+            
+            if force:
+                cmd.append('-f')
+            
+            cmd.append('--')
             cmd.extend(fileList)
             
             output = self._docmd(cmd)
@@ -236,9 +242,17 @@ class repo(object):
         else:
             raise Exception('Error, tried to add empty file list')
     
-    def commit(self, message = ''):
+    def commit(self, message = '', author=None, date=None):
         if message is not None and len(message) > 0:
             cmd = [ gitCmd, 'commit' ]
+            
+            if author is not None:
+                cmd.append('--author="{0}"'.format(author))
+            
+            if date is not None:
+                if isinstance(date, datetime.datetime):
+                    date = date.isoformat()
+                cmd.append('--date="{0}"'.format(date))
             
             cmd.extend([ '-m', str(message) ])
             
