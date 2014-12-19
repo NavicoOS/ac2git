@@ -88,8 +88,8 @@ def GetTransactionElements(transaction, skipDirs=True):
         if transaction.versions is not None:
             elemList = []
             for version in transaction.versions:
-                # Populate it only if it is not a directory.
-                if not skipDirs or not version.dir:
+                # Populate it only if it is not a directory. (note: symlinks can be classed as directories even though they are not)
+                if not skipDirs or (not version.dir and not version.elemType != "elink" and not version.elemType != "slink"):
                     elemList.append(version.path)
             #    else:
             #        state.config.logger.dbg( "GetTransactionElements: skipping dir [{0}] {1}".format(version.dir, version.path) )
@@ -113,8 +113,10 @@ def SplitElementsByDefunctStatus(stream, transactionId, elemList):
         tmpFile.close()
         info = accurev.stat(stream=stream, timeSpec=transactionId, listFile=tmpFilename)
         os.remove(tmpFilename)
-    else:
+    elif len(elemList) > 0:
         info = accurev.stat(stream=stream, timeSpec=transactionId, elementList=elemList)
+    else:
+        return ([], [])
 
     if info is not None:
         defunctList = []
@@ -135,8 +137,9 @@ def SplitElementsByDefunctStatus(stream, transactionId, elemList):
         
         return nonDefunctList, defunctList
     else:
-        state.config.logger.dbg( "SplitElementsByDefunctStatus: info is None" )
-        return elemList, []
+        #state.config.logger.dbg( "SplitElementsByDefunctStatus: info is None" )
+        #return elemList, []
+        raise Exception("Error in SplitElementsByDefunctStatus: accurev.stat(stream={0}, timeSpec={1}, elementList={2}) returned None".format(stream, transactionId, elemList))
 
 def PopAccurevTransaction(stream, transactionId, elemList, dstPath='.', skipDirs=True):
     state.config.logger.dbg( "pop #{0}: {1} files to {2}".format(transactionId, len(elemList), dstPath) )
@@ -239,7 +242,7 @@ def OnPromote(transaction):
                 state.config.logger.dbg( "Skipped transaction #{0}. Stream {1} is not in the stream list.".format(transaction.id, stream) )
                 return False
         
-        if stream is not None and elemList is not None:
+        if stream is not None and elemList is not None and len(elemList) > 0:
             branch = transaction.versions[0].virtualNamedVersion.stream
             state.config.logger.dbg( "Branch:", branch )
             
@@ -292,8 +295,10 @@ def OnPromote(transaction):
                 return status
             else:
                 state.config.logger.dbg( "Did not commit empty transaction #{0}.".format(transaction.id) )
+        elif elemList is None or len(elemList) <= 0:
+            state.config.logger.dbg( "Transaction #{0}. No non-directory elements promoted.".format(transaction.id) )
         else:
-            state.config.logger.dbg( "Transaction #{0}. Could not interpret stream or elements.".format(transaction.id) )
+            state.config.logger.dbg( "Transaction #{0}. Could not determine stream.".format(transaction.id) )
     else:
         state.config.logger.dbg( "Transaction #{0} has no elements.".format(transaction.id) )
         
