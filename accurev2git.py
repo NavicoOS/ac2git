@@ -92,7 +92,7 @@ def GetTransactionElements(transaction, skipDirs=True):
             elemList = []
             for version in transaction.versions:
                 # Populate it only if it is not a directory. (note: symlinks can be classed as directories even though they are not)
-                if not skipDirs or not version.dir or version.elemType == "elink" or version.elemType == "slink":
+                if not skipDirs or not version.dir: # or version.elemType == "elink" or version.elemType == "slink"
                     elemList.append(version.path)
             #    else:
             #        state.config.logger.dbg( "GetTransactionElements: skipping dir [{0}] {1}".format(version.dir, version.path) )
@@ -117,6 +117,9 @@ def DiffChangeWhatPriority(changeWhat):
     elif changeWhat == "created":
         # warning: this element doesn't have a change.stream1!
         return 1
+    elif changeWhat == "eid":
+        # Special case...? Seen with symlinks...
+        return 0
     else:
         return 0
     
@@ -136,12 +139,13 @@ def SplitElementsByStatusViaDiff(stream, transactionId, elemList):
                 mostRecentChange = None
                 # Pick the most resent or the most pressing change!
                 for change in diffElem.changes:
-                    if mostRecentChange is None or mostRecentChange.stream2.version.version < change.stream2.version.version:
-                        mostRecentChange = change
-                    elif mostRecentChange.stream2.version.version == change.stream2.version.version:
-                        if DiffChangeWhatPriority(mostRecentChange.what) < DiffChangeWhatPriority(change.what):
+                    if change is not None and change.stream2 is not None and change.stream2.version is not None: # Special check change.stream2.version is for eid changes... Skip please!
+                        if mostRecentChange is None or mostRecentChange.stream2.version.version < change.stream2.version.version:
                             mostRecentChange = change
-
+                        elif mostRecentChange.stream2.version.version == change.stream2.version.version:
+                            if DiffChangeWhatPriority(mostRecentChange.what) < DiffChangeWhatPriority(change.what):
+                                mostRecentChange = change
+                    
                 stream2Name = "{0}{1}".format(depotRelativePrefix, mostRecentChange.stream2.name)
                 stream1Name = None
                 if mostRecentChange.stream1 is not None:
@@ -360,6 +364,10 @@ def OnPromote(transaction):
 
                 if status:
                     state.config.logger.info( "Committed transaction #{0}. {1} files".format(transaction.id, dbgFileMsg) )
+                elif state.gitRepo.lastError is not None:
+                    if "nothing to commit, working directory clean" in state.gitRepo.lastError.output:
+                        state.config.logger.info( "Skipped transaction #{0}. {1} files. Nothing to commit.".format(transaction.id, dbgFileMsg) )
+                        status = True
                 else:
                     state.config.logger.error( "Failed to commit transaction #{0}. {1} files.\n{2}".format(transaction.id, dbgFileMsg, state.gitRepo.lastError.output) )
                     sys.exit(1)
