@@ -124,6 +124,7 @@ def DiffChangeWhatPriority(changeWhat):
         return 0
     
 def SplitElementsByStatusViaDiff(stream, transactionId, elemList):
+    # Warning: Fails if you've added a file in the workspace and then immediately defuncted it. It notifies us that the file has been "created" when it should be "defuncted" already...
     lastTransactionId = state.GetLastAccuRevTransaction()
     
     diffResult = accurev.diff(all=True, informationOnly=True, verSpec1=stream, verSpec2=stream, transactionRange="{0}-{1}".format(lastTransactionId, transactionId))
@@ -185,25 +186,27 @@ def SplitElementsByStatusViaStat(stream, transactionId, elemList):
 
     if info is not None:
         defunctList = []
-        nonDefunctList = []
+        memberList = []
         
         for elem in elemList:
             # Try and find the element in the defunct element list
-            isDefunct = False
+            isDefunct = None
             for infoElem in info.elements:
-                if infoElem.location == elem:
+                if infoElem.location.replace('\\', '/') == elem.replace('\\', '/'):
                     isDefunct = ("(defunct)" in infoElem.statusList)
                     break
-            # Add it to the correct sublist
-            if isDefunct:
-                defunctList.append(elem)
+            
+            if isDefunct is not None:
+                # Add it to the correct sublist
+                if isDefunct:
+                    defunctList.append(elem)
+                else:
+                    memberList.append(elem)
             else:
-                nonDefunctList.append(elem)
+                raise Exception("Error, the element {0} status not found in the returned accurev status list.")
         
-        return nonDefunctList, defunctList
+        return memberList, defunctList
     else:
-        #state.config.logger.dbg( "SplitElementsByStatusViaStat: info is None" )
-        #return elemList, []
         raise Exception("Error in SplitElementsByStatusViaStat: accurev.stat(stream={0}, timeSpec={1}, elementList={2}) returned None".format(stream, transactionId, elemList))
 
 def PopAccurevTransaction(stream, transactionId, elemList, dstPath='.', skipDirs=True):
@@ -247,7 +250,8 @@ def GitCommit(gitRepo, branch, author, date, message, addList, rmList):
         tmpList = addList[:min(maxItems, len(addList))]
         addList = addList[min(maxItems, len(addList)):]
         if len(tmpList) > 0:
-            gitRepo.add(tmpList, force=True)
+            if not gitRepo.add(tmpList, force=True):
+                state.config.logger.dbg( "git add failed for one off: {0}".format(tmpList) )
         else:
             break
     
@@ -256,7 +260,8 @@ def GitCommit(gitRepo, branch, author, date, message, addList, rmList):
         tmpList = rmList[:min(maxItems, len(rmList))]
         rmList  = rmList[min(maxItems, len(rmList)):]
         if len(tmpList) > 0:
-            gitRepo.rm(tmpList)
+            if not gitRepo.rm(tmpList):
+                state.config.logger.dbg( "git rm failed for one off: {0}".format(tmpList) )
         else:
             break
     
@@ -331,7 +336,8 @@ def OnPromote(transaction):
             state.config.logger.dbg( "Branch:", stream )
             
             # Generate the lists of files to add and remove
-            memberList, defunctList = SplitElementsByStatusViaDiff(stream, transaction.id, elemList)
+            #memberList, defunctList = SplitElementsByStatusViaDiff(stream, transaction.id, elemList)
+            memberList, defunctList = SplitElementsByStatusViaStat(stream, transaction.id, elemList)
             
             addList = []
             if memberList is not None and len(memberList) > 0:
