@@ -327,8 +327,7 @@ def init(isBare=False, path=None):
         if path is not None:
             cmd.append(str(path))
         
-        strCmd = ' '.join(cmd)
-        output = subprocess.check_output(strCmd)
+        output = subprocess.check_output(cmd)
     except:
         return None
     return repo(path)

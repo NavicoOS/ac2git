@@ -611,14 +611,14 @@ class AccuRev2Git(object):
         # TODO: Fix me! We don't have a way of retrieving the last accurev transaction that we
         #               processed yet. This will most likely involve parsing the git history in some
         #               way.
-        status = subprocess.check_output('git status')
+        status = subprocess.check_output(['git', 'status'])
         if status.find('Initial commit') >= 0:
             # This is an initial commit so we need to start from the beginning.
             return self.config.accurev.startTransaction
         else:
             #lastbranch = subprocess.check_output('git config accurev.lastbranch').strip()
             #subprocess.check_output('git checkout {0}'.format(lastbranch))
-            lastCommit = subprocess.check_output('git log -1').strip()
+            lastCommit = subprocess.check_output(['git', 'log', '-1']).strip()
             reMsgTemplate = re.compile('AccuRev Transaction #([0-9]+)')
             reMatchObj = reMsgTemplate.search(lastCommit)
             if reMatchObj:
@@ -662,8 +662,12 @@ class AccuRev2Git(object):
             self.config.logger.info( "Creating new git repository" )
             
             # Create an empty first commit so that we can create branches as we please.
-            git.init(path=gitRepoPath)
-            self.config.logger.info( "Created a new git repository." )
+            if git.init(path=gitRepoPath) is not None:
+                self.config.logger.info( "Created a new git repository." )
+            else:
+                self.config.logger.error( "Failed to create a new git repository." )
+                sys.exit(1)
+                
             return True
         else:
             self.config.logger.error("{0} not found.\n".format(gitRootDir))
