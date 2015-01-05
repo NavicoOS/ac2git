@@ -267,6 +267,14 @@ def GitCommit(gitRepo, branch, author, date, message, addList, rmList):
     
     return gitRepo.commit(message=message, author=author, date=date)
 
+def GetLastCommitHash():
+    lastCommit = subprocess.check_output(['git', 'log', '-1']).strip()
+    reMsgTemplate = re.compile('commit ([0-9a-fA-F]{6,})')
+    reMatchObj = reMsgTemplate.search(lastCommit)
+    if reMatchObj:
+        return reMatchObj.group(1)
+    return None
+        
 # GetGitUserDetails returns the git information from the config mapping for the given accurev user.
 def GetGitUserDetails(accurevUsername):
     if accurevUsername is not None:
@@ -369,7 +377,7 @@ def OnPromote(transaction):
                 status = GitCommit(gitRepo=state.gitRepo, branch=stream, author=gitAuthor, date=transaction.time, message=commitMessage, addList=addList, rmList=rmList)
 
                 if status:
-                    state.config.logger.info( "Committed transaction #{0}. {1} files".format(transaction.id, dbgFileMsg) )
+                    state.config.logger.info( "Committed transaction #{0} as {1}. {2} files".format(transaction.id, GetLastCommitHash(), dbgFileMsg) )
                 elif state.gitRepo.lastError is not None:
                     if "nothing to commit, working directory clean" in state.gitRepo.lastError.output:
                         state.config.logger.info( "Skipped transaction #{0}. {1} files. Nothing to commit.".format(transaction.id, dbgFileMsg) )
@@ -390,7 +398,7 @@ def OnPromote(transaction):
     return False
 
 def OnMove(transaction):
-    state.config.logger.dbg( "Transaction #{0} (move) [ignored]".format(transaction.id) )
+    state.config.logger.dbg( "Ignored transaction #{0}: move".format(transaction.id) )
     # stream = GetTransactionDestStream(transaction)
     # addList = []
     # for move in transaction.moves:
@@ -425,10 +433,10 @@ def OnPurge(transaction):
     # If done on a stream, must be translated to a checkout of the original element from the basis.
 
 def OnDefunct(transaction):
-    state.config.logger.dbg( "OnDefunct:", transaction.id )
+    state.config.logger.dbg( "Ignored transaction #{0}: defunct", transaction.id )
 
 def OnUndefunct(transaction):
-    state.config.logger.dbg( "OnUndefunct:", transaction.id )
+    state.config.logger.dbg( "Ignored transaction #{0}: undefunct", transaction.id )
 
 def OnDefcomp(transaction):
     # The defcomp command is not visible to the user; it is used in the implementation of the 
