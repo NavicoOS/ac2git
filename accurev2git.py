@@ -736,20 +736,27 @@ class AccuRev2Git(object):
 # Script Functions                                                                                 #
 # ################################################################################################ #
 def DumpExampleConfigFile(outputFilename):
-    exampleContents = """
-<accurev2git>
+    exampleContents = """<accurev2git>
+    <!-- AccuRev details:
+            username:             The username that will be used to log into AccuRev and retrieve and populate the history
+            password:             The password for the given username. Note that you can pass this in as an argument which is safer and preferred!
+            depot:                The depot in which the stream/s we are converting are located
+            start-transaction:    The conversion will start at this transaction. If interrupted the next time it starts it will continue from where it stopped.
+            end-transaction:      Stop at this transaction. This can be the keword "now" if you want it to convert the repo up to the latest transaction.
+    -->
     <accurev 
-        username="joe_bloggs"
-        password="joanna"
-        depot="Trunk"
-        start-transaction="1"
+        username="joe_bloggs" 
+        password="joanna" 
+        depot="Trunk" 
+        start-transaction="1" 
         end-transaction="500" >
         <!-- The stream-list is optional. If not given all streams are processed -->
         <stream-list>
-            <stream>NOS</stream>
+            <stream>some_stream</stream>
         </stream-list>
     </accurev>
-    <git repo-path="/put/the/git/repo/here" />
+    <git repo-path="/put/the/git/repo/here" /> <!-- The system path where you want the git repo to be populated. Note: this folder should already exist. -->
+    <!-- The user maps are used to convert users from AccuRev into git. Please spend the time to fill them in properly. -->
     <usermaps>
         <map-user><accurev username="joe_bloggs" /><git name="Joe Bloggs" email="joe@bloggs.com" /></map-user>
     </usermaps>
@@ -824,27 +831,30 @@ def AccuRev2GitMain(argv):
     global state
     
     config = LoadConfigOrDefaults(argv[0])
+    configFilename = Config.FilenameFromScriptName(argv[0])
+    defaultExampleConfigFilename = '{0}.example'.format(configFilename)
     
     # Set-up and parse the command line arguments. Examples from https://docs.python.org/dev/library/argparse.html
     parser = argparse.ArgumentParser(description="Conversion tool for migrating AccuRev repositories into Git")
-    parser.add_argument('--accurev-username', nargs='?', dest='accurevUsername', default=config.accurev.username)
-    parser.add_argument('--accurev-password', nargs='?', dest='accurevPassword', default=config.accurev.password)
-    parser.add_argument('--accurev-depot',    nargs='?', dest='accurevDepot',    default=config.accurev.depot)
-    parser.add_argument('--git-repo-path',    nargs='?', dest='gitRepoPath',     default=config.git.repoPath)
-    parser.add_argument('--restart',    nargs='?', dest='restart', const="true")
-    parser.add_argument('--debug',    nargs='?', dest='debug', const="true")
-    parser.add_argument('--dump-example-config', nargs='?', dest='exampleConfigFilename', const='no-filename', default=None)
+    parser.add_argument('-u', '--accurev-username', nargs='?', dest='accurevUsername', default=config.accurev.username, help="The username which will be used to retrieve and populate the history from AccuRev. (overrides the username in the '{0}')".format(configFilename))
+    parser.add_argument('-p', '--accurev-password', nargs='?', dest='accurevPassword', default=config.accurev.password, help="The password for the username provided with the --accurev-username option or specified in the '{0}' file. (overrides the password in the '{0}')".format(configFilename))
+    parser.add_argument('-t', '--accurev-depot',    nargs='?', dest='accurevDepot',    default=config.accurev.depot, help="The AccuRev depot in which the stream/s that is/are being converted is/are located.")
+    parser.add_argument('-g', '--git-repo-path',    nargs='?', dest='gitRepoPath',     default=config.git.repoPath, help="The system path to an existing folder where the git repository will be created.")
+    parser.add_argument('-r', '--restart',    dest='restart', action='store_const', const=True, help="Discard any existing conversion and start over.")
+    parser.add_argument('-v', '--verbose',    dest='debug',   action='store_const', const=True, help="Print the script debug information. Makes the script more verbose.")
+    parser.add_argument('-e', '--dump-example-config', nargs='?', dest='exampleConfigFilename', const='no-filename', default=None, help="Generates an example configuration file and exits. If the filename isn't specified a default filename '{0}' is used. The script automatically loads the configuration file named '{1}' when it is run. Commandline arguments, if given, override all options in the configuration file.".format(defaultExampleConfigFilename, configFilename))
     
     args = parser.parse_args()
     
     # Dump example config if specified
     if args.exampleConfigFilename is not None:
         if args.exampleConfigFilename == 'no-filename':
-            exampleConfigFilename = Config.FilenameFromScriptName(scriptName) + '.example'
+            exampleConfigFilename = defaultExampleConfigFilename
         else:
             exampleConfigFilename = args.exampleConfigFilename
         
         DumpExampleConfigFile(exampleConfigFilename)
+        sys.exit(0)
     
     # Set the overrides for in the configuration from the arguments
     config.accurev.username = args.accurevUsername
@@ -859,9 +869,9 @@ def AccuRev2GitMain(argv):
     
     state = AccuRev2Git(config)
     
-    state.config.logger.isDbgEnabled = ( args.debug == "true" )
+    state.config.logger.isDbgEnabled = ( args.debug == True )
         
-    if args.restart == "true":
+    if args.restart == True:
         return state.Restart()
     else:
         return state.Start()
