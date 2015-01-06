@@ -28,10 +28,10 @@ class GitStatus(object):
     untrackedFileRe = re.compile("^\\s+(\\S+)\\s*$")
         
     def __init__(self, branch=None, staged=[], changed=[], untracked=[]):
-        self.branch    = branch
-        self.staged    = staged
-        self.changed   = changed
-        self.untracked = untracked
+        self.branch    = branch    # Name of the branch.
+        self.staged    = staged    # A list of (filename, file_status) tuples
+        self.changed   = changed   # A list of (filename, file_status) tuples
+        self.untracked = untracked # A list of (filename,) tuples
 
     def __repr__(self):
         str  = "On branch {0}\n".format(self.branch)
@@ -141,6 +141,8 @@ class GitStatus(object):
             if len(lines) > 0:
                 lastHeading = lines.pop(0)
         
+        # stagedFiles and changedFiles are lists of tuples containing two items: (filename, file_status)
+        # untracked is also a list of tuples containing two items but the second items is always empty: (filename,)
         return cls(branch=branchName, staged=stagedFiles, changed=changedFiles, untracked=untrackedFiles)
 
 # GitBranchListItem is an object serialization of a single branch output when the git branch -vv
