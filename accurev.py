@@ -1054,7 +1054,10 @@ class raw(object):
 
     # AccuRev history command
     @staticmethod
-    def hist(depot=None, stream=None, timeSpec=None, listFile=None, isListFileXml=False, elementList=None, allElementsFlag=False, elementId=None, transactionKind=None, commentString=None, username=None, isXmlOutput=False, outputFilename=None):
+    def hist( depot=None, stream=None, timeSpec=None, listFile=None, isListFileXml=False, elementList=None
+            , allElementsFlag=False, elementId=None, transactionKind=None, commentString=None, username=None
+            , expandedMode=False, showIssues=False, verboseMode=False, listMode=False, showStatus=False, transactionMode=False
+            , isXmlOutput=False, outputFilename=None):
         cmd = [ raw._accurevCmd, "hist" ]
 
         # Interpret options
@@ -1087,8 +1090,25 @@ class raw(object):
             cmd.extend([ "-c", commentString ])
         if username is not None:
             cmd.extend([ "-u", username ])
+        
+        formatFlags = ""
+        if expandedMode:
+            formatFlags += "e"
+        if showIssues:
+            formatFlags += "i"
+        if verboseMode:
+            formatFlags += "v"
+        if listMode:
+            formatFlags += "l"
+        if showStatus:
+            formatFlags += "s"
+        if transactionMode:
+            formatFlags += "t"
         if isXmlOutput:
-            cmd.append("-fx")
+            formatFlags += "x"
+        
+        if len(formatFlags) > 0:
+            cmd.append("-f{0}".format(formatFlags))
         
         return raw._runCommand(cmd, outputFilename)
 
@@ -1470,8 +1490,14 @@ def stat(all=False, inBackingStream=False, dispBackingChain=False, defaultGroupO
         return None
 
 # AccuRev history command
-def hist(depot=None, stream=None, timeSpec=None, listFile=None, isListFileXml=False, elementList=None, allElementsFlag=False, elementId=None, transactionKind=None, commentString=None, username=None, outputFilename=None):
-    xmlOutput = raw.hist(depot=depot, stream=stream, timeSpec=timeSpec, listFile=listFile, isListFileXml=isListFileXml, elementList=elementList, allElementsFlag=allElementsFlag, elementId=elementId, transactionKind=transactionKind, commentString=commentString, username=username, isXmlOutput=True, outputFilename=outputFilename)
+def hist( depot=None, stream=None, timeSpec=None, listFile=None, isListFileXml=False, elementList=None
+        , allElementsFlag=False, elementId=None, transactionKind=None, commentString=None, username=None
+        , expandedMode=False, showIssues=False, verboseMode=False, listMode=False, showStatus=False, transactionMode=False
+        , outputFilename=None):
+    xmlOutput = raw.hist(depot=depot, stream=stream, timeSpec=timeSpec, listFile=listFile, isListFileXml=isListFileXml, elementList=elementList
+        , allElementsFlag=allElementsFlag, elementId=elementId, transactionKind=transactionKind, commentString=commentString, username=username
+        , expandedMode=expandedMode, showIssues=showIssues, verboseMode=verboseMode, listMode=listMode, showStatus=showStatus, transactionMode=transactionMode
+        , isXmlOutput=True, outputFilename=outputFilename)
     return AccuRevHistory.fromxmlstring(xmlOutput)
 
 # AccuRev diff command

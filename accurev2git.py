@@ -41,7 +41,7 @@ maxCmdItems = 25
 # maxTransactions controls how many items at a time will be queried in the accurev history.
 # This limit is necessary so that we don't load up too many accurev transactions into memory using
 # the accurev hist command.
-maxTransactions = 5000
+maxTransactions = 500
 
 # ################################################################################################ #
 # Script Core. Git helper functions                                                                #
