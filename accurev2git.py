@@ -183,18 +183,42 @@ def SplitElementsByStatusViaDiff(stream, transactionId, elemList):
             return memberList, defunctList
         raise Exception("SplitElementsByStatusViaDiff: could not diff stream {0} transaction range {1}-{2}".format(stream, lastTransactionId, transactionId))
     return [], []
+
+def GetParentPaths(elemPath):
+    parents = []
+    if elemPath is not None:
+        while True:
+            elemPath = os.path.dirname(elemPath)
+            if elemPath.replace('\\', '/') == '/.':
+                break
+            parents.append(elemPath)
     
+    return parents
+
 def SplitElementsByStatusViaStat(stream, transactionId, elemList):
-    if len(elemList) > maxCmdItems:
+    # Make sure to check for "stranded" elements. Meaning, check if any of the parent directories are defunct.
+    # All subdirectories and files in defunct directories are to be treated as defunct!
+    
+    # Get list of all the parent directories of the elements in the elemList.
+    dirList = []
+    for elem in elemList:
+        elemParents = GetParentPaths(elem)
+        for parent in elemParents:
+            if parent not in dirList:
+                dirList.append(parent)
+    
+    fullList = dirList + elemList # concatenate the two lists
+    
+    if len(fullList) > maxCmdItems:
         tmpFilename = '.stat_list'
         tmpFile = open(name=tmpFilename, mode='w')
-        for elem in elemList:
+        for elem in fullList:
             tmpFile.write('{0}\n'.format(elem))
         tmpFile.close()
         info = accurev.stat(stream=stream, timeSpec=transactionId, listFile=tmpFilename)
         os.remove(tmpFilename)
-    elif len(elemList) > 0:
-        info = accurev.stat(stream=stream, timeSpec=transactionId, elementList=elemList)
+    elif len(fullList) > 0:
+        info = accurev.stat(stream=stream, timeSpec=transactionId, elementList=fullList)
     else:
         return ([], [])
 
@@ -202,22 +226,33 @@ def SplitElementsByStatusViaStat(stream, transactionId, elemList):
         defunctList = []
         memberList = []
         
+        infoDict = {}
+        for infoElem in info.elements:
+            infoLoc = infoElem.location.replace('\\', '/')
+            infoDict[infoLoc] = ("(defunct)" in infoElem.statusList)
+            
         for elem in elemList:
             # Try and find the element in the defunct element list
-            isDefunct = None
-            for infoElem in info.elements:
-                if infoElem.location.replace('\\', '/') == elem.replace('\\', '/'):
-                    isDefunct = ("(defunct)" in infoElem.statusList)
-                    break
-            
-            if isDefunct is not None:
-                # Add it to the correct sublist
-                if isDefunct:
-                    defunctList.append(elem)
-                else:
-                    memberList.append(elem)
-            else:
+            elemStr = elem.replace('\\', '/')
+            try:
+                # Check if the elemet is defunct
+                isDefunct = infoDict[elemStr]
+                if isDefunct is not None and not isDefunct:
+                    # Check if any of the parent directories are defunct.
+                    parents = GetParentPaths(elem)
+                    for parent in parents:
+                        if infoDict[parent.replace('\\', '/')]:
+                            isDefunct = True
+                            break
+            except:
+                # One of the paths tested is not in the map...
                 raise Exception("Error, the element {0} status not found in the returned accurev status list.")
+                
+            # Add it to the correct sublist
+            if isDefunct:
+                defunctList.append(elem)
+            else:
+                memberList.append(elem)
         
         return memberList, defunctList
     else:
