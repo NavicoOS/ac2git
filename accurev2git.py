@@ -125,7 +125,7 @@ def DiffChangeWhatPriority(changeWhat):
     
 def SplitElementsByStatusViaDiff(stream, transactionId, elemList):
     # Warning: Fails if you've added a file in the workspace and then immediately defuncted it. It notifies us that the file has been "created" when it should be "defuncted" already...
-    lastTransactionId = state.GetLastAccuRevTransaction()
+    lastTransactionId = state.GetLastConvertedTransaction()
     
     diffResult = accurev.diff(all=True, informationOnly=True, verSpec1=stream, verSpec2=stream, transactionRange="{0}-{1}".format(lastTransactionId, transactionId))
     
@@ -629,14 +629,18 @@ class AccuRev2Git(object):
         
         return None
     
-    def GetLastAccuRevTransaction(self):
+    def GetLastConvertedTransaction(self):
         # TODO: Fix me! We don't have a way of retrieving the last accurev transaction that we
         #               processed yet. This will most likely involve parsing the git history in some
         #               way.
         status = subprocess.check_output(['git', 'status'])
         if status.find('Initial commit') >= 0:
             # This is an initial commit so we need to start from the beginning.
-            return self.config.accurev.startTransaction
+            try:
+                return int(self.config.accurev.startTransaction)
+            except:
+                self.config.logger.error("Error: Couldn't convert the start transaction to integer [{0}]\n".format(self.config.accurev.startTransaction))
+                sys.exit(1)
         else:
             #lastbranch = subprocess.check_output('git config accurev.lastbranch').strip()
             #subprocess.check_output('git checkout {0}'.format(lastbranch))
@@ -648,6 +652,12 @@ class AccuRev2Git(object):
                 return transactionId + 1 # continue from the next transaction
                 
         return None
+        
+    def GetEndTransactionNumber(self, endTransaction="now"):
+        arHist = accurev.hist(depot=self.config.accurev.depot, timeSpec="{0}.1".format(endTransaction))
+        if arHist is not None and len(arHist.transactions) > 0:
+            return arHist.transactions[0].id
+        return -1
         
     # ProcessAccuRevTransaction
     #   Processes an individual AccuRev transaction by calling its corresponding handler.
@@ -662,17 +672,23 @@ class AccuRev2Git(object):
     #   Iterates over accurev transactions between the startTransaction and endTransaction processing
     #  each of them in turn. If maxTransactions is given as a positive integer it will process at 
     #  most maxTransactions.
-    def ProcessAccuRevTransactionRange(self, startTransaction="1", endTransaction="now", maxTransactions=None):
+    def ProcessAccuRevTransactionRange(self, startTransaction=1, endTransaction="now", maxTransactions=None):
         timeSpec = "{0}-{1}".format(startTransaction, endTransaction)
         if maxTransactions is not None and maxTransactions > 0:
             timeSpec = "{0}.{1}".format(timeSpec, maxTransactions)
         
-        self.config.logger.info( "Querying history" )
+        self.config.logger.info( "Querying history. (time-spec: {0})".format(timeSpec) )
         arHist = accurev.hist(depot=self.config.accurev.depot, timeSpec=timeSpec, allElementsFlag=True)
         
-        for transaction in arHist.transactions:
-            self.ProcessAccuRevTransaction(transaction)
+        if arHist is not None:
+            if len(arHist.transactions) > 0:
+                for transaction in arHist.transactions:
+                    self.ProcessAccuRevTransaction(transaction)
         
+            return len(arHist.transactions)
+        
+        return -1
+            
     def InitGitRepo(self, gitRepoPath):
         gitRootDir, gitRepoDir = os.path.split(gitRepoPath)
         if os.path.isdir(gitRootDir):
@@ -714,7 +730,8 @@ class AccuRev2Git(object):
                 #self.gitRepo.reset(isHard=True)
                 self.gitRepo.clean(force=True)
             
-            continueFromTransaction = self.GetLastAccuRevTransaction()
+            continueFromTransaction = self.GetLastConvertedTransaction()
+            endTransaction = self.GetEndTransactionNumber(self.config.accurev.endTransaction)
             if continueFromTransaction is None:
                 state.config.logger.error( "Could not determine at which transaction to continue." )
                 state.config.logger.error( "Error in parsing the git repo history. Conversion aborted!" )
@@ -727,8 +744,21 @@ class AccuRev2Git(object):
             if accurev.login(self.config.accurev.username, self.config.accurev.password):
                 state.config.logger.info( "Accurev login successful" )
                 
-                self.ProcessAccuRevTransactionRange(startTransaction=continueFromTransaction, endTransaction=self.config.accurev.endTransaction)
+                # Process the transactions 5000 at a time. This is because the accurev data is stored
+                # in memory and can overwhelm this script.
+                maxTransactions = 5000
                 
+                while endTransaction - continueFromTransaction > maxTransactions:
+                    stopAtTransaction = continueFromTransaction + maxTransactions - 1 # The accurev hist command's range is inclusive [start, end] while here we are treating it as exclusive [start, end). Adjusted with -1.
+                    # Process the first 5000 transactions
+                    numProcessed = self.ProcessAccuRevTransactionRange(startTransaction=continueFromTransaction, endTransaction=stopAtTransaction)
+                    continueFromTransaction += maxTransactions
+                
+                # Process the remaining transactions.
+                if endTransaction - continueFromTransaction > 0:
+                    numProcessed = self.ProcessAccuRevTransactionRange(startTransaction=continueFromTransaction, endTransaction=endTransaction)
+                
+                # Restore the working directory.
                 os.chdir(self.cwd)
                 
                 if accurev.logout():
