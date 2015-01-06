@@ -26,8 +26,22 @@ import git
 # ################################################################################################ #
 # Script Globals.                                                                                  #
 # ################################################################################################ #
+# state is the global variable holding the active AccuRev2Git object. This is a hack that introduces
+# a circular dependency between seemingly independent functions at the top of the script (mainly the
+# OnPromote handler). This should be removed and the value passed in but I'm too lazy to do it now...
 state = None
+
+# maxCmdItems controls how many command line arguments are passed to git's commands at a time.
+# The Windows and Linux command lines have a maximum character limit which can cause problems for
+# the subprocess.check_output() calls that we make for git when the remainder of the command given
+# is truncated. This is an arbitrary limit saying that we will only call git add or git rm on
+# at maxium [maxCmdItems] files at a time.
 maxCmdItems = 25
+
+# maxTransactions controls how many items at a time will be queried in the accurev history.
+# This limit is necessary so that we don't load up too many accurev transactions into memory using
+# the accurev hist command.
+maxTransactions = 5000
 
 # ################################################################################################ #
 # Script Core. Git helper functions                                                                #
@@ -433,10 +447,10 @@ def OnPurge(transaction):
     # If done on a stream, must be translated to a checkout of the original element from the basis.
 
 def OnDefunct(transaction):
-    state.config.logger.dbg( "Ignored transaction #{0}: defunct", transaction.id )
+    state.config.logger.dbg( "Ignored transaction #{0}: defunct".format(transaction.id) )
 
 def OnUndefunct(transaction):
-    state.config.logger.dbg( "Ignored transaction #{0}: undefunct", transaction.id )
+    state.config.logger.dbg( "Ignored transaction #{0}: undefunct".format(transaction.id) )
 
 def OnDefcomp(transaction):
     # The defcomp command is not visible to the user; it is used in the implementation of the 
@@ -715,6 +729,8 @@ class AccuRev2Git(object):
     # Start
     #   Begins a new AccuRev to Git conversion process discarding the old repository (if any).
     def Start(self, isRestart=False):
+        global maxTransactions
+        
         if isRestart:
             self.config.logger.info( "Restarting the conversion operation." )
             self.config.logger.info( "Deleting old git repository." )
@@ -730,24 +746,22 @@ class AccuRev2Git(object):
                 #self.gitRepo.reset(isHard=True)
                 self.gitRepo.clean(force=True)
             
-            continueFromTransaction = self.GetLastConvertedTransaction()
-            endTransaction = self.GetEndTransactionNumber(self.config.accurev.endTransaction)
-            if continueFromTransaction is None:
-                state.config.logger.error( "Could not determine at which transaction to continue." )
-                state.config.logger.error( "Error in parsing the git repo history. Conversion aborted!" )
-                return 1
-            elif self.config.accurev.startTransaction == continueFromTransaction:
-                state.config.logger.info( "Starting from transaction: #{0}".format(continueFromTransaction) )
-            else:
-                state.config.logger.info( "Continuing from transaction: #{0}".format(continueFromTransaction) )
-            
             if accurev.login(self.config.accurev.username, self.config.accurev.password):
                 state.config.logger.info( "Accurev login successful" )
                 
-                # Process the transactions 5000 at a time. This is because the accurev data is stored
-                # in memory and can overwhelm this script.
-                maxTransactions = 5000
+                continueFromTransaction = self.GetLastConvertedTransaction()
+                endTransaction = self.GetEndTransactionNumber(self.config.accurev.endTransaction)
+                if continueFromTransaction is None:
+                    state.config.logger.error( "Could not determine at which transaction to continue." )
+                    state.config.logger.error( "Error in parsing the git repo history. Conversion aborted!" )
+                    return 1
+                elif self.config.accurev.startTransaction == continueFromTransaction:
+                    state.config.logger.info( "Starting from transaction: #{0}".format(continueFromTransaction) )
+                else:
+                    state.config.logger.info( "Continuing from transaction: #{0}".format(continueFromTransaction) )
                 
+                # Process the transactions maxTransactions at a time. This is because the accurev data is stored
+                # in memory and can overwhelm this script.
                 while endTransaction - continueFromTransaction > maxTransactions:
                     stopAtTransaction = continueFromTransaction + maxTransactions - 1 # The accurev hist command's range is inclusive [start, end] while here we are treating it as exclusive [start, end). Adjusted with -1.
                     # Process the first 5000 transactions
