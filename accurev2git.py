@@ -768,7 +768,18 @@ class AccuRev2Git(object):
             timeSpec = "{0}.{1}".format(timeSpec, maxTransactions)
         
         self.config.logger.info( "Querying history. (time-spec: {0})".format(timeSpec) )
-        arHist = accurev.hist(depot=self.config.accurev.depot, timeSpec=timeSpec, allElementsFlag=True)
+        
+        arHist = None
+        errorCount = 0
+        maxRetries = 5
+        while errorCount < maxRetries:
+            try:
+                arHist = accurev.hist(depot=self.config.accurev.depot, timeSpec=timeSpec, allElementsFlag=True)
+                break
+            except:
+                self.config.logger.info( "Failed to query history! Retry count {0}/{1}. (time-spec: {2})".format(errorCount, maxRetries, timeSpec) )
+                time.sleep(5)
+                errorCount += 1
         
         if arHist is not None:
             if len(arHist.transactions) > 0:
@@ -840,7 +851,7 @@ class AccuRev2Git(object):
                 # in memory and can overwhelm this script.
                 while endTransaction - continueFromTransaction > maxTransactions:
                     stopAtTransaction = continueFromTransaction + maxTransactions - 1 # The accurev hist command's range is inclusive [start, end] while here we are treating it as exclusive [start, end). Adjusted with -1.
-                    # Process the first 5000 transactions
+                    # Process the first maxTransactions transactions
                     numProcessed = self.ProcessAccuRevTransactionRange(startTransaction=continueFromTransaction, endTransaction=stopAtTransaction)
                     continueFromTransaction += maxTransactions
                 
