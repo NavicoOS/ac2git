@@ -32,12 +32,12 @@ import git
 # OnPromote handler). This should be removed and the value passed in but I'm too lazy to do it now...
 state = None
 
-# maxCmdItems controls how many command line arguments are passed to git's commands at a time.
+# maxCommandLength controls how many command line arguments are passed to git's commands at a time.
 # The Windows and Linux command lines have a maximum character limit which can cause problems for
 # the subprocess.check_output() calls that we make for git when the remainder of the command given
-# is truncated. This is an arbitrary limit saying that we will only call git add or git rm on
-# at maxium [maxCmdItems] files at a time.
-maxCmdItems = 25
+# is truncated. If command line arguments exceed this length we will split the command into two
+# separate calls.
+maxCommandLength = 500
 
 # maxTransactions controls how many items at a time will be queried in the accurev history.
 # This limit is necessary so that we don't load up too many accurev transactions into memory using
@@ -224,7 +224,7 @@ def SplitElementsByStatusViaStat(transaction):
     fullList = dirList + elemList # concatenate the two lists
     
     stream = GetTransactionDestStream(transaction)
-    if len(fullList) > maxCmdItems:
+    if len(fullList) > 0:
         tmpFilename = '.stat_list'
         tmpFile = open(name=tmpFilename, mode='w')
         for elem in fullList:
@@ -232,8 +232,6 @@ def SplitElementsByStatusViaStat(transaction):
         tmpFile.close()
         info = accurev.stat(stream=stream, timeSpec=transaction.id, listFile=tmpFilename)
         os.remove(tmpFilename)
-    elif len(fullList) > 0:
-        info = accurev.stat(stream=stream, timeSpec=transaction.id, elementList=fullList)
     else:
         return ([], [])
 
@@ -285,19 +283,14 @@ def PopAccurevTransaction(transaction, dstPath='.'):
     stream = GetTransactionDestStream(transaction)
     
     # If the element list is large, use the list file feature of AccuRev
-    if len(transaction.versions) > maxCmdItems:
-        tmpFilename = '.pop_list'
-        tmpFile = open(name=tmpFilename, mode='w')
-        for version in transaction.versions:
-            tmpFile.write('{0}\n'.format(version.path))
-        tmpFile.close()
-        rv = accurev.pop(isOverride=True, verSpec=stream, location=dstPath, timeSpec=transaction.id, listFile=tmpFilename)
-        os.remove(tmpFilename)
-        return rv
-    # Otherwise just pass the element list directly
-    else:
-        elemList = [v.path for v in transaction.versions]
-        return accurev.pop(isOverride=True, verSpec=stream, location=dstPath, timeSpec=transaction.id, elementList=elemList)
+    tmpFilename = '.pop_list'
+    tmpFile = open(name=tmpFilename, mode='w')
+    for version in transaction.versions:
+        tmpFile.write('{0}\n'.format(version.path))
+    tmpFile.close()
+    rv = accurev.pop(isOverride=True, verSpec=stream, location=dstPath, timeSpec=transaction.id, listFile=tmpFilename)
+    os.remove(tmpFilename)
+    return rv
     
 # CatAccurevFile is used if you only want to get the file contents of the accurev file. The only
 # difference between cat and co/pop is that cat doesn't set the executable bits on Linux.
@@ -313,15 +306,20 @@ def CatAccurevFile(elementId=None, depotName=None, verSpec=None, element=None, g
     return True
 
 def GitCommit(gitRepo, branch, author, date, message, addList, rmList):
+    global maxCommandLength
+    
     if branch is not None:
         CheckoutBranch(gitRepo, branch)
     
-    maxItems = maxCmdItems
-    
     # Add the items in groups of maxItems so that we don't exceed the max number of command line args.
     while True:
-        tmpList = addList[:min(maxItems, len(addList))]
-        addList = addList[min(maxItems, len(addList)):]
+        tmpLen = 0
+        tmpList = []
+        while tmpLen < maxCommandLength and len(addList) > 0:
+            tmp = addList.pop(0)
+            tmpLen += len(tmp)
+            tmpList.append(tmp)
+        
         if len(tmpList) > 0:
             if not gitRepo.add(tmpList, force=True):
                 state.config.logger.dbg( "git add failed for one off: {0}".format(tmpList) )
@@ -330,15 +328,32 @@ def GitCommit(gitRepo, branch, author, date, message, addList, rmList):
     
     # Remove the items in groups of maxItems so that we don't exceed the max number of command line args.
     while True:
-        tmpList = rmList[:min(maxItems, len(rmList))]
-        rmList  = rmList[min(maxItems, len(rmList)):]
+        tmpLen = 0
+        tmpList = []
+        while tmpLen < maxCommandLength and len(rmList) > 0:
+            tmp = rmList.pop(0)
+            tmpLen += len(tmp)
+            tmpList.append(tmp)
+        
         if len(tmpList) > 0:
             if not gitRepo.rm(tmpList):
                 state.config.logger.dbg( "git rm failed for one off: {0}".format(tmpList) )
         else:
             break
     
-    return gitRepo.commit(message=message, author=author, date=date)
+    if len(message) > maxCommandLength:
+        tmpFilename = '.commit_message'
+        tmpFile = open(name=tmpFilename, mode='w')
+        tmpFile.write('{0}'.format(message))
+        tmpFile.close()
+        
+        success = gitRepo.commit(messageFile=tmpFilename, author=author, date=date)
+        
+        os.remove(tmpFilename)
+    else:
+        success = gitRepo.commit(message=message, author=author, date=date)
+    
+    return success
 
 def GetLastCommitHash():
     lastCommit = subprocess.check_output(['git', 'log', '-1']).strip()

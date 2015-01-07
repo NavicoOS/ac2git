@@ -256,25 +256,27 @@ class repo(object):
         
         return (output is not None)
     
-    def commit(self, message = '', author=None, date=None):
+    def commit(self, message=None, messageFile=None, author=None, date=None):
+        cmd = [ gitCmd, u'commit' ]
+        
+        if author is not None:
+            cmd.append(u'--author="{0}"'.format(author))
+        
+        if date is not None:
+            if isinstance(date, datetime.datetime):
+                date = date.isoformat()
+            cmd.append(u'--date="{0}"'.format(date))
+        
         if message is not None and len(message) > 0:
-            cmd = [ gitCmd, u'commit' ]
-            
-            if author is not None:
-                cmd.append(u'--author="{0}"'.format(author))
-            
-            if date is not None:
-                if isinstance(date, datetime.datetime):
-                    date = date.isoformat()
-                cmd.append(u'--date="{0}"'.format(date))
-            
             cmd.extend([ u'-m', unicode(message) ])
-            
-            output = self._docmd(cmd)
-            
-            return (output is not None)
+        elif messageFile is not None:
+            cmd.extend([ u'-F', unicode(messageFile) ])
         else:
             raise Exception(u'Error, tried to commit with empty message')
+            
+        output = self._docmd(cmd)
+            
+        return (output is not None)
     
     def branch_list(self):
         cmd = [ gitCmd, u'branch', u'-vv' ]
