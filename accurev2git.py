@@ -19,6 +19,7 @@ import datetime
 import time
 import re
 import types
+import copy
 
 import accurev
 import git
@@ -195,85 +196,103 @@ def GetParentPaths(elemPath):
     
     return parents
 
-def SplitElementsByStatusViaStat(stream, transactionId, elemList):
-    # Make sure to check for "stranded" elements. Meaning, check if any of the parent directories are defunct.
-    # All subdirectories and files in defunct directories are to be treated as defunct!
+def SplitElementsByStatusViaStat(transaction):
+    # THe statuses that we care about are member, defunct and stranded.
+    defunct  = copy.deepcopy(transaction)
+    stranded = copy.deepcopy(transaction)
+    member   = copy.deepcopy(transaction)
+    
+    # Make sure to check for "stranded" elements as well!
+    # Check if any of the parent directories are defunct. All subdirectories and files in defunct
+    # directories that are not defunct themselves are stranded!
     
     # Get list of all the parent directories of the elements in the elemList.
     dirList = []
-    for elem in elemList:
-        elemParents = GetParentPaths(elem)
+    elemList = []
+    for version in transaction.versions:
+        elemList.append(version.path)
+        elemParents = GetParentPaths(version.path)
         for parent in elemParents:
             if parent not in dirList:
                 dirList.append(parent)
     
     fullList = dirList + elemList # concatenate the two lists
     
+    stream = GetTransactionDestStream(transaction)
     if len(fullList) > maxCmdItems:
         tmpFilename = '.stat_list'
         tmpFile = open(name=tmpFilename, mode='w')
         for elem in fullList:
             tmpFile.write('{0}\n'.format(elem))
         tmpFile.close()
-        info = accurev.stat(stream=stream, timeSpec=transactionId, listFile=tmpFilename)
+        info = accurev.stat(stream=stream, timeSpec=transaction.id, listFile=tmpFilename)
         os.remove(tmpFilename)
     elif len(fullList) > 0:
-        info = accurev.stat(stream=stream, timeSpec=transactionId, elementList=fullList)
+        info = accurev.stat(stream=stream, timeSpec=transaction.id, elementList=fullList)
     else:
         return ([], [])
 
     if info is not None:
-        defunctList = []
-        memberList = []
+        defunct.versions  = []
+        stranded.versions = []
+        member.versions   = []
         
         infoDict = {}
         for infoElem in info.elements:
             infoLoc = infoElem.location.replace('\\', '/')
             infoDict[infoLoc] = ("(defunct)" in infoElem.statusList)
             
-        for elem in elemList:
+        for version in transaction.versions:
             # Try and find the element in the defunct element list
-            elemStr = elem.replace('\\', '/')
+            elemStr = version.path.replace('\\', '/')
             try:
                 # Check if the elemet is defunct
                 isDefunct = infoDict[elemStr]
-                if isDefunct is not None and not isDefunct:
+                isStranded = False
+                if not isDefunct:
                     # Check if any of the parent directories are defunct.
-                    parents = GetParentPaths(elem)
+                    parents = GetParentPaths(version.path)
                     for parent in parents:
-                        if infoDict[parent.replace('\\', '/')]:
-                            isDefunct = True
-                            break
-            except:
+                        try:
+                            if infoDict[parent.replace('\\', '/')]:
+                                isStranded = True
+                                break
+                        except KeyError:
+                            raise Exception("Error, the element {0} status not found in the returned accurev status list {1}.".format(parent.replace('\\', '/'), infoDict.keys()))
+            except KeyError:
                 # One of the paths tested is not in the map...
-                raise Exception("Error, the element {0} status not found in the returned accurev status list.")
+                raise Exception("Error, the element {0} status not found in the returned accurev status list {1}.".format(elemStr, infoDict.keys()))
                 
             # Add it to the correct sublist
             if isDefunct:
-                defunctList.append(elem)
+                defunct.versions.append(version)
+            elif isStranded:
+                stranded.versions.append(version)
             else:
-                memberList.append(elem)
+                member.versions.append(version)
         
-        return memberList, defunctList
+        return member, defunct, stranded
     else:
         raise Exception("Error in SplitElementsByStatusViaStat: accurev.stat(stream={0}, timeSpec={1}, elementList={2}) returned None".format(stream, transactionId, elemList))
 
-def PopAccurevTransaction(stream, transactionId, elemList, dstPath='.', skipDirs=True):
-    state.config.logger.dbg( "pop #{0}: {1} files to {2}".format(transactionId, len(elemList), dstPath) )
+def PopAccurevTransaction(transaction, dstPath='.'):
+    state.config.logger.dbg( "pop #{0}: {1} files to {2}".format(transaction.id, len(transaction.versions), dstPath) )
+    stream = GetTransactionDestStream(transaction)
     
     # If the element list is large, use the list file feature of AccuRev
-    if len(elemList) > maxCmdItems:
+    if len(transaction.versions) > maxCmdItems:
         tmpFilename = '.pop_list'
         tmpFile = open(name=tmpFilename, mode='w')
-        for elem in elemList:
-            tmpFile.write('{0}\n'.format(elem))
+        for version in transaction.versions:
+            tmpFile.write('{0}\n'.format(version.path))
         tmpFile.close()
-        rv = accurev.pop(isOverride=True, verSpec=stream, location=dstPath, timeSpec=transactionId, listFile=tmpFilename)
+        rv = accurev.pop(isOverride=True, verSpec=stream, location=dstPath, timeSpec=transaction.id, listFile=tmpFilename)
         os.remove(tmpFilename)
         return rv
     # Otherwise just pass the element list directly
     else:
-        return accurev.pop(isOverride=True, verSpec=stream, location=dstPath, timeSpec=transactionId, elementList=elemList)
+        elemList = [v.path for v in transaction.versions]
+        return accurev.pop(isOverride=True, verSpec=stream, location=dstPath, timeSpec=transaction.id, elementList=elemList)
     
 # CatAccurevFile is used if you only want to get the file contents of the accurev file. The only
 # difference between cat and co/pop is that cat doesn't set the executable bits on Linux.
@@ -352,6 +371,14 @@ def AccurevComment2GitMessage(accurevTransaction):
         comment = accurevTransaction.comment
     return "{0}\n\n{1}".format(comment, transTag)
 
+def RecursivelyRemoveDir(path):
+    for root, dirs, files in os.walk(path, topdown=False):
+        for name in files:
+            os.remove(os.path.join(root, name))
+        for name in dirs:
+            os.rmdir(os.path.join(root, name))
+    return True
+
 # ################################################################################################ #
 # Script Core. AccuRev transaction to Git conversion handlers.                                     #
 # ################################################################################################ #
@@ -394,25 +421,30 @@ def OnPromote(transaction):
             
             # Generate the lists of files to add and remove
             #memberList, defunctList = SplitElementsByStatusViaDiff(stream, transaction.id, elemList)
-            memberList, defunctList = SplitElementsByStatusViaStat(stream, transaction.id, elemList)
+            member, defunct, stranded = SplitElementsByStatusViaStat(transaction)
             
             addList = []
-            if memberList is not None and len(memberList) > 0:
-                if PopAccurevTransaction(stream, transaction.id, memberList, state.config.git.repoPath):
-                    for elem in memberList:
-                        addList.append(LocalElementPath(accurevDepotElementPath=elem, gitRepoPath=state.config.git.repoPath, isAbsolute=False))
+            if len(member.versions) > 0:
+                if PopAccurevTransaction(member, state.config.git.repoPath):
+                    for version in member.versions:
+                        if not version.dir:
+                            addList.append(LocalElementPath(accurevDepotElementPath=version.path, gitRepoPath=state.config.git.repoPath, isAbsolute=False))
                 else:
                     state.config.logger.error( "Failed to populate transaction #{0}.".format(transaction.id) )
                     sys.exit(1)
             else:
-                state.config.logger.dbg( "Did not pop transaction #{0}, stream {1}, elements {2}".format(transaction.id, stream, memberList) )
+                state.config.logger.dbg( "Did not pop transaction #{0}, stream {1}, elements {2}".format(transaction.id, stream, member.versions) )
                     
             rmList = []
-            if len(defunctList) > 0:
-                for elem in defunctList:
-                    rmList.append(LocalElementPath(accurevDepotElementPath=elem, gitRepoPath=state.config.git.repoPath, isAbsolute=False))
+            if len(defunct.versions) > 0:
+                for version in defunct.versions:
+                    if version.dir and not (version.elemType == 'slink' or version.elemType == 'elink'):
+                        RecursivelyRemoveDir(version.path)
+                        state.gitRepo.add(update=True)
+                    else:
+                        rmList.append(LocalElementPath(accurevDepotElementPath=version.path, gitRepoPath=state.config.git.repoPath, isAbsolute=False))
             
-            dbgFileMsg = "+{0}/-{1}".format(str(len(memberList)), str(len(defunctList)))
+            dbgFileMsg = "+{0}/-{1}".format(str(len(member.versions)), str(len(defunct.versions)))
             
             # If we have something to commit then:
             if len(addList) > 0 or len(rmList) > 0:

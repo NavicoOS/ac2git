@@ -236,21 +236,25 @@ class repo(object):
         else:
             raise Exception('Error, tried to add empty file list')
     
-    def add(self, fileList = [], force=False):
-        if len(fileList) > 0:
-            cmd = [ gitCmd, 'add' ]
-            
-            if force:
-                cmd.append('-f')
-            
+    def add(self, fileList = [], force=False, update=False):
+        cmd = [ gitCmd, 'add' ]
+        
+        if force:
+            cmd.append('-f')
+        
+        if update:
+            cmd.append('-u')
+        
+        if fileList is not None and len(fileList) > 0:
             cmd.append('--')
-            cmd.extend(fileList)
-            
-            output = self._docmd(cmd)
-            
-            return (output is not None)
-        else:
-            raise Exception('Error, tried to add empty file list')
+            if isinstance(fileList, list):
+                cmd.extend(fileList)
+            else:
+                cmd.append(str(fileList))
+        
+        output = self._docmd(cmd)
+        
+        return (output is not None)
     
     def commit(self, message = '', author=None, date=None):
         if message is not None and len(message) > 0:
