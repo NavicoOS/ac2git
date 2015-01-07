@@ -138,11 +138,16 @@ def DiffChangeWhatPriority(changeWhat):
     else:
         return 0
     
-def SplitElementsByStatusViaDiff(stream, transactionId, elemList):
+def SplitElementsByStatusViaDiff(transaction):
     # Warning: Fails if you've added a file in the workspace and then immediately defuncted it. It notifies us that the file has been "created" when it should be "defuncted" already...
     lastTransactionId = state.GetLastConvertedTransaction()
+    stream = GetTransactionDestStream(transaction)
     
-    diffResult = accurev.diff(all=True, informationOnly=True, verSpec1=stream, verSpec2=stream, transactionRange="{0}-{1}".format(lastTransactionId, transactionId))
+    diffResult = accurev.diff(all=True, informationOnly=True, verSpec1=stream, verSpec2=stream, transactionRange="{0}-{1}".format(lastTransactionId, transaction.id))
+    
+    elemList = []
+    for version in transaction.versions:
+        elemList.append(version.path)
     
     # All items in the elem list are depot relative path names. Here we convert them to absolute paths
     if len(elemList) > 0:
@@ -382,45 +387,43 @@ def RecursivelyRemoveDir(path):
 # ################################################################################################ #
 # Script Core. AccuRev transaction to Git conversion handlers.                                     #
 # ################################################################################################ #
-def OnAdd(transaction):
+def OnAdd(transaction, gitRepo):
     # Due to the fact that the accurev pop operation cannot retrieve defunct files when we use it
     # outside of a workspace and that workspaces cannot reparent themselves under workspaces
     # we must restrict ourselves to only processing stream operations, promotions.
     state.config.logger.dbg( "Ignored transaction #{0}: add".format(transaction.id) )
 
-def OnChstream(transaction):
+def OnChstream(transaction, gitRepo):
     # We determine which branch something needs to go to on the basis of the real/virtual version
     # there is no need to track all the stream changes.
     state.config.logger.dbg( "Ignored transaction #{0}: chstream".format(transaction.id) )
     
-def OnCo(transaction):
+def OnCo(transaction, gitRepo):
     # The co (checkout) transaction can be safely ignored.
     state.config.logger.dbg( "Ignored transaction #{0}: co".format(transaction.id) )
 
-def OnKeep(transaction):
+def OnKeep(transaction, gitRepo):
     # Due to the fact that the accurev pop operation cannot retrieve defunct files when we use it
     # outside of a workspace and that workspaces cannot reparent themselves under workspaces
     # we must restrict ourselves to only processing stream operations, promotions.
     state.config.logger.dbg( "Ignored transaction #{0}: keep".format(transaction.id) )
 
-def OnPromote(transaction):
+def OnPromote(transaction, gitRepo):
     global state
-    state.config.logger.dbg( "Transaction #{0} (promote)".format(transaction.id) )
+    state.config.logger.dbg( "Transaction #{0}: promote".format(transaction.id) )
     
     if len(transaction.versions) > 0:
         stream = GetTransactionDestStream(transaction)
-        elemList = GetTransactionElements(transaction, skipDirs=True)
         
-        if stream is not None and state.config.accurev.streamList is not None:
-            if stream not in state.config.accurev.streamList:
-                state.config.logger.dbg( "Skipped transaction #{0}. Stream {1} is not in the stream list.".format(transaction.id, stream) )
+        if stream is not None:
+            if not state.IsStreamAllowed(stream):
+                state.config.logger.dbg( "Skipped transaction #{0}. Stream {1} is not allowed.".format(transaction.id, stream) )
                 return False
-        
-        if stream is not None and elemList is not None and len(elemList) > 0:
-            state.config.logger.dbg( "Branch:", stream )
+            else:
+                state.config.logger.dbg( "Branch:", stream )
             
             # Generate the lists of files to add and remove
-            #memberList, defunctList = SplitElementsByStatusViaDiff(stream, transaction.id, elemList)
+            #memberList, defunctList = SplitElementsByStatusViaDiff(transaction)
             member, defunct, stranded = SplitElementsByStatusViaStat(transaction)
             
             addList = []
@@ -440,7 +443,7 @@ def OnPromote(transaction):
                 for version in defunct.versions:
                     if version.dir and not (version.elemType == 'slink' or version.elemType == 'elink'):
                         RecursivelyRemoveDir(version.path)
-                        state.gitRepo.add(update=True)
+                        gitRepo.add(update=True)
                     else:
                         rmList.append(LocalElementPath(accurevDepotElementPath=version.path, gitRepoPath=state.config.git.repoPath, isAbsolute=False))
             
@@ -455,22 +458,20 @@ def OnPromote(transaction):
                 gitAuthor = AccurevUser2GitAuthor(transaction.user)
                 
                 # Do the commit
-                status = GitCommit(gitRepo=state.gitRepo, branch=stream, author=gitAuthor, date=transaction.time, message=commitMessage, addList=addList, rmList=rmList)
+                status = GitCommit(gitRepo=gitRepo, branch=stream, author=gitAuthor, date=transaction.time, message=commitMessage, addList=addList, rmList=rmList)
 
                 if status:
                     state.config.logger.info( "Committed transaction #{0} as {1}. {2} files".format(transaction.id, GetLastCommitHash(), dbgFileMsg) )
-                elif state.gitRepo.lastError is not None:
-                    if "nothing to commit, working directory clean" in state.gitRepo.lastError.output:
+                elif gitRepo.lastError is not None:
+                    if "nothing to commit, working directory clean" in gitRepo.lastError.output:
                         state.config.logger.info( "Skipped transaction #{0}. {1} files. Nothing to commit.".format(transaction.id, dbgFileMsg) )
                         status = True
                 else:
-                    state.config.logger.error( "Failed to commit transaction #{0}. {1} files.\n{2}".format(transaction.id, dbgFileMsg, state.gitRepo.lastError.output) )
+                    state.config.logger.error( "Failed to commit transaction #{0}. {1} files.\n{2}".format(transaction.id, dbgFileMsg, gitRepo.lastError.output) )
                     sys.exit(1)
                 return status
             else:
                 state.config.logger.dbg( "Did not commit empty transaction #{0}.".format(transaction.id) )
-        elif elemList is None or len(elemList) <= 0:
-            state.config.logger.dbg( "Transaction #{0}. No non-directory elements promoted.".format(transaction.id) )
         else:
             state.config.logger.dbg( "Transaction #{0}. Could not determine stream.".format(transaction.id) )
     else:
@@ -478,7 +479,7 @@ def OnPromote(transaction):
         
     return False
 
-def OnMove(transaction):
+def OnMove(transaction, gitRepo):
     state.config.logger.dbg( "Ignored transaction #{0}: move".format(transaction.id) )
     # stream = GetTransactionDestStream(transaction)
     # addList = []
@@ -504,22 +505,22 @@ def OnMove(transaction):
     # # Do the commit
     # status = GitCommit(gitRepo=state.gitRepo, branch=stream, author=gitAuthor, date=transaction.time, message=commitMessage, addList=addList, rmList=[])
 
-def OnMkstream(transaction):
+def OnMkstream(transaction, gitRepo):
     # The mkstream command doesn't contain enough information to create a branch in git.
     # Silently ignore.
     state.config.logger.dbg( "Ignored transaction #{0}: mkstream".format(transaction.id) )
 
-def OnPurge(transaction):
+def OnPurge(transaction, gitRepo):
     state.config.logger.dbg( "Ignored transaction #{0}: purge".format(transaction.id) )
     # If done on a stream, must be translated to a checkout of the original element from the basis.
 
-def OnDefunct(transaction):
+def OnDefunct(transaction, gitRepo):
     state.config.logger.dbg( "Ignored transaction #{0}: defunct".format(transaction.id) )
 
-def OnUndefunct(transaction):
+def OnUndefunct(transaction, gitRepo):
     state.config.logger.dbg( "Ignored transaction #{0}: undefunct".format(transaction.id) )
 
-def OnDefcomp(transaction):
+def OnDefcomp(transaction, gitRepo):
     # The defcomp command is not visible to the user; it is used in the implementation of the 
     # include/exclude facility CLI commands incl, excl, incldo, and clear.
     # Source: http://www.accurev.com/download/docs/5.5.0_books/AccuRev_WebHelp/AccuRev_Admin/wwhelp/wwhimpl/common/html/wwhelp.htm#context=admin&file=pre_op_trigs.html
@@ -710,6 +711,14 @@ class AccuRev2Git(object):
         
         return None
     
+    def IsStreamAllowed(self, streamName):
+        if streamName is not None:
+            if self.config.accurev.streamList is not None:
+                if streamName not in state.config.accurev.streamList:
+                    return False
+            return True
+        return False
+    
     def GetLastConvertedTransaction(self):
         # TODO: Fix me! We don't have a way of retrieving the last accurev transaction that we
         #               processed yet. This will most likely involve parsing the git history in some
@@ -745,7 +754,7 @@ class AccuRev2Git(object):
     def ProcessAccuRevTransaction(self, transaction):
         handler = self.transactionHandlers.get(transaction.Type)
         if handler is not None:
-            handler(transaction)
+            handler(transaction, self.gitRepo)
         else:
             self.config.logger.error("Error: No handler for [\"{0}\"] transactions\n".format(transaction.Type))
         
