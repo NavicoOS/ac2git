@@ -365,7 +365,7 @@ def AccurevUser2GitAuthor(accurevUser):
         name = accurevUser
     if email is None:
         email = "{0}@no-email.com".format(accurevUser)
-    return "{0} <{1}>".format(name, email)
+    return u'{0} <{1}>'.format(name, email)
 
 # AccurevComment2GitMessage tags the commit message from AccuRev with information regarding the transaction
 # from which the given commit has been generated.
@@ -374,7 +374,7 @@ def AccurevComment2GitMessage(accurevTransaction):
     comment = "[no original comment]"
     if accurevTransaction.comment is not None:
         comment = accurevTransaction.comment
-    return "{0}\n\n{1}".format(comment, transTag)
+    return u'{0}\n\n{1}'.format(comment, transTag)
 
 def RecursivelyRemoveDir(path):
     for root, dirs, files in os.walk(path, topdown=False):

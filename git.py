@@ -17,7 +17,7 @@ import datetime
 import re
 import types
 
-gitCmd = 'git'
+gitCmd = u'git'
 
 class GitStatus(object):
     # Regular expressions used in fromgitoutput classmethod for parsing the different git lines.
@@ -212,10 +212,10 @@ class repo(object):
         return output
         
     def checkout(self, branchName=None, isNewBranch=False):
-        cmd = [ gitCmd, 'checkout' ]
+        cmd = [ gitCmd, u'checkout' ]
         
         if isNewBranch:
-            cmd.append('-b')
+            cmd.append(u'-b')
         
         if branchName is not None:
             cmd.append(branchName)
@@ -227,30 +227,30 @@ class repo(object):
     
     def rm(self, fileList = []):
         if len(fileList) > 0:
-            cmd = [ gitCmd, 'rm', '--' ]
+            cmd = [ gitCmd, u'rm', u'--' ]
             cmd.extend(fileList)
             
             output = self._docmd(cmd)
             
             return (output is not None)
         else:
-            raise Exception('Error, tried to add empty file list')
+            raise Exception(u'Error, tried to add empty file list')
     
     def add(self, fileList = [], force=False, update=False):
-        cmd = [ gitCmd, 'add' ]
+        cmd = [ gitCmd, u'add' ]
         
         if force:
-            cmd.append('-f')
+            cmd.append(u'-f')
         
         if update:
-            cmd.append('-u')
+            cmd.append(u'-u')
         
         if fileList is not None and len(fileList) > 0:
-            cmd.append('--')
+            cmd.append(u'--')
             if isinstance(fileList, list):
                 cmd.extend(fileList)
             else:
-                cmd.append(str(fileList))
+                cmd.append(unicode(fileList))
         
         output = self._docmd(cmd)
         
@@ -258,32 +258,32 @@ class repo(object):
     
     def commit(self, message = '', author=None, date=None):
         if message is not None and len(message) > 0:
-            cmd = [ gitCmd, 'commit' ]
+            cmd = [ gitCmd, u'commit' ]
             
             if author is not None:
-                cmd.append('--author="{0}"'.format(author))
+                cmd.append(u'--author="{0}"'.format(author))
             
             if date is not None:
                 if isinstance(date, datetime.datetime):
                     date = date.isoformat()
-                cmd.append('--date="{0}"'.format(date))
+                cmd.append(u'--date="{0}"'.format(date))
             
-            cmd.extend([ '-m', str(message) ])
+            cmd.extend([ u'-m', unicode(message) ])
             
             output = self._docmd(cmd)
             
             return (output is not None)
         else:
-            raise Exception('Error, tried to commit with empty message')
+            raise Exception(u'Error, tried to commit with empty message')
     
     def branch_list(self):
-        cmd = [ gitCmd, 'branch', '-vv' ]
+        cmd = [ gitCmd, u'branch', u'-vv' ]
             
         output = self._docmd(cmd)
         
         if output is not None:
             branchList = []
-            outputLines = output.split('\n')
+            outputLines = output.split(u'\n')
             for line in outputLines:
                 if len(line.strip()) > 0:
                     branchList.append(GitBranchListItem.fromgitbranchoutput(line))
@@ -291,7 +291,7 @@ class repo(object):
         return None
 
     def status(self):
-        cmd = [ gitCmd, 'status' ]
+        cmd = [ gitCmd, u'status' ]
             
         output = self._docmd(cmd)
         if output is not None:
@@ -299,12 +299,12 @@ class repo(object):
         return None
 
     def reset(self, branch=None, isHard=False, isSoft=False):
-        cmd = [ gitCmd, 'reset' ]
+        cmd = [ gitCmd, u'reset' ]
         
         if isHard:
-            cmd.append('--hard')
+            cmd.append(u'--hard')
         if isSoft:
-            cmd.append('--soft')
+            cmd.append(u'--soft')
         
         if branch is not None:
             cmd.append(branch)
@@ -312,10 +312,10 @@ class repo(object):
         return self._docmd(cmd)
     
     def clean(self, force=False):
-        cmd = [ gitCmd, 'clean' ]
+        cmd = [ gitCmd, u'clean' ]
     
         if force:
-            cmd.append('-f')
+            cmd.append(u'-f')
         
         return self._docmd(cmd)
         
@@ -327,9 +327,9 @@ def isRepo(path=None):
 
 def init(isBare=False, path=None):
     try:
-        cmd = [ gitCmd, 'init' ]
+        cmd = [ gitCmd, u'init' ]
         if isBare:
-            cmd.append('--bare')
+            cmd.append(u'--bare')
         if path is not None:
             cmd.append(str(path))
         
