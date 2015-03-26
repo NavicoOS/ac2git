@@ -24,7 +24,10 @@ class GitStatus(object):
     branchRe        = re.compile("^On branch (\\w)$")
     blankRe         = re.compile("^\\s*$")
     commentRe       = re.compile("^\\s+\\(.*\\)$")
-    fileRe          = re.compile("^\\s+(new file|modified|deleted):\\s+(\\S+)\\s*$")
+    # The fileRe - Has a clause at the end for possible submodule modifications where git prints 
+    #                (untracked content, modified content)
+    #              suffixed messages. This suffix is currently ignored.
+    fileRe          = re.compile("^\\s+(new file|modified|deleted):\\s+(\\S+)\\s*(\\(.+\\))?$")
     untrackedFileRe = re.compile("^\\s+(\\S+)\\s*$")
         
     def __init__(self, branch=None, staged=[], changed=[], untracked=[]):
