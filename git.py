@@ -256,7 +256,7 @@ class repo(object):
         
         return (output is not None)
     
-    def commit(self, message=None, messageFile=None, author=None, date=None):
+    def commit(self, message=None, messageFile=None, author=None, date=None, committer=None, committer_date=None):
         cmd = [ gitCmd, u'commit' ]
         
         if author is not None:
@@ -273,9 +273,44 @@ class repo(object):
             cmd.extend([ u'-F', unicode(messageFile) ])
         else:
             raise Exception(u'Error, tried to commit with empty message')
-            
+        
+        # Backup the existing commiter information
+        oldCommitterName = None
+        if os.environ['GIT_COMMITTER_NAME'] is not None:
+            oldCommitterName = os.environ['GIT_COMMITTER_NAME']
+        oldCommitterEmail = None
+        if os.environ['GIT_COMMITTER_EMAIL']:
+            oldCommitterEmail = os.environ['GIT_COMMITTER_EMAIL']
+        oldCommitterDate = None
+        if os.environ['GIT_COMMITTER_DATE']:
+            oldCommitterDate = os.environ['GIT_COMMITTER_DATE']
+        
+        # Set the new commiter information
+        if committer is not None:
+            m = re.search('(.*?)<(.*?)>', committer)
+            if m is not None:
+                committerName = m.group(0).strip()
+                committerEmail = m.group(1).strip()
+                os.environ['GIT_COMMITTER_NAME'] = committerName
+                os.environ['GIT_COMMITTER_EMAIL'] = committerEmail
+        
+        if committer_date is not None:
+            if committer_date is not None:
+                if isinstance(committer_date, datetime.datetime):
+                    committer_date = committer_date.isoformat()
+            os.environ['GIT_COMMITTER_DATE'] = '{0}'.format(committer_date)
+        
+        # Execute the command
         output = self._docmd(cmd)
-            
+        
+        # Restore backed up environment variables
+        if oldCommitterName is not None:
+            os.environ['GIT_COMMITTER_NAME'] = oldCommitterName
+        if oldCommitterEmail is not None:
+            os.environ['GIT_COMMITTER_EMAIL'] = oldCommitterEmail
+        if oldCommitterDate is not None:
+            os.environ['GIT_COMMITTER_DATE'] = oldCommitterDate
+        
         return (output is not None)
     
     def branch_list(self):
