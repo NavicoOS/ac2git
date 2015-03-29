@@ -19,16 +19,24 @@ import types
 
 gitCmd = u'git'
 
+# Borrowed from https://github.com/pypa/pip/issues/1137#issuecomment-23613766
+# for subprocess.check_output(cmd) calls...
+def to_utf8(string):
+    if isinstance(string, unicode):
+        return string.encode('utf-8')
+    else:
+        return string
+
 class GitStatus(object):
     # Regular expressions used in fromgitoutput classmethod for parsing the different git lines.
-    branchRe        = re.compile("^On branch (\\w)$")
-    blankRe         = re.compile("^\\s*$")
-    commentRe       = re.compile("^\\s+\\(.*\\)$")
+    branchRe        = re.compile(r'^On branch (\w)$')
+    blankRe         = re.compile(r'^\s*$')
+    commentRe       = re.compile(r'^\s+\(.*\)$')
     # The fileRe - Has a clause at the end for possible submodule modifications where git prints 
     #                (untracked content, modified content)
     #              suffixed messages. This suffix is currently ignored.
-    fileRe          = re.compile("^\\s+(new file|modified|deleted):\\s+(\\S+)\\s*(\\(.+\\))?$")
-    untrackedFileRe = re.compile("^\\s+(\\S+)\\s*$")
+    fileRe          = re.compile(r'^\s+(new file|modified|deleted):\s+(\S+)\s*(\(.+\))?$')
+    untrackedFileRe = re.compile(r'^\s+(\S+)\s*$')
         
     def __init__(self, branch=None, staged=[], changed=[], untracked=[]):
         self.branch    = branch    # Name of the branch.
@@ -37,27 +45,27 @@ class GitStatus(object):
         self.untracked = untracked # A list of (filename,) tuples
 
     def __repr__(self):
-        str  = "On branch {0}\n".format(self.branch)
+        str  = u'On branch {0}\n'.format(self.branch)
         if self.staged is not None and len(self.staged) > 0:
-            str += "Changes to be committed:\n\n"
+            str += u'Changes to be committed:\n\n'
             for file, status in self.staged:
-                str += " {0}: {1}\n".format(status, file)
-            str += "\n"
+                str += u' {0}: {1}\n'.format(status, file)
+            str += u'\n'
         if self.changed is not None and len(self.changed) > 0:
-            str += "Changes not staged for commit:\n\n"
+            str += u'Changes not staged for commit:\n\n'
             for file, status in self.changed:
-                str += " {0}: {1}\n".format(status, file)
-            str += "\n"
+                str += u' {0}: {1}\n'.format(status, file)
+            str += u'\n'
         if self.untracked is not None and len(self.untracked) > 0:
-            str += "Untracked files:\n\n"
+            str += u'Untracked files:\n\n'
             for file in self.untracked:
-                str += " {0}\n".format(file[0])
-            str += "\n"
+                str += u' {0}\n'.format(file[0])
+            str += u'\n'
         return str
     
     @classmethod
     def fromgitoutput(cls, gitOutput):
-        lines = gitOutput.split('\n')
+        lines = gitOutput.split(u'\n')
         # git status output example
         # On branch <branch name>
         # Changes to be committed:
@@ -93,7 +101,7 @@ class GitStatus(object):
         
         lastHeading = lines.pop(0)
         while len(lines) > 0:
-            if lastHeading == "Changes to be committed:":
+            if lastHeading == u'Changes to be committed:':
                 # Find the first blank line
                 nextLine = lines.pop(0)
                 while not GitStatus.blankRe.match(nextLine) and len(lines) > 0:
@@ -103,13 +111,13 @@ class GitStatus(object):
                 while not GitStatus.blankRe.match(nextLine) and len(lines) > 0:
                     fileMatch = GitStatus.fileRe.match(nextLine)
                     if not fileMatch:
-                        raise Exception("Line [{0}] did not match [{1}]".format(nextLine, GitStatus.fileRe.pattern))
+                        raise Exception(u'Line [{0}] did not match [{1}]'.format(nextLine, GitStatus.fileRe.pattern))
                     fileStatus = fileMatch.group(1)
                     fileName   = fileMatch.group(2)
                     stagedFiles.append((fileName, fileStatus))
                     
                     nextLine = lines.pop(0)
-            elif lastHeading == "Changes not staged for commit:":
+            elif lastHeading == u'Changes not staged for commit:':
                 # Find the first blank line
                 nextLine = lines.pop(0)
                 while not GitStatus.blankRe.match(nextLine) and len(lines) > 0:
@@ -119,13 +127,13 @@ class GitStatus(object):
                 while not GitStatus.blankRe.match(nextLine) and len(lines) > 0:
                     fileMatch = GitStatus.fileRe.match(nextLine)
                     if not fileMatch:
-                        raise Exception("Line [{0}] did not match [{1}]".format(nextLine, GitStatus.fileRe.pattern))
+                        raise Exception(u'Line [{0}] did not match [{1}]'.format(nextLine, GitStatus.fileRe.pattern))
                     fileStatus = fileMatch.group(1)
                     fileName   = fileMatch.group(2)
                     changedFiles.append((fileName, fileStatus))
                     
                     nextLine = lines.pop(0)
-            elif lastHeading == "Untracked files:":
+            elif lastHeading == u'Untracked files:':
                 # Find the first blank line
                 nextLine = lines.pop(0)
                 while not GitStatus.blankRe.match(nextLine) and len(lines) > 0:
@@ -135,7 +143,7 @@ class GitStatus(object):
                 while not GitStatus.blankRe.match(nextLine) and len(lines) > 0:
                     fileMatch = GitStatus.untrackedFileRe.match(nextLine)
                     if not fileMatch:
-                        raise Exception("Line [{0}] did not match [{1}]".format(nextLine, GitStatus.untrackedFileRe.pattern))
+                        raise Exception(u'Line [{0}] did not match [{1}]'.format(nextLine, GitStatus.untrackedFileRe.pattern))
                     fileName   = fileMatch.group(1)
                     untrackedFiles.append((fileName,))
                     
@@ -151,7 +159,7 @@ class GitStatus(object):
 # GitBranchListItem is an object serialization of a single branch output when the git branch -vv
 # command is run.
 class GitBranchListItem(object):
-    branchVVRe = re.compile("^(?P<iscurrent>\\*)?\\s+(?P<name>\\S+)\\s+(?P<hash>\\S+)\\s+(?:(?P<remote>\\[\\S+\\])\\s+)?(?P<comment>.*)$")
+    branchVVRe = re.compile(r'^(?P<iscurrent>\*)?\s+(?P<name>\S+)\s+(?P<hash>\S+)\s+(?:(?P<remote>\[\S+\])\s+)?(?P<comment>.*)$')
     def __init__(self, name, shortHash, remote, shortComment, isCurrent):
         self.name = name
         self.shortHash = shortHash
@@ -161,30 +169,30 @@ class GitBranchListItem(object):
     
     def __repr__(self):
         if self.isCurrent:
-            str = "*"
+            str = u'*'
         else:
-            str = " "
-        str += " {0} {1}".format(self.name, self.shortHash)
+            str = u' '
+        str += u' {0} {1}'.format(self.name, self.shortHash)
         if self.remote is not None:
-            str += " {0}".format(self.remote)
-        str += " {0}".format(self.shortComment)
+            str += u' {0}'.format(self.remote)
+        str += u' {0}'.format(self.shortComment)
         
         return str
         
     def __eq__(self, other):
         if type(other) == GitBranchListItem:
             return (self.name == other.name and self.shortHash == other.shortHash)
-        raise Exception("Can't compare {0} with {1}".format(type(self), type(other)))
+        raise Exception(u"Can't compare {0} with {1}".format(type(self), type(other)))
         
     @classmethod
     def fromgitbranchoutput(cls, outputLine):
         branchVVMatch = GitBranchListItem.branchVVRe.match(outputLine)
         if branchVVMatch is not None:
-            name = branchVVMatch.group("name")
-            shortHash = branchVVMatch.group("hash")
-            comment = branchVVMatch.group("comment")
-            remote =  branchVVMatch.group("remote")
-            isCurrent = branchVVMatch.group("iscurrent")
+            name = branchVVMatch.group(u'name')
+            shortHash = branchVVMatch.group(u'hash')
+            comment = branchVVMatch.group(u'comment')
+            remote =  branchVVMatch.group(u'remote')
+            isCurrent = branchVVMatch.group(u'iscurrent')
             isCurrent = (isCurrent is not None)
             
             return cls(name=name, shortHash=shortHash, remote=remote, shortComment=comment, isCurrent=isCurrent)
@@ -207,11 +215,14 @@ class repo(object):
         try:
             #strCmd = ' '.join(cmd)
             self._pushd(self.path)
-            output = subprocess.check_output(cmd)
+            output = subprocess.check_output(to_utf8(c) for c in cmd)
             self._popd()
         except subprocess.CalledProcessError as e:
             self.lastError = e
             return None
+#        except Exception as e:
+#            print(u'Error processing command: {0}'.format(cmd))
+#            raise e
         return output
         
     def checkout(self, branchName=None, isNewBranch=False):
@@ -279,40 +290,40 @@ class repo(object):
         
         # Backup the existing commiter information
         oldCommitterName = None
-        if os.environ['GIT_COMMITTER_NAME'] is not None:
-            oldCommitterName = os.environ['GIT_COMMITTER_NAME']
+        if os.environ[u'GIT_COMMITTER_NAME'] is not None:
+            oldCommitterName = os.environ[u'GIT_COMMITTER_NAME']
         oldCommitterEmail = None
-        if os.environ['GIT_COMMITTER_EMAIL']:
-            oldCommitterEmail = os.environ['GIT_COMMITTER_EMAIL']
+        if os.environ[u'GIT_COMMITTER_EMAIL']:
+            oldCommitterEmail = os.environ[u'GIT_COMMITTER_EMAIL']
         oldCommitterDate = None
-        if os.environ['GIT_COMMITTER_DATE']:
-            oldCommitterDate = os.environ['GIT_COMMITTER_DATE']
+        if os.environ[u'GIT_COMMITTER_DATE']:
+            oldCommitterDate = os.environ[u'GIT_COMMITTER_DATE']
         
         # Set the new commiter information
         if committer is not None:
-            m = re.search('(.*?)<(.*?)>', committer)
+            m = re.search(r'(.*?)<(.*?)>', committer)
             if m is not None:
                 committerName = m.group(0).strip()
                 committerEmail = m.group(1).strip()
-                os.environ['GIT_COMMITTER_NAME'] = committerName
-                os.environ['GIT_COMMITTER_EMAIL'] = committerEmail
+                os.environ[u'GIT_COMMITTER_NAME'] = committerName
+                os.environ[u'GIT_COMMITTER_EMAIL'] = committerEmail
         
         if committer_date is not None:
             if committer_date is not None:
                 if isinstance(committer_date, datetime.datetime):
                     committer_date = committer_date.isoformat()
-            os.environ['GIT_COMMITTER_DATE'] = '{0}'.format(committer_date)
+            os.environ[u'GIT_COMMITTER_DATE'] = u'{0}'.format(committer_date)
         
         # Execute the command
         output = self._docmd(cmd)
         
         # Restore backed up environment variables
         if oldCommitterName is not None:
-            os.environ['GIT_COMMITTER_NAME'] = oldCommitterName
+            os.environ[u'GIT_COMMITTER_NAME'] = oldCommitterName
         if oldCommitterEmail is not None:
-            os.environ['GIT_COMMITTER_EMAIL'] = oldCommitterEmail
+            os.environ[u'GIT_COMMITTER_EMAIL'] = oldCommitterEmail
         if oldCommitterDate is not None:
-            os.environ['GIT_COMMITTER_DATE'] = oldCommitterDate
+            os.environ[u'GIT_COMMITTER_DATE'] = oldCommitterDate
         
         return (output is not None)
     
@@ -361,7 +372,7 @@ class repo(object):
         
 def isRepo(path=None):
     if path is not None and os.path.isdir(path):
-        if os.path.isdir(os.path.join(path, ".git")):
+        if os.path.isdir(os.path.join(path, u'.git')):
             return True
     return False
 
