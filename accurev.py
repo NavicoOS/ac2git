@@ -140,7 +140,7 @@ class obj:
             return None
         
     class Stream(object):
-        def __init__(self, name, streamNumber, depotName, Type, basis=None, basisStreamNumber=None, time=None, prevTime=None, prevBasis=None, prevBasisStreamNumber=None, workspace=None, startTime=None, isDynamic=None, hasDefaultGroup=None):
+        def __init__(self, name, streamNumber, depotName, Type, basis=None, basisStreamNumber=None, time=None, prevTime=None, prevBasis=None, prevBasisStreamNumber=None, prevName=None, workspace=None, startTime=None, isDynamic=None, hasDefaultGroup=None):
             self.name                  = name
             self.streamNumber          = IntOrNone(streamNumber)
             self.depotName             = depotName
@@ -151,13 +151,14 @@ class obj:
             self.prevTime              = UTCDateTimeOrNone(prevTime)
             self.prevBasis             = prevBasis
             self.prevBasisStreamNumber = IntOrNone(prevBasisStreamNumber)
+            self.prevName              = prevName
             self.workspace             = workspace
             self.startTime             = UTCDateTimeOrNone(startTime)
             self.isDynamic             = obj.Bool.fromstring(isDynamic)
             self.hasDefaultGroup       = obj.Bool.fromstring(hasDefaultGroup)
     
         def __repr__(self):
-            str = "Stream(name="       + repr(self.name)
+            str = "Stream(name="              + repr(self.name)
             str += ", streamNumber="          + repr(self.streamNumber)
             str += ", depotName="             + repr(self.depotName)
             str += ", Type="                  + repr(self.Type)
@@ -167,6 +168,7 @@ class obj:
             str += ", prevTime="              + repr(self.prevTime)
             str += ", prevBasis="             + repr(self.prevBasis)
             str += ", prevBasisStreamNumber=" + repr(self.prevBasisStreamNumber)
+            str += ", prevName="              + repr(self.prevName)
             str += ", workspace="             + repr(self.workspace)
             str += ", startTime="             + repr(self.startTime)
             str += ", isDynamic="             + repr(self.isDynamic)
@@ -188,6 +190,7 @@ class obj:
                 prevTime                  = xmlElement.attrib.get('prevTime')
                 prevBasis                 = xmlElement.attrib.get('prevBasis')
                 prevBasisStreamNumber     = xmlElement.attrib.get('prevBasisStreamNumber')
+                prevName                  = xmlElement.attrib.get('prevName')
                 startTime                 = xmlElement.attrib.get('startTime')
                 isDynamic                 = xmlElement.attrib.get('isDynamic')
                 hasDefaultGroup           = xmlElement.attrib.get('hasDefaultGroup')
@@ -195,7 +198,7 @@ class obj:
                 wspaceElement = xmlElement.find('wspace')
                 workspace = obj.Workspace.fromxmlelement(wspaceElement)
                 
-                return cls(name, streamNumber, depotName, Type, basis, basisStreamNumber, time, prevTime, prevBasis, prevBasisStreamNumber, workspace, startTime, isDynamic, hasDefaultGroup)
+                return cls(name=name, streamNumber=streamNumber, depotName=depotName, Type=Type, basis=basis, basisStreamNumber=basisStreamNumber, time=time, prevTime=prevTime, prevBasis=prevBasis, prevBasisStreamNumber=prevBasisStreamNumber, prevName=prevName, workspace=workspace, startTime=startTime, isDynamic=isDynamic, hasDefaultGroup=hasDefaultGroup)
             
             return None
         
