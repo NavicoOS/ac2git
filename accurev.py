@@ -40,6 +40,9 @@ def UTCDateTimeOrNone(value):
         value = float(value)
     return datetime.datetime.utcfromtimestamp(value)
 
+# ################################################################################################ #
+# Script Objects                                                                                   #
+# ################################################################################################ #
 class obj:
     class Bool(object):
         def __init__(self, value):
@@ -104,6 +107,87 @@ class obj:
                 return cls(rv)
             return None
     
+    class TimeSpec(object):
+        def __init__(self, start, end=None, limit=None):
+            self.start = start
+            self.end   = end
+            self.limit = limit
+
+        def __repr__(self):
+            rv = repr(self.start)
+            if self.end is not None:
+                rv += '-{0}'.format(repr(self.end))
+            if self.limit is not None:
+                rv += '.{0}'.format(repr(self.limit))
+            return rv
+
+        @staticmethod
+        def compare_transaction_specs(lhs, rhs):
+            if lhs is None or rhs is None:
+                if lhs is None and rhs is None:
+                    return 0
+                else:
+                    raise Exception('Can\'t compare to None')
+
+            # Force them to be ints if they can be.
+            try:
+                lhs = int(lhs)
+            except:
+                pass
+            try:
+                rhs = int(rhs)
+            except:
+                pass
+
+            # highest > now > any transaction number
+            if lhs == rhs:
+                return 0
+            elif lhs == 'highest':
+                return 1
+            elif rhs == 'highest':
+                return -1
+            elif lhs == 'now':
+                return 1
+            elif rhs == 'now':
+                return -1
+            elif lhs < rhs:
+                return 1
+            elif lhs > rhs:
+                return -1
+            else:
+                raise Exception('How did you get here?')
+
+        def is_reversed(self):
+            try:
+                return obj.TimeSpec.compare_transaction_specs(self.start, self.end) > 0
+            except:
+                return False
+
+        @classmethod
+        def fromstring(cls, string):
+            timeSpecRe = re.compile(r'(?P<start>(?:\d+|now|highest))(?:-(?P<end>(?:\d+|now|highest)))?(?:.(?P<limit>\d+))?')
+            timeSpecMatch = timeSpecRe.search(string)
+            
+            if timeSpecMatch is not None:
+                timeSpecDict = timeSpecMatch.groupdict()
+
+                start = end = limit = None
+                if 'start' in timeSpecDict:
+                    try:
+                        start = int(timeSpecDict['start'])
+                    except:
+                        start = timeSpecDict['start']
+                if 'end' in timeSpecDict:
+                    try:
+                        end = int(timeSpecDict['end'])
+                    except:
+                        end = timeSpecDict['end']
+                if 'limit' in timeSpecDict:
+                    limit = timeSpecDict['limit']
+
+                return cls(start=start, end=end, limit=IntOrNone(limit))
+
+            return None
     
     class Workspace(object):
         def __init__(self, storage, host, targetTransaction, fileModTime, EOL, Type):
@@ -893,8 +977,12 @@ class obj:
                 return cls(taskId=taskId, progressItems=progressItems, messages=messages, elements=elements)
             else:
                 return None
-    
-# The raw class namespaces raw accurev commands that return text output directly from the terminal.
+
+
+# ################################################################################################ #
+# AccuRev raw commands                                                                             #
+# The raw class namespaces raw accurev commands that return text output directly from the terminal #
+# ################################################################################################ #
 class raw(object):
     # The __lastCommand is used to access the return code that the last command had generated in most
     # cases.
@@ -1452,7 +1540,7 @@ class raw(object):
             return raw._runCommand(cmd)
     
 # ################################################################################################ #
-# Script Functions                                                                                 #
+# Script Functions (the main interface to this library)                                            #
 # ################################################################################################ #
 def getAcSync():
     return raw.getAcSync()
@@ -1589,6 +1677,107 @@ class replica(object):
             return (raw._lastCommand.returncode == 0)
         return None
         
+# ################################################################################################ #
+# AccuRev Command Extensions                                                                       #
+# ################################################################################################ #
+class ext(object):
+    # Get the last chstream transaction. If no chstream transactions have been made the mkstream
+    # transaction is returned. If no mkstream transaction exists None is returned.
+    # returns obj.Transaction
+    @staticmethod
+    def stream_info(stream, transaction):
+        # As of AccuRev 4.7.2, the data stored in the database by the mkstream command includes the stream-ID. 
+        # Streams and workspaces created after installing 4.7.2 will display this additional stream information 
+        # as part of the hist command.
+        timeSpec = '{0}-1.1'.format(transaction)
+        history = hist(stream=stream, timeSpec=timeSpec, transactionKind='chstream')
+        
+        if history is not None and history.transactions is not None and len(history.transactions) > 0:
+            return history.transactions[0]
+        
+        history = hist(stream=stream, timeSpec=timeSpec, transactionKind='mkstream')
+
+        if history is not None and history.transactions is not None and len(history.transactions) > 0:
+            return history.transactions[0]
+        
+        return None
+    
+    # Returns a dictionary where the keys are the stream names and the values are obj.Stream objects.
+    @staticmethod
+    def stream_dict(depot, transaction):
+        streams = show.streams(depot=depot, timeSpec='{0}'.format(transaction))
+        streamDict = None
+        if streams is not None:
+            streams = streams.streams
+            if streams is not None:
+                streamDict = {}
+                for s in streams:
+                    streamDict[s.name] = s
+
+        return streamDict
+
+    # Returns a list of parents of the given stream in the following format
+    #   [ stream, parent, parent's parent, ... ]
+    # where each item in the list is an object of type obj.Stream
+    @staticmethod
+    def stream_parent_list(depot, stream, transaction):
+        streamDict = ext.stream_dict(depot=depot, transaction=transaction)
+
+        if stream not in streamDict:
+            raise Exception('Unhandled error: stream either doesn\'t exist or has changed names in this transaction range')
+
+        parentNames = [ stream ]
+        while parentNames[-1] is not None:
+            if parentNames[-1] in streamDict:
+                basis = streamDict[parentNames[-1]].basis
+                parentNames.append(basis) # terminating condition is when the basis is None
+            else:
+                break
+
+        parentNames.pop()
+        
+        parentObjects = []
+        for parentName in parentNames:
+            parentObjects.append(streamDict[parentName])
+
+        return parentObjects
+
+    @staticmethod
+    def _deep_hist_rec(depot, stream, timeSpec, chstreams, history, parentList):
+        pass
+
+    @staticmethod
+    def deep_hist(depot, stream, timeSpec):
+        ts = obj.TimeSpec.fromstring(timeSpec)
+
+        if ts.end is None or ts.limit == 1:
+            # If ts.end is None this means that we are not processing a transaction range.
+            # Similarly if only the history of a single transaction was requested we are not
+            # needed. A simple hist query will do.
+            return hist(stream=stream, timeSpec=timeSpec)
+
+        isReversed = ts.is_reversed()
+        if isReversed:
+            ts = obj.TimeSpec(start=ts.end, end=ts.start, limit=ts.limit)
+        
+        # Get the promote history for the requested stream.
+        history = hist(stream=stream, timeSpec=timeSpec, transactionKind='promote')
+
+        # Get the stream parents from the highest transaction we are looking for.
+        parentList = ext.stream_parent_list(depot=depot, stream=stream, transaction=ts.end)
+
+        # Check if there are any chstream transactions in the range which could affect this stream
+        # or its parents.
+        chstreams = hist(depot=depot, timeSpec=timeSpec, transactionKind='chstream')
+
+        if len(chstreams.transactions) > 0:
+            print chstreams.transactions
+
+        # Get the stream state as it is at the last requested transaction.
+
+        # Build a list of stream states for each chstream transaction that is in the range...
+        print parentList
+
 # ################################################################################################ #
 # Script Main                                                                                      #
 # ################################################################################################ #
