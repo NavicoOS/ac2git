@@ -123,12 +123,6 @@ class obj:
 
         @staticmethod
         def compare_transaction_specs(lhs, rhs):
-            if lhs is None or rhs is None:
-                if lhs is None and rhs is None:
-                    return 0
-                else:
-                    raise Exception('Can\'t compare to None')
-
             # Force them to be ints if they can be.
             try:
                 lhs = int(lhs)
@@ -150,14 +144,22 @@ class obj:
                 return 1
             elif rhs == 'now':
                 return -1
-            elif lhs < rhs:
-                return 1
             elif lhs > rhs:
+                return 1
+            elif lhs < rhs:
                 return -1
+            elif lhs is None or rhs is None:
+                raise Exception('Can\'t compare to None')
             else:
                 raise Exception('How did you get here?')
 
-        def is_reversed(self):
+        def is_asc(self):
+            try:
+                return obj.TimeSpec.compare_transaction_specs(self.start, self.end) < 0
+            except:
+                return False
+
+        def is_desc(self):
             try:
                 return obj.TimeSpec.compare_transaction_specs(self.start, self.end) > 0
             except:
@@ -1746,6 +1748,7 @@ class ext(object):
     def _deep_hist_rec(depot, stream, timeSpec, chstreams, history, parentList):
         pass
 
+    @staticmethod
     def deep_hist(depot, stream, timeSpec):
         ts = obj.TimeSpec.fromstring(timeSpec)
 
@@ -1755,33 +1758,51 @@ class ext(object):
             # needed. A simple hist query will do.
             return hist(stream=stream, timeSpec=timeSpec)
 
-        isReversed = ts.is_reversed()
-        if not isReversed:
+        isDesc = ts.is_desc()
+        if not isDesc:
+            # Make descending
             ts = obj.TimeSpec(start=ts.end, end=ts.start, limit=ts.limit)
         
+        print ts
+
         # Get the promote history for the requested stream.
-        history = hist(stream=stream, timeSpec=timeSpec, transactionKind='promote')
+        history = hist(stream=stream, timeSpec=str(ts), transactionKind='promote')
 
         # Get the stream parents from the highest transaction we are looking for.
         parents = ext.stream_parent_list(depot=depot, stream=stream, transaction=ts.start)
-        parentNames = [ s.name for s in parents ]
 
-        # Check if there are any chstream transactions in the range which could affect this stream
-        # or its parents.
-        chstreams = hist(depot=depot, timeSpec=timeSpec, transactionKind='chstream')
+        if len(parents) > 1:
+            parentIds = [ s.streamNumber for s in parents[1:] ]
 
-        if len(chstreams.transactions) > 0:
-            for tr in chstream.transactions:
-                if tr.stream.name in parentNames:
-                    # One of the streams that is our parent has changed.
-                    pass
+            # Check if there are any chstream transactions in the range which could affect this stream
+            # or its parents.
+            chstreams = hist(depot=depot, timeSpec=str(ts), transactionKind='chstream')
 
-            print chstreams.transactions
+            if len(chstreams.transactions) > 0:
+                for tr in chstreams.transactions: # transactions are in ascending order
+                    if tr.stream.streamNumber in parentIds:
+                        # One of the streams in our parentage has changed.
+                        print '{0} stream changed in transaction #{1}'.format(tr.stream.name, tr.id)
 
-        # Get the stream state as it is at the last requested transaction.
+                        # Has it been renamed?
 
-        # Build a list of stream states for each chstream transaction that is in the range...
-        print parentList
+                        # Has its timelock changed?
+
+                        # Has its basis changed?
+
+                print chstreams.transactions
+
+            # Get the stream state as it is at the last requested transaction.
+
+            # Build a list of stream states for each chstream transaction that is in the range...
+            print
+            print parents
+
+        transactions = sorted(history.transactions, key=lambda tr: tr.id)
+        if isDesc:
+            transactions.reverse()
+
+        return transactions
 
 # ################################################################################################ #
 # Script Main                                                                                      #
