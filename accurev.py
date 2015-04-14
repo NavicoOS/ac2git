@@ -1746,7 +1746,6 @@ class ext(object):
     def _deep_hist_rec(depot, stream, timeSpec, chstreams, history, parentList):
         pass
 
-    @staticmethod
     def deep_hist(depot, stream, timeSpec):
         ts = obj.TimeSpec.fromstring(timeSpec)
 
@@ -1757,20 +1756,26 @@ class ext(object):
             return hist(stream=stream, timeSpec=timeSpec)
 
         isReversed = ts.is_reversed()
-        if isReversed:
+        if not isReversed:
             ts = obj.TimeSpec(start=ts.end, end=ts.start, limit=ts.limit)
         
         # Get the promote history for the requested stream.
         history = hist(stream=stream, timeSpec=timeSpec, transactionKind='promote')
 
         # Get the stream parents from the highest transaction we are looking for.
-        parentList = ext.stream_parent_list(depot=depot, stream=stream, transaction=ts.end)
+        parents = ext.stream_parent_list(depot=depot, stream=stream, transaction=ts.start)
+        parentNames = [ s.name for s in parents ]
 
         # Check if there are any chstream transactions in the range which could affect this stream
         # or its parents.
         chstreams = hist(depot=depot, timeSpec=timeSpec, transactionKind='chstream')
 
         if len(chstreams.transactions) > 0:
+            for tr in chstream.transactions:
+                if tr.stream.name in parentNames:
+                    # One of the streams that is our parent has changed.
+                    pass
+
             print chstreams.transactions
 
         # Get the stream state as it is at the last requested transaction.
