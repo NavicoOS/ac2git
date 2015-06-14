@@ -40,6 +40,14 @@ def UTCDateTimeOrNone(value):
         value = float(value)
     return datetime.datetime.utcfromtimestamp(value)
 
+def GetTimestamp(datetimeValue):
+    if datetimeValue is None:
+        return None
+    if type(datetimeValue) is not datetime.datetime:
+        raise Exception('Invalid argument. Expected a datetime type.')
+    timestamp = (datetimeValue - datetime.datetime(1970, 1, 1)).total_seconds()
+    return timestamp
+
 # ################################################################################################ #
 # Script Objects                                                                                   #
 # ################################################################################################ #
@@ -108,6 +116,9 @@ class obj:
             return None
     
     class TimeSpec(object):
+        timeSpecRe = None
+        timeSpecPartRe = None
+
         def __init__(self, start, end=None, limit=None):
             self.start = start
             self.end   = end
@@ -164,11 +175,32 @@ class obj:
                 return obj.TimeSpec.compare_transaction_specs(self.start, self.end) > 0
             except:
                 return False
+        
+        @staticmethod
+        def parse_simple(timespec):
+            rv = None
+
+            if obj.TimeSpec.timeSpecPartRe is None:
+                obj.TimeSpec.timeSpecPartRe = re.compile(r'^ *(?:(?P<transaction>\d+)|(?P<keyword>now|highest)|(?P<datetime>(?P<year>\d{4})/(?P<month>\d{2})/(?P<day>\d{2}) +(?P<hour>\d{2}):(?P<minute>\d{2}):(?P<second>\d{2}))) *$')
+            
+            timeSpecPartMatch = obj.TimeSpec.timeSpecPartRe.search(timespec)
+            if timeSpecPartMatch is not None:
+                timeSpecPartDict = timeSpecPartMatch.groupdict()
+                if 'keyword' in timeSpecPartDict:
+                    rv = timeSpecPartDict['keyword']
+                elif 'transaction' in timeSpecPartDict:
+                    rv = int(timeSpecPartDict['transaction'])
+                elif 'datetime' in timeSpecPartDict:
+                    rv = datetime.datetime(year=int(timeSpecPartDict['year']), month=int(timeSpecPartDict['month']), day=int(timeSpecPartDict['day']), hour=int(timeSpecPartDict['hour']), minute=int(timeSpecPartDict['minute']), second=int(timeSpecPartDict['second']))
+
+            return rv
 
         @classmethod
         def fromstring(cls, string):
-            timeSpecRe = re.compile(r'(?P<start>(?:\d+|now|highest))(?:-(?P<end>(?:\d+|now|highest)))?(?:.(?P<limit>\d+))?')
-            timeSpecMatch = timeSpecRe.search(string)
+            if TimeSpec.timeSpecRe is None:
+                TimeSpec.timeSpecRe = re.compile(r'^(?P<start>.*?) *(?:- *(?P<end>.*?))?(?:\.(?P<limit>\d+))?$')
+
+            timeSpecMatch = TimeSpec.timeSpecRe.search(string)
             
             if timeSpecMatch is not None:
                 timeSpecDict = timeSpecMatch.groupdict()
@@ -1763,7 +1795,7 @@ class ext(object):
             # Make descending
             ts = obj.TimeSpec(start=ts.end, end=ts.start, limit=ts.limit)
         
-        print ts
+        print( ts )
 
         # Get the promote history for the requested stream.
         history = hist(stream=stream, timeSpec=str(ts), transactionKind='promote')
@@ -1772,31 +1804,40 @@ class ext(object):
         parents = ext.stream_parent_list(depot=depot, stream=stream, transaction=ts.start)
 
         if len(parents) > 1:
-            parentIds = [ s.streamNumber for s in parents[1:] ]
+            parentsById = { s.streamNumber: s for s in parents }
 
             # Check if there are any chstream transactions in the range which could affect this stream
             # or its parents.
             chstreams = hist(depot=depot, timeSpec=str(ts), transactionKind='chstream')
 
+            parentChangelist = []
             if len(chstreams.transactions) > 0:
-                for tr in chstreams.transactions: # transactions are in ascending order
-                    if tr.stream.streamNumber in parentIds:
-                        # One of the streams in our parentage has changed.
-                        print '{0} stream changed in transaction #{1}'.format(tr.stream.name, tr.id)
+                for tr in chstreams.transactions: # transactions are in descending order
+                    if tr.stream.streamNumber in parentsById:
+                        doAppend = False
 
-                        # Has it been renamed?
+                        # Has the basis changed in our parent-chain?
+                        if tr.stream.prevBasisStreamNumber is not None and tr.stream.basisStreamNumber != tr.stream.prevBasisStreamNumber:
+                            print( 'tr #{0}: {1} stream changed basis {2} -> {3}'.format(tr.id, tr.stream.name, tr.stream.prevBasis, tr.stream.basis) )
+                            # Record the new parents against this transaction in the changelist.
+                            doAppend = True
+                        if tr.stream.time is not None and GetTimestamp(tr.stream.time) != 0:
+                            print( 'tr #{0}: {1} stream changed time lock {2} -> {3}'.format(tr.id, tr.stream.name, tr.stream.prevTime, tr.stream.time) )
+                            doAppend = True
+                        # Has it been renamed? Do we care?
+                        if tr.stream.prevName is not None and tr.stream.name != tr.stream.prevName:
+                            print( 'tr #{0}: stream renamed {2} -> {3}'.format(tr.id, tr.stream.prevName, tr.stream.name) )
 
-                        # Has its timelock changed?
+                        if doAppend:
+                            parentChangelist.append( (tr, ext.stream_parent_list(depot=depot, stream=stream, transaction=tr.id)) )
 
-                        # Has its basis changed?
-
-                print chstreams.transactions
+                #print( chstreams.transactions )
 
             # Get the stream state as it is at the last requested transaction.
 
             # Build a list of stream states for each chstream transaction that is in the range...
-            print
-            print parents
+            #print()
+            #print( parents )
 
         transactions = sorted(history.transactions, key=lambda tr: tr.id)
         if isDesc:
