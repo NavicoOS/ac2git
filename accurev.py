@@ -1795,6 +1795,11 @@ class replica(object):
 # AccuRev Command Extensions                                                                       #
 # ################################################################################################ #
 class ext(object):
+    @staticmethod
+    def is_loggedin():
+        infoObj = info()
+        return (infoObj.principal != "(not logged in)")
+
     # Get the last chstream transaction. If no chstream transactions have been made the mkstream
     # transaction is returned. If no mkstream transaction exists None is returned.
     # returns obj.Transaction

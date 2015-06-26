@@ -225,11 +225,13 @@ class repo(object):
 #            raise e
         return output
         
-    def checkout(self, branchName=None, isNewBranch=False):
+    def checkout(self, branchName=None, isNewBranch=False, isOrphan=False):
         cmd = [ gitCmd, u'checkout' ]
         
         if isNewBranch:
             cmd.append(u'-b')
+        elif isOrphan:
+            cmd.append(u'--orphan')
         
         if branchName is not None:
             cmd.append(branchName)
@@ -239,9 +241,18 @@ class repo(object):
     def branch(self):
         pass
     
-    def rm(self, fileList = []):
+    def rm(self, fileList = [], recursive=False, force=False, cached=False):
         if len(fileList) > 0:
-            cmd = [ gitCmd, u'rm', u'--' ]
+            cmd = [ gitCmd, u'rm' ]
+
+            if recursive:
+                cmd.append(u'-r')
+            if force:
+                cmd.append(u'-f')
+            if cached:
+                cmd.append(u'--cached')
+
+            cmd.append(u'--')
             cmd.extend(fileList)
             
             output = self._docmd(cmd)
@@ -250,14 +261,15 @@ class repo(object):
         else:
             raise Exception(u'Error, tried to add empty file list')
     
-    def add(self, fileList = [], force=False, update=False):
+    def add(self, fileList = [], force=False, update=False, all=False):
         cmd = [ gitCmd, u'add' ]
         
         if force:
             cmd.append(u'-f')
-        
         if update:
             cmd.append(u'-u')
+        if all:
+            cmd.append(u'--all')
         
         if fileList is not None and len(fileList) > 0:
             cmd.append(u'--')
@@ -270,9 +282,14 @@ class repo(object):
         
         return (output is not None)
     
-    def commit(self, message=None, messageFile=None, author=None, date=None, committer=None, committer_date=None):
+    def commit(self, message=None, messageFile=None, author=None, date=None, committer=None, committer_date=None, allow_empty=False, allow_empty_message=False):
         cmd = [ gitCmd, u'commit' ]
         
+        if allow_empty:
+            cmd.append(u'--allow-empty')
+        if allow_empty_message:
+            cmd.append(u'--allow-empty-message')
+
         if author is not None:
             cmd.append(u'--author="{0}"'.format(author))
         
@@ -285,19 +302,13 @@ class repo(object):
             cmd.extend([ u'-m', unicode(message) ])
         elif messageFile is not None:
             cmd.extend([ u'-F', unicode(messageFile) ])
-        else:
+        elif not allow_empty_message:
             raise Exception(u'Error, tried to commit with empty message')
         
         # Backup the existing commiter information
-        oldCommitterName = None
-        if os.environ[u'GIT_COMMITTER_NAME'] is not None:
-            oldCommitterName = os.environ[u'GIT_COMMITTER_NAME']
-        oldCommitterEmail = None
-        if os.environ[u'GIT_COMMITTER_EMAIL']:
-            oldCommitterEmail = os.environ[u'GIT_COMMITTER_EMAIL']
-        oldCommitterDate = None
-        if os.environ[u'GIT_COMMITTER_DATE']:
-            oldCommitterDate = os.environ[u'GIT_COMMITTER_DATE']
+        oldCommitterName = os.environ.get(u'GIT_COMMITTER_NAME')
+        oldCommitterEmail = os.environ.get(u'GIT_COMMITTER_EMAIL')
+        oldCommitterDate = os.environ.get(u'GIT_COMMITTER_DATE')
         
         # Set the new commiter information
         if committer is not None:

@@ -12,6 +12,7 @@
 import sys
 import argparse
 import os
+import os.path
 import shutil
 import subprocess
 import xml.etree.ElementTree as ElementTree
@@ -21,525 +22,10 @@ import re
 import types
 import copy
 
+from collections import OrderedDict
+
 import accurev
 import git
-
-# ################################################################################################ #
-# Script Globals.                                                                                  #
-# ################################################################################################ #
-# state is the global variable holding the active AccuRev2Git object. This is a hack that introduces
-# a circular dependency between seemingly independent functions at the top of the script (mainly the
-# OnPromote handler). This should be removed and the value passed in but I'm too lazy to do it now...
-state = None
-
-# maxCommandLength controls how many command line arguments are passed to git's commands at a time.
-# The Windows and Linux command lines have a maximum character limit which can cause problems for
-# the subprocess.check_output() calls that we make for git when the remainder of the command given
-# is truncated. If command line arguments exceed this length we will split the command into two
-# separate calls.
-maxCommandLength = 500
-
-# maxTransactions controls how many items at a time will be queried in the accurev history.
-# This limit is necessary so that we don't load up too many accurev transactions into memory using
-# the accurev hist command.
-maxTransactions = 500
-
-# ################################################################################################ #
-# Script Core. Git helper functions                                                                #
-# ################################################################################################ #
-branchList = None
-def CheckoutBranch(gitRepo, branchName):
-    global branchList
-    
-    if branchList is None:
-        branchList = gitRepo.branch_list()
-    
-    if branchList is None or len(branchList) == 0:
-        # If we are here, we are in a state of Initial Commit and there are no branches to speak of yet.
-        status = gitRepo.status()
-        if status is not None and status.branch != branchName:
-            gitRepo.checkout(branchName=branchName, isNewBranch=True)
-        branch = git.GitBranchListItem(name=branchName, shortHash=None, remote=None, shortComment="Initial Commit", isCurrent=True)
-        branchList = [ branch ]
-        
-        return branch
-    
-    isNewBranch = True
-    for branch in branchList:
-        if branch.name == branchName:
-            if branch.isCurrent:
-               return branch 
-            else:
-                isNewBranch = False
-                break
-    gitRepo.checkout(branchName=branchName, isNewBranch=isNewBranch)
-    branchList = gitRepo.branch_list()
-    
-    for branch in branchList:
-        if branch.isCurrent:
-            return branch
-    
-    raise Exception("CheckoutBranch: Unexpected termination, there must be at least one current git branch!")
-
-# LocalElementPath converts a depot relative accurev path into either an absolute or a relative path
-# i.e. removes the \.\ from the front and sensibly converts the path...
-def LocalElementPath(accurevDepotElementPath, gitRepoPath=None, isAbsolute=False):
-    # All accurev depot paths start with \.\ or /./ so strip that before joining.
-    relpath = accurevDepotElementPath[3:]
-    if isAbsolute:
-        if gitRepoPath is not None:
-            return os.path.join(gitRepoPath, relpath)
-        else:
-            return os.path.abspath(relpath)
-    return relpath
-
-# Gets the stream name/id from the virtual version of one of the elements.
-def GetTransactionDestStream(transaction):
-    if transaction is not None:
-        if transaction.versions is not None and len(transaction.versions) > 0:
-            return transaction.versions[0].virtualNamedVersion.stream
-    return None
-
-# Gets all the elements (as path strings) that are participating in a transaction
-def GetTransactionElements(transaction, skipDirs=True):
-    if transaction is not None:
-        if transaction.versions is not None:
-            elemList = []
-            for version in transaction.versions:
-                # Populate it only if it is not a directory. (note: symlinks can be classed as directories even though they are not)
-                if not skipDirs or not version.dir: # or version.elemType == "elink" or version.elemType == "slink"
-                    elemList.append(version.path)
-            #    else:
-            #        state.config.logger.dbg( "GetTransactionElements: skipping dir [{0}] {1}".format(version.dir, version.path) )
-            #
-            #state.config.logger.dbg( "GetTransactionElements:  {0}".format(elemList) )
-            
-            return elemList
-        else:
-            state.config.logger.dbg( "GetTransactionElements: transaction.versions is None" )
-    else:
-        state.config.logger.dbg( "GetTransactionElements: transaction is None" )
-
-    return None
-
-def DiffChangeWhatPriority(changeWhat):
-    if changeWhat == "defuncted":
-        return 4
-    elif changeWhat == "moved":
-        return 3
-    elif changeWhat == "version":
-        return 2
-    elif changeWhat == "created":
-        # warning: this element doesn't have a change.stream1!
-        return 1
-    elif changeWhat == "eid":
-        # Special case...? Seen with symlinks...
-        return 0
-    else:
-        return 0
-    
-def SplitElementsByStatusViaDiff(transaction):
-    # Warning: Fails if you've added a file in the workspace and then immediately defuncted it. It notifies us that the file has been "created" when it should be "defuncted" already...
-    lastTransactionId = state.GetLastConvertedTransaction()
-    stream = GetTransactionDestStream(transaction)
-    
-    diffResult = accurev.diff(all=True, informationOnly=True, verSpec1=stream, verSpec2=stream, transactionRange="{0}-{1}".format(lastTransactionId, transaction.id))
-    
-    elemList = []
-    for version in transaction.versions:
-        elemList.append(version.path)
-    
-    # All items in the elem list are depot relative path names. Here we convert them to absolute paths
-    if len(elemList) > 0:
-        depotRelativePrefix = elemList[0][:2]
-        
-        if diffResult is not None:
-            memberList = []
-            defunctList = []
-            for diffElem in diffResult.elements:
-                mostRecentChange = None
-                # Pick the most resent or the most pressing change!
-                for change in diffElem.changes:
-                    if change is not None and change.stream2 is not None and change.stream2.version is not None: # Special check change.stream2.version is for eid changes... Skip please!
-                        if mostRecentChange is None or mostRecentChange.stream2.version.version < change.stream2.version.version:
-                            mostRecentChange = change
-                        elif mostRecentChange.stream2.version.version == change.stream2.version.version:
-                            if DiffChangeWhatPriority(mostRecentChange.what) < DiffChangeWhatPriority(change.what):
-                                mostRecentChange = change
-                    
-                stream2Name = "{0}{1}".format(depotRelativePrefix, mostRecentChange.stream2.name)
-                stream1Name = None
-                if mostRecentChange.stream1 is not None:
-                    stream1Name = "{0}{1}".format(depotRelativePrefix, mostRecentChange.stream1.name)
-                
-                if stream2Name in elemList:
-                    if mostRecentChange.what == "version":
-                        memberList.append(stream2Name)
-                    elif mostRecentChange.what == "defuncted":
-                        defunctList.append(stream2Name)
-                    elif mostRecentChange.what == "created":
-                        # warning: this element doesn't have a mostRecentChange.stream1!
-                        memberList.append(stream2Name)
-                    elif mostRecentChange.what == "moved":
-                        defunctList.append(stream1Name)
-                        memberList.append(stream2Name)
-                    else:
-                        raise Exception("SplitElementsByStatusViaDiff: Unexpected [{0}] value for Change element's What attribute found!")
-            
-            return memberList, defunctList
-        raise Exception("SplitElementsByStatusViaDiff: could not diff stream {0} transaction range {1}-{2}".format(stream, lastTransactionId, transactionId))
-    return [], []
-
-def GetParentPaths(elemPath):
-    parents = []
-    if elemPath is not None:
-        while True:
-            elemPath = os.path.dirname(elemPath)
-            if elemPath.replace('\\', '/') == '/.':
-                break
-            parents.append(elemPath)
-    
-    return parents
-
-def SplitElementsByStatusViaStat(transaction):
-    # THe statuses that we care about are member, defunct and stranded.
-    defunct  = copy.deepcopy(transaction)
-    stranded = copy.deepcopy(transaction)
-    member   = copy.deepcopy(transaction)
-    
-    # Make sure to check for "stranded" elements as well!
-    # Check if any of the parent directories are defunct. All subdirectories and files in defunct
-    # directories that are not defunct themselves are stranded!
-    
-    # Get list of all the parent directories of the elements in the elemList.
-    dirList = []
-    elemList = []
-    for version in transaction.versions:
-        elemList.append(version.path)
-        elemParents = GetParentPaths(version.path)
-        for parent in elemParents:
-            if parent not in dirList:
-                dirList.append(parent)
-    
-    fullList = dirList + elemList # concatenate the two lists
-    
-    stream = GetTransactionDestStream(transaction)
-    if len(fullList) > 0:
-        tmpFilename = '.stat_list'
-        tmpFile = open(name=tmpFilename, mode='w')
-        for elem in fullList:
-            tmpFile.write('{0}\n'.format(elem))
-        tmpFile.close()
-        info = accurev.stat(stream=stream, timeSpec=transaction.id, listFile=tmpFilename)
-        os.remove(tmpFilename)
-    else:
-        return ([], [])
-
-    if info is not None:
-        defunct.versions  = []
-        stranded.versions = []
-        member.versions   = []
-        
-        infoDict = {}
-        for infoElem in info.elements:
-            infoLoc = infoElem.location.replace('\\', '/')
-            infoDict[infoLoc] = ("(defunct)" in infoElem.statusList)
-            
-        for version in transaction.versions:
-            # Try and find the element in the defunct element list
-            elemStr = version.path.replace('\\', '/')
-            try:
-                # Check if the elemet is defunct
-                isDefunct = infoDict[elemStr]
-                isStranded = False
-                if not isDefunct:
-                    # Check if any of the parent directories are defunct.
-                    parents = GetParentPaths(version.path)
-                    for parent in parents:
-                        try:
-                            if infoDict[parent.replace('\\', '/')]:
-                                isStranded = True
-                                break
-                        except KeyError:
-                            raise Exception("Error, the element {0} status not found in the returned accurev status list {1}.".format(parent.replace('\\', '/'), infoDict.keys()))
-            except KeyError:
-                # One of the paths tested is not in the map...
-                raise Exception("Error, the element {0} status not found in the returned accurev status list {1}.".format(elemStr, infoDict.keys()))
-                
-            # Add it to the correct sublist
-            if isDefunct:
-                defunct.versions.append(version)
-            elif isStranded:
-                stranded.versions.append(version)
-            else:
-                member.versions.append(version)
-        
-        return member, defunct, stranded
-    else:
-        raise Exception("Error in SplitElementsByStatusViaStat: accurev.stat(stream={0}, timeSpec={1}, elementList={2}) returned None".format(stream, transactionId, elemList))
-
-def PopAccurevTransaction(transaction, dstPath='.'):
-    state.config.logger.dbg( "pop #{0}: {1} files to {2}".format(transaction.id, len(transaction.versions), dstPath) )
-    stream = GetTransactionDestStream(transaction)
-    
-    # If the element list is large, use the list file feature of AccuRev
-    tmpFilename = '.pop_list'
-    tmpFile = open(name=tmpFilename, mode='w')
-    for version in transaction.versions:
-        tmpFile.write('{0}\n'.format(version.path))
-    tmpFile.close()
-    rv = accurev.pop(isOverride=True, verSpec=stream, location=dstPath, timeSpec=transaction.id, listFile=tmpFilename)
-    os.remove(tmpFilename)
-    return rv
-    
-# CatAccurevFile is used if you only want to get the file contents of the accurev file. The only
-# difference between cat and co/pop is that cat doesn't set the executable bits on Linux.
-def CatAccurevFile(elementId=None, depotName=None, verSpec=None, element=None, gitPath=None, isBinary=False):
-    # TODO: Change back to using accurev pop -v <stream-name> -t <transaction-number> -L <git-repo-path> <element-list>
-    filePath = LocalElementPath(accurevDepotElementPath=element, gitRepoPath=gitPath)
-    fileDir  = os.path.dirname(filePath)
-    if fileDir is not None and len(fileDir) > 0 and not os.path.exists(fileDir):
-        os.makedirs(fileDir)
-    success = accurev.cat(elementId=elementId, depotName=depotName, verSpec=str(verSpec), outputFilename=filePath)
-    if success is None:
-        return False
-    return True
-
-def GitCommit(gitRepo, branch, author, date, message, addList, rmList):
-    global maxCommandLength
-    
-    if branch is not None:
-        CheckoutBranch(gitRepo, branch)
-    
-    # Add the items in groups of maxItems so that we don't exceed the max number of command line args.
-    while True:
-        tmpLen = 0
-        tmpList = []
-        while tmpLen < maxCommandLength and len(addList) > 0:
-            tmp = addList.pop(0)
-            tmpLen += len(tmp)
-            tmpList.append(tmp)
-        
-        if len(tmpList) > 0:
-            if not gitRepo.add(tmpList, force=True):
-                state.config.logger.dbg( "git add failed for one off: {0}".format(tmpList) )
-        else:
-            break
-    
-    # Remove the items in groups of maxItems so that we don't exceed the max number of command line args.
-    while True:
-        tmpLen = 0
-        tmpList = []
-        while tmpLen < maxCommandLength and len(rmList) > 0:
-            tmp = rmList.pop(0)
-            tmpLen += len(tmp)
-            tmpList.append(tmp)
-        
-        if len(tmpList) > 0:
-            if not gitRepo.rm(tmpList):
-                state.config.logger.dbg( "git rm failed for one off: {0}".format(tmpList) )
-        else:
-            break
-    
-    if len(message) > maxCommandLength:
-        tmpFilename = '.commit_message'
-        tmpFile = open(name=tmpFilename, mode='w')
-        tmpFile.write('{0}'.format(message))
-        tmpFile.close()
-        
-        success = gitRepo.commit(messageFile=tmpFilename, author=author, date=date)
-        
-        os.remove(tmpFilename)
-    else:
-        success = gitRepo.commit(message=message, author=author, date=date)
-    
-    return success
-
-def GetLastCommitHash():
-    lastCommit = subprocess.check_output(['git', 'log', '-1']).strip()
-    reMsgTemplate = re.compile('commit ([0-9a-fA-F]{6,})')
-    reMatchObj = reMsgTemplate.search(lastCommit)
-    if reMatchObj:
-        return reMatchObj.group(1)
-    return None
-        
-# GetGitUserDetails returns the git information from the config mapping for the given accurev user.
-def GetGitUserDetails(accurevUsername):
-    if accurevUsername is not None:
-        for usermap in state.config.usermaps:
-            if usermap.accurevUsername == accurevUsername:
-                return (usermap.gitName, usermap.gitEmail)
-                
-    return None, None
-
-# AccurevUser2GitAuthor converts an accurev username into a git username by using the provided mapping and
-# it also handles usernames which aren't in the mapping by creating one for them.
-def AccurevUser2GitAuthor(accurevUser):
-    name, email = GetGitUserDetails(accurevUser)
-    if name is None:
-        name = accurevUser
-    if email is None:
-        email = "{0}@no-email.com".format(accurevUser)
-    return u'{0} <{1}>'.format(name, email)
-
-# AccurevComment2GitMessage tags the commit message from AccuRev with information regarding the transaction
-# from which the given commit has been generated.
-def AccurevComment2GitMessage(accurevTransaction):
-    transTag = "[AccuRev Transaction #{0}]".format(accurevTransaction.id)
-    comment = "[no original comment]"
-    if accurevTransaction.comment is not None:
-        comment = accurevTransaction.comment
-    return u'{0}\n\n{1}'.format(comment, transTag)
-
-def RecursivelyRemoveDir(path):
-    for root, dirs, files in os.walk(path, topdown=False):
-        for name in files:
-            os.remove(os.path.join(root, name))
-        for name in dirs:
-            os.rmdir(os.path.join(root, name))
-    return True
-
-# ################################################################################################ #
-# Script Core. AccuRev transaction to Git conversion handlers.                                     #
-# ################################################################################################ #
-def OnAdd(transaction, gitRepo):
-    # Due to the fact that the accurev pop operation cannot retrieve defunct files when we use it
-    # outside of a workspace and that workspaces cannot reparent themselves under workspaces
-    # we must restrict ourselves to only processing stream operations, promotions.
-    state.config.logger.dbg( "Ignored transaction #{0}: add".format(transaction.id) )
-
-def OnChstream(transaction, gitRepo):
-    # We determine which branch something needs to go to on the basis of the real/virtual version
-    # there is no need to track all the stream changes.
-    state.config.logger.dbg( "Ignored transaction #{0}: chstream".format(transaction.id) )
-    
-def OnCo(transaction, gitRepo):
-    # The co (checkout) transaction can be safely ignored.
-    state.config.logger.dbg( "Ignored transaction #{0}: co".format(transaction.id) )
-
-def OnKeep(transaction, gitRepo):
-    # Due to the fact that the accurev pop operation cannot retrieve defunct files when we use it
-    # outside of a workspace and that workspaces cannot reparent themselves under workspaces
-    # we must restrict ourselves to only processing stream operations, promotions.
-    state.config.logger.dbg( "Ignored transaction #{0}: keep".format(transaction.id) )
-
-def OnPromote(transaction, gitRepo):
-    global state
-    state.config.logger.dbg( "Transaction #{0}: promote".format(transaction.id) )
-    
-    if len(transaction.versions) > 0:
-        stream = GetTransactionDestStream(transaction)
-        
-        if stream is not None:
-            if not state.IsStreamAllowed(stream):
-                state.config.logger.dbg( "Skipped transaction #{0}. Stream {1} is not allowed.".format(transaction.id, stream) )
-                return False
-            else:
-                state.config.logger.dbg( "Branch:", stream )
-            
-            # Generate the lists of files to add and remove
-            #memberList, defunctList = SplitElementsByStatusViaDiff(transaction)
-            member, defunct, stranded = SplitElementsByStatusViaStat(transaction)
-            
-            addList = []
-            if len(member.versions) > 0:
-                if PopAccurevTransaction(member, state.config.git.repoPath):
-                    for version in member.versions:
-                        if not version.dir:
-                            addList.append(LocalElementPath(accurevDepotElementPath=version.path, gitRepoPath=state.config.git.repoPath, isAbsolute=False))
-                else:
-                    state.config.logger.error( "Failed to populate transaction #{0}.".format(transaction.id) )
-                    sys.exit(1)
-            else:
-                state.config.logger.dbg( "Did not pop transaction #{0}, stream {1}, elements {2}".format(transaction.id, stream, member.versions) )
-                    
-            rmList = []
-            if len(defunct.versions) > 0:
-                for version in defunct.versions:
-                    if version.dir and not (version.elemType == 'slink' or version.elemType == 'elink'):
-                        RecursivelyRemoveDir(version.path)
-                        gitRepo.add(update=True)
-                    else:
-                        rmList.append(LocalElementPath(accurevDepotElementPath=version.path, gitRepoPath=state.config.git.repoPath, isAbsolute=False))
-            
-            dbgFileMsg = "+{0}/-{1}".format(str(len(member.versions)), str(len(defunct.versions)))
-            
-            # If we have something to commit then:
-            if len(addList) > 0 or len(rmList) > 0:
-                # Generate the commit message
-                commitMessage = AccurevComment2GitMessage(transaction)
-
-                # Generate the git Author
-                gitAuthor = AccurevUser2GitAuthor(transaction.user)
-                
-                # Do the commit
-                status = GitCommit(gitRepo=gitRepo, branch=stream, author=gitAuthor, date=transaction.time, message=commitMessage, addList=addList, rmList=rmList)
-
-                if status:
-                    state.config.logger.info( "Committed transaction #{0} as {1}. {2} files".format(transaction.id, GetLastCommitHash(), dbgFileMsg) )
-                elif gitRepo.lastError is not None:
-                    if "nothing to commit, working directory clean" in gitRepo.lastError.output:
-                        state.config.logger.info( "Skipped transaction #{0}. {1} files. Nothing to commit.".format(transaction.id, dbgFileMsg) )
-                        status = True
-                else:
-                    state.config.logger.error( "Failed to commit transaction #{0}. {1} files.\n{2}".format(transaction.id, dbgFileMsg, gitRepo.lastError.output) )
-                    sys.exit(1)
-                return status
-            else:
-                state.config.logger.dbg( "Did not commit empty transaction #{0}.".format(transaction.id) )
-        else:
-            state.config.logger.dbg( "Transaction #{0}. Could not determine stream.".format(transaction.id) )
-    else:
-        state.config.logger.dbg( "Transaction #{0} has no elements.".format(transaction.id) )
-        
-    return False
-
-def OnMove(transaction, gitRepo):
-    state.config.logger.dbg( "Ignored transaction #{0}: move".format(transaction.id) )
-    # stream = GetTransactionDestStream(transaction)
-    # addList = []
-    # for move in transaction.moves:
-    #     if os.path.exists(move.dest):
-    #         state.config.logger.error( "Transaction #{0}. Moves {1} to an existing file/dir {2}".format(transaction.id, move.source, move.dest) )
-    #         sys.exit(1)
-    #     else:
-    #         try:
-    #             os.rename(move.source, move.dest)
-    #         except OSError:
-    #             state.config.logger.error( "Transaction #{0}. Failed to move {1} to {2}".format(transaction.id, move.source, move.dest) )
-    #             sys.exit(1)
-    #         
-    #         addList.append(move.dest)
-    # 
-    # # Generate the commit message
-    # commitMessage = AccurevComment2GitMessage(transaction)
-    # 
-    # # Generate the git Author
-    # gitAuthor = AccurevUser2GitAuthor(transaction.user)
-    # 
-    # # Do the commit
-    # status = GitCommit(gitRepo=state.gitRepo, branch=stream, author=gitAuthor, date=transaction.time, message=commitMessage, addList=addList, rmList=[])
-
-def OnMkstream(transaction, gitRepo):
-    # The mkstream command doesn't contain enough information to create a branch in git.
-    # Silently ignore.
-    state.config.logger.dbg( "Ignored transaction #{0}: mkstream".format(transaction.id) )
-
-def OnPurge(transaction, gitRepo):
-    state.config.logger.dbg( "Ignored transaction #{0}: purge".format(transaction.id) )
-    # If done on a stream, must be translated to a checkout of the original element from the basis.
-
-def OnDefunct(transaction, gitRepo):
-    state.config.logger.dbg( "Ignored transaction #{0}: defunct".format(transaction.id) )
-
-def OnUndefunct(transaction, gitRepo):
-    state.config.logger.dbg( "Ignored transaction #{0}: undefunct".format(transaction.id) )
-
-def OnDefcomp(transaction, gitRepo):
-    # The defcomp command is not visible to the user; it is used in the implementation of the 
-    # include/exclude facility CLI commands incl, excl, incldo, and clear.
-    # Source: http://www.accurev.com/download/docs/5.5.0_books/AccuRev_WebHelp/AccuRev_Admin/wwhelp/wwhimpl/common/html/wwhelp.htm#context=admin&file=pre_op_trigs.html
-    state.config.logger.dbg( "Ignored transaction #{0}: defcomp".format(transaction.id) )
 
 # ################################################################################################ #
 # Script Classes                                                                                   #
@@ -585,25 +71,30 @@ class Config(object):
                 startTransaction = xmlElement.attrib.get('start-transaction')
                 endTransaction   = xmlElement.attrib.get('end-transaction')
                 
-                streamList = None
+                streamMap = None
                 streamListElement = xmlElement.find('stream-list')
                 if streamListElement is not None:
-                    streamList = []
+                    streamMap = OrderedDict()
                     streamElementList = streamListElement.findall('stream')
                     for streamElement in streamElementList:
-                        streamList.append(streamElement.text)
+                        streamName = streamElement.text
+                        branchName = streamElement.attrib.get("branch-name")
+                        if branchName is None:
+                            branchName = streamName
+
+                        streamMap[streamName] = branchName
                 
-                return cls(depot, username, password, startTransaction, endTransaction, streamList)
+                return cls(depot, username, password, startTransaction, endTransaction, streamMap)
             else:
                 return None
             
-        def __init__(self, depot, username = None, password = None, startTransaction = None, endTransaction = None, streamList = None):
+        def __init__(self, depot, username = None, password = None, startTransaction = None, endTransaction = None, streamMap = None):
             self.depot    = depot
             self.username = username
             self.password = password
             self.startTransaction = startTransaction
             self.endTransaction   = endTransaction
-            self.streamList = streamList
+            self.streamMap = streamMap
     
         def __repr__(self):
             str = "Config.AccuRev(depot=" + repr(self.depot)
@@ -611,8 +102,8 @@ class Config(object):
             str += ", password="          + repr(self.password)
             str += ", startTransaction="  + repr(self.startTransaction)
             str += ", endTransaction="    + repr(self.endTransaction)
-            if streamList is not None:
-                str += ", streamList="    + repr(self.streamList)
+            if streamMap is not None:
+                str += ", streamMap="    + repr(self.streamMap)
             str += ")"
             
             return str
@@ -708,103 +199,125 @@ class Config(object):
         
         return str
 
+# Prescribed recepie:
+# - Get the list of tracked streams from the config file.
+# - For each stream in the list
+#   + If this stream is new (there is no data in git for it yet)
+#     * Create the git branch for the stream
+#     * Get the stream create (mkstream) transaction number and set it to be the start-transaction. Note: The first stream in the depot has no mkstream transaction.
+#   + otherwise
+#     * Get the last processed transaction number and set that to be the start-transaction.
+#     * Obtain a diff from accurev listing all of the files that have changed and delete them all.
+#   + Get the end-transaction from the user or from accurev's highest/now keyword for the hist command.
+#   + For all transactions between the start-transaction and end-transaction
+#     * Checkout the git branch at latest (or just checkout if no-commits yet).
+#     * Populate the retrieved transaction with the recursive option but without the overwrite option (quick).
+#     * Preserve empty directories by adding .gitignore files.
+#     * Commit the current state of the directory but don't respect the .gitignore file contents. (in case it was added to accurev in the past).
+#     * Increment the transaction number by one
+#     * Obtain a diff from accurev listing all of the files that have changed and delete them all.
 class AccuRev2Git(object):
     def __init__(self, config):
         self.config = config
-        self.transactionHandlers = { "add": OnAdd, "chstream": OnChstream, "co": OnCo, "defunct": OnDefunct, "keep": OnKeep, "promote": OnPromote, "move": OnMove, "mkstream": OnMkstream, "purge": OnPurge, "undefunct": OnUndefunct, "defcomp": OnDefcomp }
         self.cwd = None
         self.gitRepo = None
-        self.accurevStreams = None
+        self.gitBranchList = None
     
-    def GetStreamNameFromId(self, streamId):
-        if self.accurevStreams is None:
-            self.accurevStreams = accurev.show.streams(depot=self.config.accurev.depot)
-            
-        for stream in self.accurevStreams:
-            if str(streamId) == str(stream.streamNumber):
-                return stream.name
-        
-        return None
-    
-    def IsStreamAllowed(self, streamName):
-        if streamName is not None:
-            if self.config.accurev.streamList is not None:
-                if streamName not in state.config.accurev.streamList:
-                    return False
-            return True
-        return False
-    
-    def GetLastConvertedTransaction(self):
-        # TODO: Fix me! We don't have a way of retrieving the last accurev transaction that we
-        #               processed yet. This will most likely involve parsing the git history in some
-        #               way.
-        status = subprocess.check_output(['git', 'status'])
-        if status.find('Initial commit') >= 0:
-            # This is an initial commit so we need to start from the beginning.
-            try:
-                return int(self.config.accurev.startTransaction)
-            except:
-                self.config.logger.error("Error: Couldn't convert the start transaction to integer [{0}]\n".format(self.config.accurev.startTransaction))
-                sys.exit(1)
+    def ClearGitRepo(self):
+        # Delete everything except the .git folder from the destination (git repo)
+        for root, dirs, files in os.walk(self.gitRepo.path, topdown=False):
+            for name in files:
+                path = os.path.join(root, name).replace('\\', '/')
+                if path[-1:] != '/' and os.path.isdir(path):
+                    path += ('/')
+                if '/.git/' not in path and path[:len('.git/')] != '.git/':
+                    os.remove(path)
+            for name in dirs:
+                path = os.path.join(root, name).replace('\\', '/')
+                if path[-1:] != '/' and os.path.isdir(path):
+                    path += ('/')
+                if '/.git/' not in path and path[:len('.git/')] != '.git/':
+                    os.rmdir(path)
+
+    def PreserveEmptyDirs(self):
+        for root, dirs, files in os.walk(self.gitRepo.path, topdown=True):
+            for name in dirs:
+                path = os.path.join(root, name).replace('\\','/')
+                if len(os.listdir(path)) == 0:
+                    filename = os.path.join(path, '.gitignore')
+                    with open(filename, 'w') as file:
+                        file.write('# accurev2git.py preserve empty dirs\n')
+
+    def GetGitUserFromAccuRevUser(self, accurevUsername):
+        if accurevUsername is not None:
+            for usermap in self.config.usermaps:
+                if usermap.accurevUsername == accurevUsername:
+                    return "{0} <{1}>".format(usermap.gitName, usermap.gitEmail)
+        state.config.logger.error("Cannot find git details for accurev username {0}".format(accurevUsername))
+        return accurevUsername
+
+    def NewStreamInitialCommit(self, streamName, branchName):
+        # Get the stream creation transaction (mkstream). Note: The first stream in the depot doesn't have an mkstream transaction.
+        mkstream = accurev.hist(stream=streamName, transactionKind="mkstream", timeSpec="now")
+        if len(mkstream.transactions) == 0:
+            self.config.logger.info( "The root stream has no mkstream transaction. Starting at transaction 1." )
+            trId = 1
+            trComment = ''
         else:
-            #lastbranch = subprocess.check_output('git config accurev.lastbranch').strip()
-            #subprocess.check_output('git checkout {0}'.format(lastbranch))
-            lastCommit = subprocess.check_output(['git', 'log', '-1']).strip()
-            reMsgTemplate = re.compile('AccuRev Transaction #([0-9]+)')
-            reMatchObj = reMsgTemplate.search(lastCommit)
-            if reMatchObj:
-                transactionId = int(reMatchObj.group(1))
-                return transactionId + 1 # continue from the next transaction
-                
-        return None
+            tr = mkstream.transactions[0]
+            trId = tr.id
+            trComment = tr.comment
+            if len(mkstream.transactions) != 1:
+                self.config.logger.warning( "Error: There seem to be multiple mkstream transactions for this stream... Using {0}".format(trId) )
         
-    def GetEndTransactionNumber(self, endTransaction="now"):
-        arHist = accurev.hist(depot=self.config.accurev.depot, timeSpec="{0}.1".format(endTransaction))
-        if arHist is not None and len(arHist.transactions) > 0:
-            return arHist.transactions[0].id
-        return -1
-        
-    # ProcessAccuRevTransaction
-    #   Processes an individual AccuRev transaction by calling its corresponding handler.
-    def ProcessAccuRevTransaction(self, transaction):
-        handler = self.transactionHandlers.get(transaction.Type)
-        if handler is not None:
-            handler(transaction, self.gitRepo)
+
+        # Create the git branch.
+        self.config.logger.info( "Creating {0}".format(branchName) )
+        self.gitRepo.checkout(branchName=branchName, isOrphan=True)
+
+        # Clear the index as it may contain the [start-point] info...
+        self.gitRepo.rm(fileList=['.'], force=True, recursive=True)
+        self.ClearGitRepo()
+
+        # Populate the stream's state at creation
+        self.config.logger.info( "Populating mkstream {0} for {1}".format(trId, streamName) )
+        accurev.pop(verSpec=streamName, location=self.gitRepo.path, isRecursive=True, timeSpec=trId, elementList='.')
+        self.PreserveEmptyDirs()
+
+        # Add all of the files to the index
+        self.gitRepo.add(force=True, all=True)
+
+        # Make the first commit
+        if self.gitRepo.commit(message=trComment, committer=self.GetGitUserFromAccuRevUser(tr.user), committer_date=tr.time, allow_empty_message=True):
+            self.config.logger.info( "Committed" )
         else:
-            self.config.logger.error("Error: No handler for [\"{0}\"] transactions\n".format(transaction.Type))
-        
-    # ProcessAccuRevTransactionRange
-    #   Iterates over accurev transactions between the startTransaction and endTransaction processing
-    #  each of them in turn. If maxTransactions is given as a positive integer it will process at 
-    #  most maxTransactions.
-    def ProcessAccuRevTransactionRange(self, startTransaction=1, endTransaction="now", maxTransactions=None):
-        timeSpec = "{0}-{1}".format(startTransaction, endTransaction)
-        if maxTransactions is not None and maxTransactions > 0:
-            timeSpec = "{0}.{1}".format(timeSpec, maxTransactions)
-        
-        self.config.logger.info( "Querying history. (time-spec: {0})".format(timeSpec) )
-        
-        arHist = None
-        errorCount = 0
-        maxRetries = 5
-        while errorCount < maxRetries:
-            try:
-                arHist = accurev.hist(depot=self.config.accurev.depot, timeSpec=timeSpec, allElementsFlag=True)
+            self.config.logger.error( "Failed to commit" )
+
+        # Write the commit notes consisting of the accurev hist xml output for the transaction
+
+    def ProcessStream(self, streamName, branchName):
+        self.config.logger.info( "Processing {0}".format(streamName) )
+        # Find the matching git branch
+        branch = None
+        for b in self.gitBranchList:
+            if branchName == branch.name:
+                branch = b
                 break
-            except:
-                self.config.logger.info( "Failed to query history! Retry count {0}/{1}. (time-spec: {2})".format(errorCount, maxRetries, timeSpec) )
-                time.sleep(5)
-                errorCount += 1
-        
-        if arHist is not None:
-            if len(arHist.transactions) > 0:
-                for transaction in arHist.transactions:
-                    self.ProcessAccuRevTransaction(transaction)
-        
-            return len(arHist.transactions)
-        
-        return -1
-            
+        if branch is None:
+            # We are tracking a new stream:
+            #   * Create the git branch
+            #   * Get the stream create (mkstream) transaction number. This is our first transaction.
+            self.NewStreamInitialCommit(streamName, branchName)
+        else:
+            # We have a git branch that matches and by assumption an existing stream.
+            #   * 
+            pass
+
+    def ProcessStreams(self):
+        for stream in self.config.accurev.streamMap:
+            branch = self.config.accurev.streamMap[stream]
+            self.ProcessStream(stream, branch)
+
     def InitGitRepo(self, gitRepoPath):
         gitRootDir, gitRepoDir = os.path.split(gitRepoPath)
         if os.path.isdir(gitRootDir):
@@ -844,50 +357,30 @@ class AccuRev2Git(object):
         
         if self.InitGitRepo(self.config.git.repoPath):
             self.gitRepo = git.open(self.config.git.repoPath)
+            self.gitBranchList = self.gitRepo.branch_list()
             if not isRestart:
                 #self.gitRepo.reset(isHard=True)
                 self.gitRepo.clean(force=True)
             
             if accurev.login(self.config.accurev.username, self.config.accurev.password):
-                state.config.logger.info( "Accurev login successful" )
+                self.config.logger.info( "Accurev login successful" )
                 
-                continueFromTransaction = self.GetLastConvertedTransaction()
-                endTransaction = self.GetEndTransactionNumber(self.config.accurev.endTransaction)
-                if continueFromTransaction is None:
-                    state.config.logger.error( "Could not determine at which transaction to continue." )
-                    state.config.logger.error( "Error in parsing the git repo history. Conversion aborted!" )
-                    return 1
-                elif self.config.accurev.startTransaction == continueFromTransaction:
-                    state.config.logger.info( "Starting from transaction: #{0}".format(continueFromTransaction) )
-                else:
-                    state.config.logger.info( "Continuing from transaction: #{0}".format(continueFromTransaction) )
-                
-                # Process the transactions maxTransactions at a time. This is because the accurev data is stored
-                # in memory and can overwhelm this script.
-                while endTransaction - continueFromTransaction > maxTransactions:
-                    stopAtTransaction = continueFromTransaction + maxTransactions - 1 # The accurev hist command's range is inclusive [start, end] while here we are treating it as exclusive [start, end). Adjusted with -1.
-                    # Process the first maxTransactions transactions
-                    numProcessed = self.ProcessAccuRevTransactionRange(startTransaction=continueFromTransaction, endTransaction=stopAtTransaction)
-                    continueFromTransaction += maxTransactions
-                
-                # Process the remaining transactions.
-                if endTransaction - continueFromTransaction > 0:
-                    numProcessed = self.ProcessAccuRevTransactionRange(startTransaction=continueFromTransaction, endTransaction=endTransaction)
-                
+                self.ProcessStreams()
+              
                 # Restore the working directory.
                 os.chdir(self.cwd)
                 
                 if accurev.logout():
-                    state.config.logger.info( "Accurev logout successful" )
+                    self.config.logger.info( "Accurev logout successful" )
                     return 0
                 else:
-                    state.config.logger.error("Accurev logout failed\n")
+                    self.config.logger.error("Accurev logout failed\n")
                     return 1
             else:
-                state.config.logger.error("AccuRev login failed.\n")
+                self.config.logger.error("AccuRev login failed.\n")
                 return 1
         else:
-            state.config.logger.error( "Could not create git repository." )
+            self.config.logger.error( "Could not create git repository." )
             
     def Restart(self):
         return self.Start(isRestart=True)
@@ -911,8 +404,10 @@ def DumpExampleConfigFile(outputFilename):
         start-transaction="1" 
         end-transaction="500" >
         <!-- The stream-list is optional. If not given all streams are processed -->
+        <!-- The branch-name attribute is also optional for each stream element. If provided it specifies the git branch name to which the stream will be mapped. -->
         <stream-list>
-            <stream>some_stream</stream>
+            <stream branch-name="some_branch">some_stream</stream>
+            <stream>some_other_stream</stream>
         </stream-list>
     </accurev>
     <git repo-path="/put/the/git/repo/here" /> <!-- The system path where you want the git repo to be populated. Note: this folder should already exist. -->
@@ -930,16 +425,16 @@ def ValidateConfig(config):
     # Validate the program args and configuration up to this point.
     isValid = True
     if config.accurev.username is None:
-        state.config.logger.error("No AccuRev username specified.\n")
+        config.logger.error("No AccuRev username specified.\n")
         isValid = False
     if config.accurev.password is None:
-        state.config.logger.error("No AccuRev password specified.\n")
+        config.logger.error("No AccuRev password specified.\n")
         isValid = False
     if config.accurev.depot is None:
-        state.config.logger.error("No AccuRev depot specified.\n")
+        config.logger.error("No AccuRev depot specified.\n")
         isValid = False
     if config.git.repoPath is None:
-        state.config.logger.error("No Git repository specified.\n")
+        config.logger.error("No Git repository specified.\n")
         isValid = False
     
     return isValid
@@ -962,7 +457,7 @@ def LoadConfigOrDefaults(scriptName):
         config = Config.fromxmlstring(configXml)
 
     if config is None:
-        config = Config(Config.AccuRev(), Config.Git(), [])
+        config = Config(Config.AccuRev(None), Config.Git(None), [])
         
     return config
 
@@ -973,10 +468,10 @@ def PrintConfigSummary(config):
         config.logger.info('    repo path:{0}'.format(config.git.repoPath))
         config.logger.info('  accurev:')
         config.logger.info('    depot: {0}'.format(config.accurev.depot))
-        if config.accurev.streamList is not None:
+        if config.accurev.streamMap is not None:
             config.logger.info('    stream list:')
-            for stream in config.accurev.streamList:
-                config.logger.info('      - {0}'.format(stream))
+            for stream in config.accurev.streamMap:
+                config.logger.info('      - {0} -> {1}'.format(stream, config.accurev.streamMap[stream]))
         else:
             config.logger.info('    stream list: all included')
         config.logger.info('    start tran.: #{0}'.format(config.accurev.startTransaction))
