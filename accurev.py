@@ -1012,6 +1012,73 @@ class obj:
             else:
                 return None
 
+    class Info(object):
+        lineMatcher = re.compile(r'^(.+):[\s]+(.+)$')
+
+        def __init__(self, principal, host, serverName, port, dbEncoding, ACCUREV_BIN, clientTime, serverTime, clientVer=None, serverVer=None, depot=None, workspaceRef=None, basis=None, top=None):
+            self.principal    = principal
+            self.host         = host
+            self.clientVer    = clientVer
+            self.serverName   = serverName
+            self.port         = port
+            self.dbEncoding   = dbEncoding
+            self.ACCUREV_BIN  = ACCUREV_BIN
+            self.serverVer    = serverVer
+            self.clientTime   = clientTime
+            self.serverTime   = serverTime
+            self.depot        = depot
+            self.workspaceRef = workspaceRef
+            self.basis        = basis
+            self.top          = top
+
+        def __repr__(self):
+            str  = "Principal:      {0}\n".format(self.principal)
+            str += "Host:           {0}\n".format(self.host)
+            if self.clientVer is not None:
+                str += "client_ver:     {0}\n".format(self.clientVer)
+            str += "Server name:    {0}\n".format(self.serverName)
+            str += "Port:           {0}\n".format(self.port)
+            str += "DB Encoding:    {0}\n".format(self.dbEncoding)
+            str += "ACCUREV_BIN:    {0}\n".format(self.ACCUREV_BIN)
+            if self.serverVer is not None:
+                str += "server_ver:     {0}\n".format(self.serverVer)
+            str += "Client time:    {0}\n".format(self.clientTime)
+            str += "Server time:    {0}\n".format(self.serverTime)
+            if self.depot is not None:
+                str += "Depot:          {0}\n".format(self.depot)
+            if self.workspaceRef is not None:
+                str += "Workspace/ref:  {0}\n".format(self.workspaceRef)
+            if self.basis is not None:
+                str += "Basis:          {0}\n".format(self.basis)
+            if self.top is not None:
+                str += "Top:            {0}\n".format(self.top)
+
+            return str
+
+        @classmethod
+        def fromstring(cls, string):
+            itemMap = {}
+            lines = string.split('\n')
+            for line in lines:
+                match = cls.lineMatcher.search(line)
+                if match:
+                    itemMap[match.group(1)] = match.group(2)
+
+            return cls(principal=itemMap["Principal"]          \
+                       , host=itemMap["Host"]                  \
+                       , serverName=itemMap["Server name"]     \
+                       , port=itemMap["Port"]                  \
+                       , dbEncoding=itemMap["DB Encoding"]     \
+                       , ACCUREV_BIN=itemMap["ACCUREV_BIN"]    \
+                       , clientTime=itemMap["Client time"]     \
+                       , serverTime=itemMap["Server time"]     \
+                       , clientVer=itemMap.get("client_ver")   \
+                       , serverVer=itemMap.get("server_ver")   \
+                       , depot=itemMap.get("Depot")            \
+                       , workspaceRef=itemMap.get("Workspace/ref") \
+                       , basis=itemMap.get("Basis")            \
+                       , top=itemMap.get("Top"))
+
 
 # ################################################################################################ #
 # AccuRev raw commands                                                                             #
@@ -1490,6 +1557,15 @@ class raw(object):
             cmd.append('-O')
         
         return raw._runCommand(cmd, outputFilename)
+
+    @staticmethod
+    def info(showVersion=False):
+        cmd = [ raw._accurevCmd, "info" ]
+
+        if showVersion:
+            cmd.append('-v')
+
+        return raw._runCommand(cmd)
         
     class show(object):
         @staticmethod
@@ -1687,6 +1763,10 @@ def update(refTree=None, doPreview=False, transactionNumber=None, mergeOnUpdate=
     outputXml = raw.update(refTree=refTree, doPreview=doPreview, transactionNumber=transactionNumber, mergeOnUpdate=mergeOnUpdate, isXmlOutput=True, isOverride=isOverride, outputFilename=outputFilename)
     return obj.Update.fromxmlstring(outputXml)
     
+def info(showVersion=False):
+    outputString = raw.info(showVersion=showVersion)
+    return obj.Info.fromstring(outputString)
+        
 class show(object):
     @staticmethod
     def users():
