@@ -227,23 +227,20 @@ class AccuRev2Git(object):
         # Delete everything except the .git folder from the destination (git repo)
         for root, dirs, files in os.walk(self.gitRepo.path, topdown=False):
             for name in files:
-                path = os.path.join(root, name).replace('\\', '/')
-                if path[-1:] != '/' and os.path.isdir(path):
-                    path += ('/')
-                if '/.git/' not in path and path[:len('.git/')] != '.git/':
+                path = os.path.join(root, name)
+                if git.GetGitDirPrefix(path) is None:
                     os.remove(path)
             for name in dirs:
-                path = os.path.join(root, name).replace('\\', '/')
-                if path[-1:] != '/' and os.path.isdir(path):
-                    path += ('/')
-                if '/.git/' not in path and path[:len('.git/')] != '.git/':
+                path = os.path.join(root, name)
+                if git.GetGitDirPrefix(path) is None:
                     os.rmdir(path)
 
     def PreserveEmptyDirs(self):
         for root, dirs, files in os.walk(self.gitRepo.path, topdown=True):
             for name in dirs:
                 path = os.path.join(root, name).replace('\\','/')
-                if len(os.listdir(path)) == 0:
+                # Preserve empty directories that are not under the .git/ directory.
+                if git.GetGitDirPrefix(path) is None and len(os.listdir(path)) == 0:
                     filename = os.path.join(path, '.gitignore')
                     with open(filename, 'w') as file:
                         file.write('# accurev2git.py preserve empty dirs\n')
@@ -288,19 +285,40 @@ class AccuRev2Git(object):
         self.gitRepo.add(force=True, all=True)
 
         # Make the first commit
-        if self.gitRepo.commit(message=trComment, committer=self.GetGitUserFromAccuRevUser(tr.user), committer_date=tr.time, allow_empty_message=True):
-            self.config.logger.info( "Committed" )
+        messageFilePath = os.path.join(self.cwd, 'commit_message')
+        with open(messageFilePath, 'w') as messageFile:
+            if trComment is None or len(trComment) == 0:
+                messageFile.write(' ') # White-space is always stripped from commit messages. See the git commit --cleanup option for details.
+            else:
+                # In git the # at the start of the line indicate that this line is a comment inside the message and will not be added.
+                # So we will just add a space to the start of all the lines starting with a # in order to preserve them.
+                messageFile.write(trComment)
+
+        if self.gitRepo.commit(messageFile=messageFilePath, committer=self.GetGitUserFromAccuRevUser(tr.user), committer_date=tr.time, allow_empty_message=True):
+            commitHash = self.gitRepo.raw_cmd([u'git', u'log', u'-1', u'--format=format:%H'])
+            self.config.logger.info( "Committed {0}".format(commitHash) )
         else:
             self.config.logger.error( "Failed to commit" )
+        os.remove(messageFilePath)
 
         # Write the commit notes consisting of the accurev hist xml output for the transaction
+        arHistXml = accurev.raw.hist(stream=streamName, timeSpec=str(trId), isXmlOutput=True)
+        notesFilePath = os.path.join(self.cwd, 'notes_message')
+        with open(notesFilePath, 'w') as notesFile:
+            if arHistXml is None or len(arHistXml) == 0:
+                return
+            else:
+                notesFile.write(arHistXml)
+
+        self.gitRepo.notes.add(messageFile=notesFilePath, obj=commitHash, ref='accurev/xml')
+        os.remove(notesFilePath)
 
     def ProcessStream(self, streamName, branchName):
         self.config.logger.info( "Processing {0}".format(streamName) )
         # Find the matching git branch
         branch = None
         for b in self.gitBranchList:
-            if branchName == branch.name:
+            if branchName == b.name:
                 branch = b
                 break
         if branch is None:

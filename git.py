@@ -202,7 +202,8 @@ class repo(object):
     def __init__(self, path):
         self.path = path
         self._cwdQueue = []
-        self.lastError = None
+        self._lastCommand = None
+        self.notes = repo.notes(self)
         
     def _pushd(self, newPath):
         self._cwdQueue.insert(0, os.getcwd())
@@ -211,19 +212,27 @@ class repo(object):
     def _popd(self):
         os.chdir(self._cwdQueue.pop(0))
     
-    def _docmd(self, cmd):
-        try:
-            #strCmd = ' '.join(cmd)
-            self._pushd(self.path)
-            output = subprocess.check_output(to_utf8(c) for c in cmd)
-            self._popd()
-        except subprocess.CalledProcessError as e:
-            self.lastError = e
+    def _docmd(self, cmd, env=None):
+        process = subprocess.Popen(args=(to_utf8(c) for c in cmd), cwd=self.path, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+        output = ''
+        error  = ''
+        process.poll()
+        while process.returncode is None:
+            stdoutdata, stderrdata = process.communicate()
+            output += stdoutdata
+            error  += stderrdata
+            process.poll()
+        
+        self._lastCommand = process
+ 
+        if process.returncode == 0:
+            return output
+        else:
             return None
-#        except Exception as e:
-#            print(u'Error processing command: {0}'.format(cmd))
-#            raise e
-        return output
+
+    def raw_cmd(self, cmd):
+        return self._docmd(cmd)
         
     def checkout(self, branchName=None, isNewBranch=False, isOrphan=False):
         cmd = [ gitCmd, u'checkout' ]
@@ -305,10 +314,7 @@ class repo(object):
         elif not allow_empty_message:
             raise Exception(u'Error, tried to commit with empty message')
         
-        # Backup the existing commiter information
-        oldCommitterName = os.environ.get(u'GIT_COMMITTER_NAME')
-        oldCommitterEmail = os.environ.get(u'GIT_COMMITTER_EMAIL')
-        oldCommitterDate = os.environ.get(u'GIT_COMMITTER_DATE')
+        newEnv = os.environ.copy()
         
         # Set the new commiter information
         if committer is not None:
@@ -316,25 +322,17 @@ class repo(object):
             if m is not None:
                 committerName = m.group(0).strip()
                 committerEmail = m.group(1).strip()
-                os.environ[u'GIT_COMMITTER_NAME'] = committerName
-                os.environ[u'GIT_COMMITTER_EMAIL'] = committerEmail
+                newEnv[u'GIT_COMMITTER_NAME'] = committerName
+                newEnv[u'GIT_COMMITTER_EMAIL'] = committerEmail
         
         if committer_date is not None:
             if committer_date is not None:
                 if isinstance(committer_date, datetime.datetime):
                     committer_date = committer_date.isoformat()
-            os.environ[u'GIT_COMMITTER_DATE'] = u'{0}'.format(committer_date)
+            newEnv[u'GIT_COMMITTER_DATE'] = u'{0}'.format(committer_date)
         
         # Execute the command
-        output = self._docmd(cmd)
-        
-        # Restore backed up environment variables
-        if oldCommitterName is not None:
-            os.environ[u'GIT_COMMITTER_NAME'] = oldCommitterName
-        if oldCommitterEmail is not None:
-            os.environ[u'GIT_COMMITTER_EMAIL'] = oldCommitterEmail
-        if oldCommitterDate is not None:
-            os.environ[u'GIT_COMMITTER_DATE'] = oldCommitterDate
+        output = self._docmd(cmd, env=newEnv)
         
         return (output is not None)
     
@@ -380,12 +378,66 @@ class repo(object):
             cmd.append(u'-f')
         
         return self._docmd(cmd)
+
+    class notes(object):
+        def __init__(self, repo):
+            self.repo = repo
+        
+        def _docmd(self, cmd, ref=None):
+            cmd = [ gitCmd, u'notes' ]
+
+            if ref is not None:
+                cmd.extend([ u'--ref', ref ])
+
+            cmd.extend(cmd)
+
+            self.repo._docmd(cmd)
+
+        def add(self, obj, ref=None, force=False, allowEmpty=False, messageFile=None, message=None, reuseMessage=None, reeditMessage=None):
+            cmd = [ u'add' ]
+
+            if force:
+                cmd.append(u'-f')
+            if allowEmpty:
+                cmd.append(u'--allow-empty')
+            
+            if messageFile is not None:
+                cmd.extend([ u'-F', messageFile ])
+            elif message is not None:
+                cmd.extend([ u'-m', message ])
+            elif reuseMessage is not None:
+                cmd.extend([ u'-C', reuseMessage ])
+            elif reeditMessage is not None:
+                cmd.extend([ u'-c', reeditMessage ])
+
+            cmd.append(obj)
+
+            self._docmd(cmd=cmd, ref=ref)
+
+        def show(self, obj, ref=None):
+            cmd = self.notesCmd + u'show' + obj
+            
+            return self._docmd(cmd=cmd, ref=ref)
         
 def isRepo(path=None):
     if path is not None and os.path.isdir(path):
         if os.path.isdir(os.path.join(path, u'.git')):
             return True
     return False
+
+# GetGitDirPrefix finds the .git/ directory in the given path and returns the path upto the .git/.
+# If the path does not contain a .git/ directory then None is returned.
+# e.g. Calling GetGitDirPrefix('/home/developer/.git/src') would return '/home/developer/.git'.
+#      It is guaranteed that the returned path will not be terminated with a slash.
+gitDirRegex = re.compile(r'((^|.*[\\/]).git)([\\/]|$)')
+def GetGitDirPrefix(path):
+    # This regex will work even for paths which mix \ and /.
+    global gitDirRegex
+    gitDirMatch = gitDirRegex.match(path)
+    if gitDirMatch is not None:
+        return gitDirMatch.group(1)
+    return None
+
 
 def init(isBare=False, path=None):
     try:
