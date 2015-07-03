@@ -201,9 +201,14 @@ class GitBranchListItem(object):
 class repo(object):
     def __init__(self, path):
         self.path = path
+        self.notes = repo.notes(self)
+        # Debug
+        self.lastStderr = None
+        self.lastStdout = None
+        self.lastReturnCode = None
+        # Private
         self._cwdQueue = []
         self._lastCommand = None
-        self.notes = repo.notes(self)
         
     def _pushd(self, newPath):
         self._cwdQueue.insert(0, os.getcwd())
@@ -225,9 +230,12 @@ class repo(object):
             process.poll()
         
         self._lastCommand = process
+        self.lastStderr = error.decode('utf-8')
+        self.lastStdout = output.decode('utf-8')
+        self.lastReturnCode = process.returncode
  
         if process.returncode == 0:
-            return output
+            return output.decode('utf-8')
         else:
             return None
 
@@ -384,14 +392,14 @@ class repo(object):
             self.repo = repo
         
         def _docmd(self, cmd, ref=None):
-            cmd = [ gitCmd, u'notes' ]
+            fullCmd = [ gitCmd, u'notes' ]
 
             if ref is not None:
-                cmd.extend([ u'--ref', ref ])
+                fullCmd.extend([ u'--ref', ref ])
 
-            cmd.extend(cmd)
-
-            self.repo._docmd(cmd)
+            fullCmd.extend(cmd)
+            
+            return self.repo._docmd(fullCmd)
 
         def add(self, obj, ref=None, force=False, allowEmpty=False, messageFile=None, message=None, reuseMessage=None, reeditMessage=None):
             cmd = [ u'add' ]
@@ -412,10 +420,10 @@ class repo(object):
 
             cmd.append(obj)
 
-            self._docmd(cmd=cmd, ref=ref)
+            return self._docmd(cmd=cmd, ref=ref)
 
         def show(self, obj, ref=None):
-            cmd = self.notesCmd + u'show' + obj
+            cmd = [ u'show', obj ]
             
             return self._docmd(cmd=cmd, ref=ref)
         

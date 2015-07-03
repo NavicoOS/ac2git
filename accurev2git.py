@@ -16,11 +16,12 @@ import os.path
 import shutil
 import subprocess
 import xml.etree.ElementTree as ElementTree
-import datetime
+from datetime import datetime
 import time
 import re
 import types
 import copy
+import codecs
 
 from collections import OrderedDict
 
@@ -39,12 +40,12 @@ class Config(object):
             self.isErrEnabled = True
         
         def _FormatMessage(self, messages):
-            if self.referenceTime:
-                outMessage = "{0: >6.2f}s:".format(time.clock() - self.referenceTime)
+            if self.referenceTime is not None:
+                outMessage = "{0: >6.2f}s: ".format(time.clock() - self.referenceTime)
             else:
-                outMessage = None
+                outMessage = ""
             
-            outMessage = " ".join([str(x) for x in messages])
+            outMessage += " ".join([str(x) for x in messages])
             
             return outMessage
         
@@ -217,12 +218,28 @@ class Config(object):
 #     * Increment the transaction number by one
 #     * Obtain a diff from accurev listing all of the files that have changed and delete them all.
 class AccuRev2Git(object):
+    gitNotesRef_AccurevHistXml = 'accurev/xml/hist'
+    gitNotesRef_AccurevHist    = 'accurev/hist'
+    
     def __init__(self, config):
         self.config = config
         self.cwd = None
         self.gitRepo = None
         self.gitBranchList = None
-    
+ 
+    def DeletePath(self, path):
+        if os.path.exists(path):
+            if os.path.isdir(path):
+                for root, dirs, files in os.walk(path, topdown=False):
+                    for name in files:
+                        p = os.path.join(root, name)
+                        os.remove(p)
+                    for name in dirs:
+                        p = os.path.join(root, name)
+                        os.rmdir(p)
+            elif os.path.isfile(path):
+                os.remove(path)
+   
     def ClearGitRepo(self):
         # Delete everything except the .git folder from the destination (git repo)
         for root, dirs, files in os.walk(self.gitRepo.path, topdown=False):
@@ -253,21 +270,73 @@ class AccuRev2Git(object):
         state.config.logger.error("Cannot find git details for accurev username {0}".format(accurevUsername))
         return accurevUsername
 
-    def NewStreamInitialCommit(self, streamName, branchName):
+    def AddAccurevHistNote(self, commitHash, ref, depot, transaction, isXml=False):
+        # Write the commit notes consisting of the accurev hist xml output for the given transaction.
+        # Note: It is important to use the depot instead of the stream option for the accurev hist command since if the transaction
+        #       did not occur on that stream we will get the closest transaction that was a promote into the specified stream instead of an error!
+        arHistXml = accurev.raw.hist(depot=depot, timeSpec="{0}.1".format(transaction.id), isXmlOutput=isXml)
+        notesFilePath = os.path.join(self.cwd, 'notes_message')
+        with codecs.open(notesFilePath, 'w', "ascii") as notesFile:
+            if arHistXml is None or len(arHistXml) == 0:
+                self.config.logger.error('accurev hist returned an empty xml for transaction {0} (commit {1})'.format(transaction.id, commitHash))
+                return False
+            else:
+                notesFile.write(arHistXml)
+
+        rv = self.gitRepo.notes.add(messageFile=notesFilePath, obj=commitHash, ref=ref, force=True)
+        
+        if rv is not None:
+            os.remove(notesFilePath)
+            self.config.logger.info( "Added accurev hist{0} note for {1}".format(' xml' if isXml else '', commitHash) )
+        else:
+            self.config.logger.error( "Failed to add accurev hist{0} note for {1}".format(' xml' if isXml else '', commitHash) )
+            self.config.logger.error(self.gitRepo.lastStderr)
+
+        return rv
+
+    def GetFirstTransaction(self, depot, streamName, startTransaction=None, endTransaction=None):
         # Get the stream creation transaction (mkstream). Note: The first stream in the depot doesn't have an mkstream transaction.
         mkstream = accurev.hist(stream=streamName, transactionKind="mkstream", timeSpec="now")
+        tr = None
         if len(mkstream.transactions) == 0:
             self.config.logger.info( "The root stream has no mkstream transaction. Starting at transaction 1." )
-            trId = 1
-            trComment = ''
+            # the assumption is that the depot name matches the root stream name (for which there is no mkstream transaction)
+            firstTr = accurev.hist(depot=depot, timeSpec="1")
+            if len(firstTr.transactions) == 0:
+                raise Exception("Error: assumption that the root stream has the same name as the depot doesn't hold. Aborting...")
+            tr = firstTr.transactions[0]
         else:
             tr = mkstream.transactions[0]
-            trId = tr.id
-            trComment = tr.comment
             if len(mkstream.transactions) != 1:
-                self.config.logger.warning( "Error: There seem to be multiple mkstream transactions for this stream... Using {0}".format(trId) )
-        
+                self.config.logger.error( "There seem to be multiple mkstream transactions for this stream... Using {0}".format(tr.id) )
 
+        if startTransaction is not None:
+            startTrHist = accurev.hist(depot=depot, timeSpec="{0}.1".format(startTransaction))
+            startTr = startTrHist.transactions[0]
+            if tr.id < startTr.id:
+                self.config.logger.info( "The first transaction (#{0}) for strem {1} is earlier than the conversion start transaction (#{2}).".format(tr.id, streamName, startTr.id) )
+                tr = startTr.transactions[0]
+        if endTransaction is not None:
+            endTrHist = accurev.hist(depot=depot, timeSpec="{0}.1".format(endTransaction))
+            endTr = endTrHist.transactions[0]
+            if endTr.id < tr.id:
+                self.config.logger.info( "The first transaction (#{0}) for strem {1} is later than the conversion end transaction (#{2}).".format(tr.id, streamName, startTr.id) )
+                tr = None
+
+        return tr
+
+    def GetLastCommitTransaction(self):
+        commitHash = self.gitRepo.raw_cmd([u'git', u'log', u'-1', u'--format=format:%H'])
+        lastHistXml = self.gitRepo.notes.show(obj=commitHash, ref=AccuRev2Git.gitNotesRef_AccurevHistXml)
+        if lastHistXml is not None:
+            lastHistXml = lastHistXml.strip()
+            return accurev.obj.History.fromxmlstring(lastHistXml)
+        else:
+            self.config.logger.error("Failed to load the last transaction for commit {0} from {1} notes.".format(commitHash, AccuRev2Git.gitNotesRef_AccurevHistXml))
+            self.config.logger.error("  i.e git notes --ref={0} show {1}    - returned nothing.".format(AccuRev2Git.gitNotesRef_AccurevHistXml, commitHash))
+        return None
+
+    def CreateCleanGitBranch(self, branchName):
         # Create the git branch.
         self.config.logger.info( "Creating {0}".format(branchName) )
         self.gitRepo.checkout(branchName=branchName, isOrphan=True)
@@ -276,9 +345,7 @@ class AccuRev2Git(object):
         self.gitRepo.rm(fileList=['.'], force=True, recursive=True)
         self.ClearGitRepo()
 
-        # Populate the stream's state at creation
-        self.config.logger.info( "Populating mkstream {0} for {1}".format(trId, streamName) )
-        accurev.pop(verSpec=streamName, location=self.gitRepo.path, isRecursive=True, timeSpec=trId, elementList='.')
+    def Commit(self, depot, transaction):
         self.PreserveEmptyDirs()
 
         # Add all of the files to the index
@@ -286,57 +353,122 @@ class AccuRev2Git(object):
 
         # Make the first commit
         messageFilePath = os.path.join(self.cwd, 'commit_message')
-        with open(messageFilePath, 'w') as messageFile:
-            if trComment is None or len(trComment) == 0:
+        with codecs.open(messageFilePath, 'w', "utf-8") as messageFile:
+            if transaction.comment is None or len(transaction.comment) == 0:
                 messageFile.write(' ') # White-space is always stripped from commit messages. See the git commit --cleanup option for details.
             else:
                 # In git the # at the start of the line indicate that this line is a comment inside the message and will not be added.
                 # So we will just add a space to the start of all the lines starting with a # in order to preserve them.
-                messageFile.write(trComment)
+                messageFile.write(transaction.comment)
         
-        committer = self.GetGitUserFromAccuRevUser(tr.user)
-        committerDate = tr.time
+        committer = self.GetGitUserFromAccuRevUser(transaction.user)
+        committerDate = transaction.time
+        commitHash = None
         if self.gitRepo.commit(messageFile=messageFilePath, committer=committer, committer_date=committerDate, author=committer, date=committerDate, allow_empty_message=True):
             commitHash = self.gitRepo.raw_cmd([u'git', u'log', u'-1', u'--format=format:%H'])
             self.config.logger.info( "Committed {0}".format(commitHash) )
+            self.AddAccurevHistNote(commitHash=commitHash, ref=AccuRev2Git.gitNotesRef_AccurevHistXml, depot=depot, transaction=transaction, isXml=True)
+            self.AddAccurevHistNote(commitHash=commitHash, ref=AccuRev2Git.gitNotesRef_AccurevHist, depot=depot, transaction=transaction, isXml=False)
+        elif "nothing to commit" in self.gitRepo.lastStdout:
+            self.config.logger.error( "nothing to commit after populating transaction {0}...?".format(transaction.id) )
         else:
-            self.config.logger.error( "Failed to commit" )
+            self.config.logger.error( "Failed to commit transaction {0}".format(transaction.id) )
+            self.config.logger.error( "\n{0}\n{1}\n".format(self.gitRepo.lastStdout, self.gitRepo.lastStderr) )
         os.remove(messageFilePath)
 
-        # Write the commit notes consisting of the accurev hist xml output for the transaction
-        arHistXml = accurev.raw.hist(stream=streamName, timeSpec=str(trId), isXmlOutput=True)
-        notesFilePath = os.path.join(self.cwd, 'notes_message')
-        with open(notesFilePath, 'w') as notesFile:
-            if arHistXml is None or len(arHistXml) == 0:
-                return
-            else:
-                notesFile.write(arHistXml)
+        return commitHash
 
-        self.gitRepo.notes.add(messageFile=notesFilePath, obj=commitHash, ref='accurev/xml')
-        os.remove(notesFilePath)
-
-    def ProcessStream(self, streamName, branchName):
+    def ProcessStream(self, depot, streamName, branchName, startTransaction, endTransaction):
         self.config.logger.info( "Processing {0}".format(streamName) )
+
         # Find the matching git branch
         branch = None
         for b in self.gitBranchList:
             if branchName == b.name:
                 branch = b
                 break
+        tr = None
         if branch is None:
             # We are tracking a new stream:
-            #   * Create the git branch
-            #   * Get the stream create (mkstream) transaction number. This is our first transaction.
-            self.NewStreamInitialCommit(streamName, branchName)
+            tr = self.GetFirstTransaction(depot=depot, streamName=streamName, startTransaction=startTransaction, endTransaction=endTransaction)
+            if tr is not None:
+                self.CreateCleanGitBranch(branchName=branchName)
+                self.config.logger.info( "Populating (initial): {0} {1} {2}".format(streamName, tr.Type, tr.id) )
+                accurev.pop(verSpec=streamName, location=self.gitRepo.path, isRecursive=True, timeSpec=tr.id, elementList='.')
+                if not self.Commit(depot=depot, transaction=tr):
+                    return
+            else:
+                return
         else:
-            # We have a git branch that matches and by assumption an existing stream.
-            #   * 
-            pass
+            # Get the last processed transaction
+            self.ClearGitRepo()
+            self.gitRepo.checkout(branchName=branchName)
+            hist = self.GetLastCommitTransaction()
+            if hist is None:
+                self.config.logger.error("Repo in invalid state. Please reset this branch to a previous commit with valid notes.")
+                self.config.logger.error("  e.g. git reset --soft {0}~1".format(branchName))
+                return
+            tr = hist.transactions[0]
+            self.config.logger.info("{0}: last transaction = {1}".format(streamName, tr.id))
+
+        endTrHist = accurev.hist(depot=depot, timeSpec="{0}.1".format(endTransaction))
+        endTr = endTrHist.transactions[0]
+
+        while True:
+            # Iterate over transactions in order using accurev diff -a -i -v streamName -V streamName -t <lastProcessed>-<current iterator>
+            nextTr = tr.id + 1
+            diff = accurev.diff(all=True, informationOnly=True, verSpec1=streamName, verSpec2=streamName, transactionRange="{0}-{1}".format(tr.id, nextTr))
+            while nextTr <= endTr.id and len(diff.elements) == 0:
+                nextTr += 1
+                diff = accurev.diff(all=True, informationOnly=True, verSpec1=streamName, verSpec2=streamName, transactionRange="{0}-{1}".format(tr.id, nextTr))
+            
+            self.config.logger.info( "{0}: next transaction {1}".format(streamName, nextTr) )
+            if nextTr <= endTr.id:
+                # Right now nextTr is an integer representation of our next transaction.
+                # Delete all of the files which are even mentioned in the diff so that we can do a quick populate (wouth the overwrite option)
+                deletedPathList = []
+                for element in diff.elements:
+                    for change in element.changes:
+                        for stream in [ change.stream1, change.stream2 ]:
+                            if stream is not None and stream.name is not None:
+                                name = stream.name.replace('\\', '/').lstrip('/')
+                                path = os.path.join(self.gitRepo.path, name)
+                                self.DeletePath(path)
+                                deletedPathList.append(path)
+        
+                # The accurev hist command here must be used with the depot option since the transaction that has affected us may not
+                # be a promotion into the stream we are looking at but into one of its parent streams. Hence we must query the history
+                # of the depot and not the stream itself.
+                hist = accurev.hist(depot=depot, timeSpec="{0}.1".format(nextTr))
+                tr = hist.transactions[0]
+
+                # Populate 
+                self.config.logger.info( "Populating: {0} {1} {2}".format(streamName, tr.Type, tr.id) )
+                accurev.pop(verSpec=streamName, location=self.gitRepo.path, isRecursive=True, timeSpec=tr.id, elementList='.')
+
+                # Commit 
+                if not self.Commit(depot=depot, transaction=tr):
+                    if"nothing to commit" in self.gitRepo.lastStdout:
+                        self.config.logger.error( "diff info ({0} elements):".format(len(diff.elements)) )
+                        for element in diff.elements:
+                            for change in element.changes:
+                                self.config.logger.error( "  what changed: {0}".format(change.what) )
+                                self.config.logger.error( "  original: {0}".format(change.stream1) )
+                                self.config.logger.error( "  new:      {0}".format(change.stream2) )
+                        self.config.logger.error( "deleted {0} files:".format(len(deletedPathList)) )
+                        for p in deletedPathList:
+                            self.config.logger.error( "  {0}".format(p) )
+                        self.config.logger.info("Non-fatal error. Continuing.")
+                    else:
+                        return
+            else:
+                break
 
     def ProcessStreams(self):
         for stream in self.config.accurev.streamMap:
             branch = self.config.accurev.streamMap[stream]
-            self.ProcessStream(stream, branch)
+            depot  = self.config.accurev.depot
+            self.ProcessStream(depot=depot, streamName=stream, branchName=branch, startTransaction=self.config.accurev.startTransaction, endTransaction=self.config.accurev.endTransaction)
 
     def InitGitRepo(self, gitRepoPath):
         gitRootDir, gitRepoDir = os.path.split(gitRepoPath)
@@ -402,9 +534,6 @@ class AccuRev2Git(object):
         else:
             self.config.logger.error( "Could not create git repository." )
             
-    def Restart(self):
-        return self.Start(isRestart=True)
-        
 # ################################################################################################ #
 # Script Functions                                                                                 #
 # ################################################################################################ #
@@ -545,11 +674,10 @@ def AccuRev2GitMain(argv):
     state = AccuRev2Git(config)
     
     state.config.logger.isDbgEnabled = ( args.debug == True )
-        
-    if args.restart == True:
-        return state.Restart()
-    else:
-        return state.Start()
+    
+    state.config.logger.info("Restart:" if args.restart else "Start:")
+    state.config.logger.referenceTime = time.clock()
+    return state.Start(isRestart=args.restart)
         
 # ################################################################################################ #
 # Script Start                                                                                     #
