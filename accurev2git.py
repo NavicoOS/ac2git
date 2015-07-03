@@ -276,12 +276,12 @@ class AccuRev2Git(object):
         #       did not occur on that stream we will get the closest transaction that was a promote into the specified stream instead of an error!
         arHistXml = accurev.raw.hist(depot=depot, timeSpec="{0}.1".format(transaction.id), isXmlOutput=isXml)
         notesFilePath = os.path.join(self.cwd, 'notes_message')
-        with codecs.open(notesFilePath, 'w', "ascii") as notesFile:
+        with codecs.open(notesFilePath, 'w', "utf-8") as notesFile:
             if arHistXml is None or len(arHistXml) == 0:
                 self.config.logger.error('accurev hist returned an empty xml for transaction {0} (commit {1})'.format(transaction.id, commitHash))
                 return False
             else:
-                notesFile.write(arHistXml)
+                notesFile.write(arHistXml.decode("utf-8"))
 
         rv = self.gitRepo.notes.add(messageFile=notesFilePath, obj=commitHash, ref=ref, force=True)
         
@@ -393,7 +393,11 @@ class AccuRev2Git(object):
             tr = self.GetFirstTransaction(depot=depot, streamName=streamName, startTransaction=startTransaction, endTransaction=endTransaction)
             if tr is not None:
                 self.CreateCleanGitBranch(branchName=branchName)
-                self.config.logger.info( "Populating (initial): {0} {1} {2}".format(streamName, tr.Type, tr.id) )
+                try:
+                    destStream = tr.versions[0].virtualNamedVersion.stream
+                except:
+                    destStream = None
+                self.config.logger.info( "{0} pop (init): {1} {2}{3}".format(streamName, tr.Type, tr.id, " to {0}".format(destStream) if destStream is not None else "") )
                 accurev.pop(verSpec=streamName, location=self.gitRepo.path, isRecursive=True, timeSpec=tr.id, elementList='.')
                 if not self.Commit(depot=depot, transaction=tr):
                     return
@@ -442,8 +446,12 @@ class AccuRev2Git(object):
                 hist = accurev.hist(depot=depot, timeSpec="{0}.1".format(nextTr))
                 tr = hist.transactions[0]
 
-                # Populate 
-                self.config.logger.info( "Populating: {0} {1} {2}".format(streamName, tr.Type, tr.id) )
+                # Populate
+                try:
+                    destStream = tr.versions[0].virtualNamedVersion.stream
+                except:
+                    destStream = None
+                self.config.logger.info( "{0} pop: {1} {2}{3}".format(streamName, tr.Type, tr.id, " to {0}".format(destStream) if destStream is not None else "") )
                 accurev.pop(verSpec=streamName, location=self.gitRepo.path, isRecursive=True, timeSpec=tr.id, elementList='.')
 
                 # Commit 
