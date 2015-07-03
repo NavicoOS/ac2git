@@ -293,8 +293,10 @@ class AccuRev2Git(object):
                 # In git the # at the start of the line indicate that this line is a comment inside the message and will not be added.
                 # So we will just add a space to the start of all the lines starting with a # in order to preserve them.
                 messageFile.write(trComment)
-
-        if self.gitRepo.commit(messageFile=messageFilePath, committer=self.GetGitUserFromAccuRevUser(tr.user), committer_date=tr.time, allow_empty_message=True):
+        
+        committer = self.GetGitUserFromAccuRevUser(tr.user)
+        committerDate = tr.time
+        if self.gitRepo.commit(messageFile=messageFilePath, committer=committer, committer_date=committerDate, author=committer, date=committerDate, allow_empty_message=True):
             commitHash = self.gitRepo.raw_cmd([u'git', u'log', u'-1', u'--format=format:%H'])
             self.config.logger.info( "Committed {0}".format(commitHash) )
         else:

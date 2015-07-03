@@ -320,8 +320,8 @@ class repo(object):
         if committer is not None:
             m = re.search(r'(.*?)<(.*?)>', committer)
             if m is not None:
-                committerName = m.group(0).strip()
-                committerEmail = m.group(1).strip()
+                committerName = m.group(1).strip()
+                committerEmail = m.group(2).strip()
                 newEnv[u'GIT_COMMITTER_NAME'] = committerName
                 newEnv[u'GIT_COMMITTER_EMAIL'] = committerEmail
         
