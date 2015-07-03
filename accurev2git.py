@@ -287,7 +287,7 @@ class AccuRev2Git(object):
         
         if rv is not None:
             os.remove(notesFilePath)
-            self.config.logger.info( "Added accurev hist{0} note for {1}".format(' xml' if isXml else '', commitHash) )
+            self.config.logger.dbg( "Added accurev hist{0} note for {1}".format(' xml' if isXml else '', commitHash) )
         else:
             self.config.logger.error( "Failed to add accurev hist{0} note for {1}".format(' xml' if isXml else '', commitHash) )
             self.config.logger.error(self.gitRepo.lastStderr)
@@ -366,7 +366,7 @@ class AccuRev2Git(object):
         commitHash = None
         if self.gitRepo.commit(messageFile=messageFilePath, committer=committer, committer_date=committerDate, author=committer, date=committerDate, allow_empty_message=True):
             commitHash = self.gitRepo.raw_cmd([u'git', u'log', u'-1', u'--format=format:%H'])
-            self.config.logger.info( "Committed {0}".format(commitHash) )
+            self.config.logger.dbg( "Committed {0}".format(commitHash) )
             self.AddAccurevHistNote(commitHash=commitHash, ref=AccuRev2Git.gitNotesRef_AccurevHistXml, depot=depot, transaction=transaction, isXml=True)
             self.AddAccurevHistNote(commitHash=commitHash, ref=AccuRev2Git.gitNotesRef_AccurevHist, depot=depot, transaction=transaction, isXml=False)
         elif "nothing to commit" in self.gitRepo.lastStdout:
@@ -397,7 +397,7 @@ class AccuRev2Git(object):
                     destStream = tr.versions[0].virtualNamedVersion.stream
                 except:
                     destStream = None
-                self.config.logger.info( "{0} pop (init): {1} {2}{3}".format(streamName, tr.Type, tr.id, " to {0}".format(destStream) if destStream is not None else "") )
+                self.config.logger.dbg( "{0} pop (init): {1} {2}{3}".format(streamName, tr.Type, tr.id, " to {0}".format(destStream) if destStream is not None else "") )
                 accurev.pop(verSpec=streamName, location=self.gitRepo.path, isRecursive=True, timeSpec=tr.id, elementList='.')
                 if not self.Commit(depot=depot, transaction=tr):
                     return
@@ -413,7 +413,7 @@ class AccuRev2Git(object):
                 self.config.logger.error("  e.g. git reset --soft {0}~1".format(branchName))
                 return
             tr = hist.transactions[0]
-            self.config.logger.info("{0}: last transaction = {1}".format(streamName, tr.id))
+            self.config.logger.dbg("{0}: last transaction = {1}".format(streamName, tr.id))
 
         endTrHist = accurev.hist(depot=depot, timeSpec="{0}.1".format(endTransaction))
         endTr = endTrHist.transactions[0]
@@ -426,7 +426,7 @@ class AccuRev2Git(object):
                 nextTr += 1
                 diff = accurev.diff(all=True, informationOnly=True, verSpec1=streamName, verSpec2=streamName, transactionRange="{0}-{1}".format(tr.id, nextTr))
             
-            self.config.logger.info( "{0}: next transaction {1}".format(streamName, nextTr) )
+            self.config.logger.dbg( "{0}: next transaction {1}".format(streamName, nextTr) )
             if nextTr <= endTr.id:
                 # Right now nextTr is an integer representation of our next transaction.
                 # Delete all of the files which are even mentioned in the diff so that we can do a quick populate (wouth the overwrite option)
@@ -451,11 +451,12 @@ class AccuRev2Git(object):
                     destStream = tr.versions[0].virtualNamedVersion.stream
                 except:
                     destStream = None
-                self.config.logger.info( "{0} pop: {1} {2}{3}".format(streamName, tr.Type, tr.id, " to {0}".format(destStream) if destStream is not None else "") )
+                self.config.logger.dbg( "{0} pop: {1} {2}{3}".format(streamName, tr.Type, tr.id, " to {0}".format(destStream) if destStream is not None else "") )
                 accurev.pop(verSpec=streamName, location=self.gitRepo.path, isRecursive=True, timeSpec=tr.id, elementList='.')
 
-                # Commit 
-                if not self.Commit(depot=depot, transaction=tr):
+                # Commit
+                commitHash = self.Commit(depot=depot, transaction=tr)
+                if not commitHash:
                     if"nothing to commit" in self.gitRepo.lastStdout:
                         self.config.logger.error( "diff info ({0} elements):".format(len(diff.elements)) )
                         for element in diff.elements:
@@ -469,7 +470,10 @@ class AccuRev2Git(object):
                         self.config.logger.info("Non-fatal error. Continuing.")
                     else:
                         return
+                else:
+                    self.config.logger.info( "stream {0}: tr. #{1} {2} into {3} -> commit {4} on {5}".format(streamName, tr.id, tr.Type, destStream if destStream is not None else 'unknown', commitHash[:8], branchName) )
             else:
+                self.config.logger.info( "Reached end transaction #{0} for {1} -> {2}".format(endTr.id, streamName, branchName) )
                 break
 
     def ProcessStreams(self):
