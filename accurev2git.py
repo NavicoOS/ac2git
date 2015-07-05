@@ -260,7 +260,8 @@ class AccuRev2Git(object):
                 if git.GetGitDirPrefix(path) is None and len(os.listdir(path)) == 0:
                     filename = os.path.join(path, '.gitignore')
                     with open(filename, 'w') as file:
-                        file.write('# accurev2git.py preserve empty dirs\n')
+                        #file.write('# accurev2git.py preserve empty dirs\n')
+                        pass
 
     def GetGitUserFromAccuRevUser(self, accurevUsername):
         if accurevUsername is not None:
