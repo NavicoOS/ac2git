@@ -377,6 +377,36 @@ class AccuRev2Git(object):
         os.remove(messageFilePath)
 
         return commitHash
+    
+    def FindNextChangeTransaction(self, streamName, startTrNumber, endTrNumber):
+        # Iterate over transactions in order using accurev diff -a -i -v streamName -V streamName -t <lastProcessed>-<current iterator>
+        nextTr = startTrNumber + 1
+        diff = accurev.diff(all=True, informationOnly=True, verSpec1=streamName, verSpec2=streamName, transactionRange="{0}-{1}".format(startTrNumber, nextTr))
+
+        # Note: This is likely to be a hot path. Some sort of binary search might optimize it for streams with sparse promotes but this isn't likely to always
+        #       be the best option. Hence a simple strategy of look 10/15/20/25 ahead and if you find a diff then binary search that. Alternatively you could mix this
+        #       with information from the hist command for the stream in an attempt to optimize... However, currently this is accurate and that's all that matters
+        #       to me. Optimizations can come later...
+
+        while nextTr <= endTrNumber and len(diff.elements) == 0:
+            nextTr += 1
+            diff = accurev.diff(all=True, informationOnly=True, verSpec1=streamName, verSpec2=streamName, transactionRange="{0}-{1}".format(startTrNumber, nextTr))
+        
+        return (nextTr, diff)
+
+    def DeleteDiffItemsFromRepo(self, diff):
+        # Delete all of the files which are even mentioned in the diff so that we can do a quick populate (wouth the overwrite option)
+        deletedPathList = []
+        for element in diff.elements:
+            for change in element.changes:
+                for stream in [ change.stream1, change.stream2 ]:
+                    if stream is not None and stream.name is not None:
+                        name = stream.name.replace('\\', '/').lstrip('/')
+                        path = os.path.join(self.gitRepo.path, name)
+                        self.DeletePath(path)
+                        deletedPathList.append(path)
+
+        return deletedPathList 
 
     def ProcessStream(self, depot, streamName, branchName, startTransaction, endTransaction):
         self.config.logger.info( "Processing {0}".format(streamName) )
@@ -419,27 +449,14 @@ class AccuRev2Git(object):
         endTr = endTrHist.transactions[0]
 
         while True:
-            # Iterate over transactions in order using accurev diff -a -i -v streamName -V streamName -t <lastProcessed>-<current iterator>
-            nextTr = tr.id + 1
-            diff = accurev.diff(all=True, informationOnly=True, verSpec1=streamName, verSpec2=streamName, transactionRange="{0}-{1}".format(tr.id, nextTr))
-            while nextTr <= endTr.id and len(diff.elements) == 0:
-                nextTr += 1
-                diff = accurev.diff(all=True, informationOnly=True, verSpec1=streamName, verSpec2=streamName, transactionRange="{0}-{1}".format(tr.id, nextTr))
-            
+            nextTr, diff = self.FindNextChangeTransaction(streamName=streamName, startTrNumber=tr.id, endTrNumber=endTr.id)
+
             self.config.logger.dbg( "{0}: next transaction {1}".format(streamName, nextTr) )
             if nextTr <= endTr.id:
                 # Right now nextTr is an integer representation of our next transaction.
                 # Delete all of the files which are even mentioned in the diff so that we can do a quick populate (wouth the overwrite option)
-                deletedPathList = []
-                for element in diff.elements:
-                    for change in element.changes:
-                        for stream in [ change.stream1, change.stream2 ]:
-                            if stream is not None and stream.name is not None:
-                                name = stream.name.replace('\\', '/').lstrip('/')
-                                path = os.path.join(self.gitRepo.path, name)
-                                self.DeletePath(path)
-                                deletedPathList.append(path)
-        
+                deletedPathList = self.DeleteDiffItemsFromRepo(diff=diff)
+
                 # The accurev hist command here must be used with the depot option since the transaction that has affected us may not
                 # be a promotion into the stream we are looking at but into one of its parent streams. Hence we must query the history
                 # of the depot and not the stream itself.
