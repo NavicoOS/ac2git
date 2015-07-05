@@ -329,7 +329,7 @@ class AccuRev2Git(object):
         commitHash = self.gitRepo.raw_cmd([u'git', u'log', u'-1', u'--format=format:%H'])
         lastHistXml = self.gitRepo.notes.show(obj=commitHash, ref=AccuRev2Git.gitNotesRef_AccurevHistXml)
         if lastHistXml is not None:
-            lastHistXml = lastHistXml.strip()
+            lastHistXml = lastHistXml.strip().encode('utf-8')
             return accurev.obj.History.fromxmlstring(lastHistXml)
         else:
             self.config.logger.error("Failed to load the last transaction for commit {0} from {1} notes.".format(commitHash, AccuRev2Git.gitNotesRef_AccurevHistXml))
