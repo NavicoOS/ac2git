@@ -430,7 +430,7 @@ class AccuRev2Git(object):
                 self.config.logger.dbg( "{0} pop (init): {1} {2}{3}".format(streamName, tr.Type, tr.id, " to {0}".format(destStream) if destStream is not None else "") )
                 accurev.pop(verSpec=streamName, location=self.gitRepo.path, isRecursive=True, timeSpec=tr.id, elementList='.')
                 if not self.Commit(depot=depot, transaction=tr):
-                    return
+                    self.config.logger.dbg( "{0} first commit has failed. Is it an empty commit? Continuing...".format(streamName) )
             else:
                 return
         else:
@@ -443,10 +443,11 @@ class AccuRev2Git(object):
                 self.config.logger.error("  e.g. git reset --soft {0}~1".format(branchName))
                 return
             tr = hist.transactions[0]
-            self.config.logger.dbg("{0}: last transaction = {1}".format(streamName, tr.id))
+            self.config.logger.dbg("{0}: last processed transaction = #{1}".format(streamName, tr.id))
 
         endTrHist = accurev.hist(depot=depot, timeSpec="{0}.1".format(endTransaction))
         endTr = endTrHist.transactions[0]
+        self.config.logger.info("{0}: will stop at transaction #{1}".format(streamName, endTr.id))
 
         while True:
             nextTr, diff = self.FindNextChangeTransaction(streamName=streamName, startTrNumber=tr.id, endTrNumber=endTr.id)
