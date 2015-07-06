@@ -307,7 +307,7 @@ class AccuRev2Git(object):
         
         if rv is not None:
             os.remove(notesFilePath)
-            self.config.logger.dbg( "Added accurev hist{0} note for {1}".format(' xml' if isXml else '', commitHash) )
+            self.config.logger.dbg( "Added accurev hist{0} note for {1}.".format(' xml' if isXml else '', commitHash) )
         else:
             self.config.logger.error( "Failed to add accurev hist{0} note for {1}".format(' xml' if isXml else '', commitHash) )
             self.config.logger.error(self.gitRepo.lastStderr)
@@ -345,8 +345,20 @@ class AccuRev2Git(object):
 
         return tr
 
+    def GetLastCommitHash(self):
+        for i in xrange(0, 3):
+            commitHash = self.gitRepo.raw_cmd([u'git', u'log', u'-1', u'--format=format:%H'])
+            if commitHash is not None:
+                commitHash = commitHash.strip()
+                if len(commitHash) == 0:
+                    commitHash = None
+                else:
+                    break
+
+        return commitHash
+
     def GetLastCommitTransaction(self):
-        commitHash = self.gitRepo.raw_cmd([u'git', u'log', u'-1', u'--format=format:%H'])
+        commitHash = self.GetLastCommitHash()
         lastHistXml = self.gitRepo.notes.show(obj=commitHash, ref=AccuRev2Git.gitNotesRef_AccurevHistXml)
         if lastHistXml is not None:
             lastHistXml = lastHistXml.strip().encode('utf-8')
@@ -383,17 +395,27 @@ class AccuRev2Git(object):
         
         committer = self.GetGitUserFromAccuRevUser(transaction.user)
         committerDate = transaction.time
+        lastCommitHash = self.GetLastCommitHash()
         commitHash = None
         if self.gitRepo.commit(messageFile=messageFilePath, committer=committer, committer_date=committerDate, author=committer, date=committerDate, allow_empty_message=True, gitOpts=[u'-c', u'core.autocrlf=false']):
-            commitHash = self.gitRepo.raw_cmd([u'git', u'log', u'-1', u'--format=format:%H'])
-            self.config.logger.dbg( "Committed {0}".format(commitHash) )
-            self.AddAccurevHistNote(commitHash=commitHash, ref=AccuRev2Git.gitNotesRef_AccurevHistXml, depot=depot, transaction=transaction, isXml=True)
-                ## The XML output in the notes is how we track our conversion progress. It is not acceptable for it to fail.
-                ## Undo the commit and print an error.
-                #self.config.logger.error("Couldn't record last transaction state. Undoing the last commit {0} with `git reset {0}~1`".format(commitHash, branchName))
-                #self.gitRepo.raw_cmd([u'git', u'reset', u'{0}~1'.format(branchName)])
-                #return None
-            self.AddAccurevHistNote(commitHash=commitHash, ref=AccuRev2Git.gitNotesRef_AccurevHist, depot=depot, transaction=transaction, isXml=False)
+            commitHash = self.GetLastCommitHash()
+            if lastCommitHash != commitHash:
+                self.config.logger.dbg( "Committed {0}".format(commitHash) )
+                xmlNoteWritten = False
+                for i in xrange(0, 3):
+                    xmlNoteWritten = ( self.AddAccurevHistNote(commitHash=commitHash, ref=AccuRev2Git.gitNotesRef_AccurevHistXml, depot=depot, transaction=transaction, isXml=True) is not None )
+                    if xmlNoteWritten:
+                        break
+                if not xmlNoteWritten:
+                    # The XML output in the notes is how we track our conversion progress. It is not acceptable for it to fail.
+                    # Undo the commit and print an error.
+                    self.config.logger.error("Couldn't record last transaction state. Undoing the last commit {0} with `git reset {0}~1`".format(commitHash, branchName))
+                    self.gitRepo.raw_cmd([u'git', u'reset', u'--soft', u'{0}~1'.format(branchName)])
+                    return None
+                self.AddAccurevHistNote(commitHash=commitHash, ref=AccuRev2Git.gitNotesRef_AccurevHist, depot=depot, transaction=transaction, isXml=False)
+            else:
+                self.config.logger.error("Commit command returned True when nothing was committed...? Last commit hash {0} didn't change after the commit command executed.".format(lastCommitHash))
+                return None
         elif "nothing to commit" in self.gitRepo.lastStdout:
             self.config.logger.error( "nothing to commit after populating transaction {0}...?".format(transaction.id) )
         else:
@@ -452,8 +474,11 @@ class AccuRev2Git(object):
                     destStream = None
                 self.config.logger.dbg( "{0} pop (init): {1} {2}{3}".format(streamName, tr.Type, tr.id, " to {0}".format(destStream) if destStream is not None else "") )
                 accurev.pop(verSpec=streamName, location=self.gitRepo.path, isRecursive=True, timeSpec=tr.id, elementList='.')
-                if not self.Commit(depot=depot, transaction=tr):
+                commitHash = self.Commit(depot=depot, transaction=tr):
+                if not commitHash:
                     self.config.logger.dbg( "{0} first commit has failed. Is it an empty commit? Continuing...".format(streamName) )
+                else:
+                    self.config.logger.info( "stream {0}: tr. #{1} {2} into {3} -> commit {4} on {5}".format(streamName, tr.id, tr.Type, destStream if destStream is not None else 'unknown', commitHash[:8], branchName) )
             else:
                 return
         else:
@@ -497,7 +522,7 @@ class AccuRev2Git(object):
 
                 # Commit
                 commitHash = self.Commit(depot=depot, transaction=tr)
-                if not commitHash:
+                if commitHash is None:
                     if"nothing to commit" in self.gitRepo.lastStdout:
                         self.config.logger.error( "diff info ({0} elements):".format(len(diff.elements)) )
                         for element in diff.elements:
@@ -510,12 +535,14 @@ class AccuRev2Git(object):
                             self.config.logger.error( "  {0}".format(p) )
                         self.config.logger.info("Non-fatal error. Continuing.")
                     else:
-                        return
+                        break # Early return from processing this stream. Restarting should clean everything up.
                 else:
                     self.config.logger.info( "stream {0}: tr. #{1} {2} into {3} -> commit {4} on {5}".format(streamName, tr.id, tr.Type, destStream if destStream is not None else 'unknown', commitHash[:8], branchName) )
             else:
                 self.config.logger.info( "Reached end transaction #{0} for {1} -> {2}".format(endTr.id, streamName, branchName) )
                 break
+
+        return (tr, commitHash)
 
     def ProcessStreams(self):
         for stream in self.config.accurev.streamMap:
