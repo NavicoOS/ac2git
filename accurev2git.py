@@ -38,6 +38,11 @@ class Config(object):
             self.isDbgEnabled = False
             self.isInfoEnabled = True
             self.isErrEnabled = True
+
+            self.logFile = None
+            self.logFileDbgEnabled = False
+            self.logFileInfoEnabled = True
+            self.logFileErrorEnabled = True
         
         def _FormatMessage(self, messages):
             if self.referenceTime is not None:
@@ -51,16 +56,28 @@ class Config(object):
         
         def info(self, *message):
             if self.isInfoEnabled:
-                print self._FormatMessage(message)
+                print(self._FormatMessage(message))
+
+            if self.logFile is not None and self.logFileInfoEnabled:
+                self.logFile.write(self._FormatMessage(message))
+                self.logFile.write("\n")
 
         def dbg(self, *message):
             if self.isDbgEnabled:
-                print self._FormatMessage(message)
+                print(self._FormatMessage(message))
+
+            if self.logFile is not None and self.logFileDbgEnabled:
+                self.logFile.write(self._FormatMessage(message))
+                self.logFile.write("\n")
         
         def error(self, *message):
             if self.isErrEnabled:
                 sys.stderr.write(self._FormatMessage(message))
                 sys.stderr.write("\n")
+
+            if self.logFile is not None and self.logFileErrorEnabled:
+                self.logFile.write(self._FormatMessage(message))
+                self.logFile.write("\n")
         
     class AccuRev(object):
         @classmethod
@@ -684,6 +701,7 @@ def AccuRev2GitMain(argv):
     parser.add_argument('-g', '--git-repo-path',    nargs='?', dest='gitRepoPath',     default=config.git.repoPath, help="The system path to an existing folder where the git repository will be created.")
     parser.add_argument('-r', '--restart',    dest='restart', action='store_const', const=True, help="Discard any existing conversion and start over.")
     parser.add_argument('-v', '--verbose',    dest='debug',   action='store_const', const=True, help="Print the script debug information. Makes the script more verbose.")
+    parser.add_argument('-L', '--log-file',   dest='logFile', help="Sets the filename to which all console output will be logged (console output is still printed).")
     parser.add_argument('-e', '--dump-example-config', nargs='?', dest='exampleConfigFilename', const='no-filename', default=None, help="Generates an example configuration file and exits. If the filename isn't specified a default filename '{0}' is used. The script automatically loads the configuration file named '{1}' when it is run. Commandline arguments, if given, override all options in the configuration file.".format(defaultExampleConfigFilename, configFilename))
     
     args = parser.parse_args()
@@ -712,6 +730,10 @@ def AccuRev2GitMain(argv):
     state = AccuRev2Git(config)
     
     state.config.logger.isDbgEnabled = ( args.debug == True )
+    
+    if args.logFile is not None:
+        config.logger.logFile = codecs.open(args.logFile, 'w', 'utf-8')
+        state.config.logger.logFileDbgEnabled = ( args.debug == True )
     
     state.config.logger.info("Restart:" if args.restart else "Start:")
     state.config.logger.referenceTime = time.clock()
