@@ -408,11 +408,9 @@ class AccuRev2Git(object):
         nextTr = startTrNumber + 1
         diff = accurev.diff(all=True, informationOnly=True, verSpec1=streamName, verSpec2=streamName, transactionRange="{0}-{1}".format(startTrNumber, nextTr))
 
-        # Note: This is likely to be a hot path. Some sort of binary search might optimize it for streams with sparse promotes but this isn't likely to always
-        #       be the best option. Hence a simple strategy of look 10/15/20/25 ahead and if you find a diff then binary search that. Alternatively you could mix this
-        #       with information from the hist command for the stream in an attempt to optimize... However, currently this is accurate and that's all that matters
-        #       to me. Optimizations can come later...
-
+        # Note: This is likely to be a hot path. However, it cannot be optimized since a revert of a transaction would not show up in the diff even though the
+        #       state of the stream was changed during that period in time. Hence to be correct we must iterate over the transactions one by one unless we have
+        #       explicit knowlege of all the transactions which could affect us via some sort of deep history option...
         while nextTr <= endTrNumber and len(diff.elements) == 0:
             nextTr += 1
             diff = accurev.diff(all=True, informationOnly=True, verSpec1=streamName, verSpec2=streamName, transactionRange="{0}-{1}".format(startTrNumber, nextTr))
