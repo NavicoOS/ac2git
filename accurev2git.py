@@ -262,6 +262,8 @@ class AccuRev2Git(object):
                     with open(filename, 'w') as file:
                         #file.write('# accurev2git.py preserve empty dirs\n')
                         pass
+                    if not os.path.exists(filename):
+                        self.config.logger.error("Failed to preserve directory. Couldn't create {0}.".format(filename))
 
     def GetGitUserFromAccuRevUser(self, accurevUsername):
         if accurevUsername is not None:
@@ -350,7 +352,7 @@ class AccuRev2Git(object):
         self.PreserveEmptyDirs()
 
         # Add all of the files to the index
-        self.gitRepo.add(force=True, all=True)
+        self.gitRepo.add(force=True, all=True, gitOpts=[u'-c', u'core.autocrlf=false'])
 
         # Make the first commit
         messageFilePath = os.path.join(self.cwd, 'commit_message')
@@ -365,10 +367,15 @@ class AccuRev2Git(object):
         committer = self.GetGitUserFromAccuRevUser(transaction.user)
         committerDate = transaction.time
         commitHash = None
-        if self.gitRepo.commit(messageFile=messageFilePath, committer=committer, committer_date=committerDate, author=committer, date=committerDate, allow_empty_message=True):
+        if self.gitRepo.commit(messageFile=messageFilePath, committer=committer, committer_date=committerDate, author=committer, date=committerDate, allow_empty_message=True, gitOpts=[u'-c', u'core.autocrlf=false']):
             commitHash = self.gitRepo.raw_cmd([u'git', u'log', u'-1', u'--format=format:%H'])
             self.config.logger.dbg( "Committed {0}".format(commitHash) )
             self.AddAccurevHistNote(commitHash=commitHash, ref=AccuRev2Git.gitNotesRef_AccurevHistXml, depot=depot, transaction=transaction, isXml=True)
+                ## The XML output in the notes is how we track our conversion progress. It is not acceptable for it to fail.
+                ## Undo the commit and print an error.
+                #self.config.logger.error("Couldn't record last transaction state. Undoing the last commit {0} with `git reset {0}~1`".format(commitHash, branchName))
+                #self.gitRepo.raw_cmd([u'git', u'reset', u'{0}~1'.format(branchName)])
+                #return None
             self.AddAccurevHistNote(commitHash=commitHash, ref=AccuRev2Git.gitNotesRef_AccurevHist, depot=depot, transaction=transaction, isXml=False)
         elif "nothing to commit" in self.gitRepo.lastStdout:
             self.config.logger.error( "nothing to commit after populating transaction {0}...?".format(transaction.id) )

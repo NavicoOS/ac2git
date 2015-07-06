@@ -278,8 +278,13 @@ class repo(object):
         else:
             raise Exception(u'Error, tried to add empty file list')
     
-    def add(self, fileList = [], force=False, update=False, all=False):
-        cmd = [ gitCmd, u'add' ]
+    def add(self, fileList = [], force=False, update=False, all=False, gitOpts=[]):
+        cmd = [ gitCmd ]
+        
+        if gitOpts is not None and len(gitOpts) > 0:
+            cmd.extend(gitOpts)
+
+        cmd.append(u'add')
         
         if force:
             cmd.append(u'-f')
@@ -299,8 +304,13 @@ class repo(object):
         
         return (output is not None)
     
-    def commit(self, message=None, messageFile=None, author=None, date=None, committer=None, committer_date=None, allow_empty=False, allow_empty_message=False):
-        cmd = [ gitCmd, u'commit' ]
+    def commit(self, message=None, messageFile=None, author=None, date=None, committer=None, committer_date=None, allow_empty=False, allow_empty_message=False, gitOpts=[]):
+        cmd = [ gitCmd ]
+        
+        if gitOpts is not None and len(gitOpts) > 0:
+            cmd.extend(gitOpts)
+
+        cmd.append(u'commit')
         
         if allow_empty:
             cmd.append(u'--allow-empty')
