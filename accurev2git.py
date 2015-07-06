@@ -192,22 +192,28 @@ class Config(object):
             accurev = Config.AccuRev.fromxmlelement(xmlRoot.find('accurev'))
             git     = Config.Git.fromxmlelement(xmlRoot.find('git'))
             
+            logFilename = None
+            logFileElem = xmlRoot.find('logfile')
+            if logFileElem is not None:
+                logFilename = logFileElem.text
+
             usermaps = []
             userMapsElem = xmlRoot.find('usermaps')
             if userMapsElem is not None:
                 for userMapElem in userMapsElem.findall('map-user'):
                     usermaps.append(Config.UserMap.fromxmlelement(userMapElem))
             
-            return cls(accurev, git, usermaps)
+            return cls(accurev=accurev, git=git, usermaps=usermaps, logFilename=logFilename)
         else:
             # Invalid XML for an accurev2git configuration file.
             return None
 
-    def __init__(self, accurev = None, git = None, usermaps = None):
-        self.accurev  = accurev
-        self.git      = git
-        self.usermaps = usermaps
-        self.logger   = Config.Logger()
+    def __init__(self, accurev = None, git = None, usermaps = None, logFilename = None):
+        self.accurev     = accurev
+        self.git         = git
+        self.usermaps    = usermaps
+        self.logFilename = logFilename
+        self.logger      = Config.Logger()
         
     def __repr__(self):
         str = "Config(accurev=" + repr(self.accurev)
@@ -474,7 +480,7 @@ class AccuRev2Git(object):
                     destStream = None
                 self.config.logger.dbg( "{0} pop (init): {1} {2}{3}".format(streamName, tr.Type, tr.id, " to {0}".format(destStream) if destStream is not None else "") )
                 accurev.pop(verSpec=streamName, location=self.gitRepo.path, isRecursive=True, timeSpec=tr.id, elementList='.')
-                commitHash = self.Commit(depot=depot, transaction=tr):
+                commitHash = self.Commit(depot=depot, transaction=tr)
                 if not commitHash:
                     self.config.logger.dbg( "{0} first commit has failed. Is it an empty commit? Continuing...".format(streamName) )
                 else:
@@ -640,6 +646,7 @@ def DumpExampleConfigFile(outputFilename):
         </stream-list>
     </accurev>
     <git repo-path="/put/the/git/repo/here" /> <!-- The system path where you want the git repo to be populated. Note: this folder should already exist. -->
+    <logfile>accurev2git.log<logfile>
     <!-- The user maps are used to convert users from AccuRev into git. Please spend the time to fill them in properly. -->
     <usermaps>
         <map-user><accurev username="joe_bloggs" /><git name="Joe Bloggs" email="joe@bloggs.com" /></map-user>
@@ -686,7 +693,7 @@ def LoadConfigOrDefaults(scriptName):
         config = Config.fromxmlstring(configXml)
 
     if config is None:
-        config = Config(Config.AccuRev(None), Config.Git(None), [])
+        config = Config(accurev=Config.AccuRev(None), git=Config.Git(None), usermaps=[], logFilename=None)
         
     return config
 
@@ -726,7 +733,7 @@ def AccuRev2GitMain(argv):
     parser.add_argument('-g', '--git-repo-path',    nargs='?', dest='gitRepoPath',     default=config.git.repoPath, help="The system path to an existing folder where the git repository will be created.")
     parser.add_argument('-r', '--restart',    dest='restart', action='store_const', const=True, help="Discard any existing conversion and start over.")
     parser.add_argument('-v', '--verbose',    dest='debug',   action='store_const', const=True, help="Print the script debug information. Makes the script more verbose.")
-    parser.add_argument('-L', '--log-file',   dest='logFile', help="Sets the filename to which all console output will be logged (console output is still printed).")
+    parser.add_argument('-L', '--log-file',   dest='logFile', default=config.logFilename,       help="Sets the filename to which all console output will be logged (console output is still printed).")
     parser.add_argument('-e', '--dump-example-config', nargs='?', dest='exampleConfigFilename', const='no-filename', default=None, help="Generates an example configuration file and exits. If the filename isn't specified a default filename '{0}' is used. The script automatically loads the configuration file named '{1}' when it is run. Commandline arguments, if given, override all options in the configuration file.".format(defaultExampleConfigFilename, configFilename))
     
     args = parser.parse_args()
