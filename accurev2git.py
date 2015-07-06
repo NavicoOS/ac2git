@@ -451,11 +451,11 @@ class AccuRev2Git(object):
                 self.config.logger.error("  e.g. git reset --soft {0}~1".format(branchName))
                 return
             tr = hist.transactions[0]
-            self.config.logger.dbg("{0}: last processed transaction = #{1}".format(streamName, tr.id))
+            self.config.logger.dbg("{0}: last processed transaction was #{1}".format(streamName, tr.id))
 
         endTrHist = accurev.hist(depot=depot, timeSpec="{0}.1".format(endTransaction))
         endTr = endTrHist.transactions[0]
-        self.config.logger.info("{0}: will stop at transaction #{1}".format(streamName, endTr.id))
+        self.config.logger.info("{0}: processing transaction range #{1} - #{2}".format(streamName, tr.id, endTr.id))
 
         while True:
             nextTr, diff = self.FindNextChangeTransaction(streamName=streamName, startTrNumber=tr.id, endTrNumber=endTr.id)
