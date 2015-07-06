@@ -732,12 +732,22 @@ def AccuRev2GitMain(argv):
     state.config.logger.isDbgEnabled = ( args.debug == True )
     
     if args.logFile is not None:
-        config.logger.logFile = codecs.open(args.logFile, 'w', 'utf-8')
-        state.config.logger.logFileDbgEnabled = ( args.debug == True )
+        with codecs.open(args.logFile, 'a', 'utf-8') as f:
+            f.write(u'{0}\n'.format(u" ".join(sys.argv)))
+            f.write(u'{0}\n'.format(datetime.now()))
+            state.config.logger.logFile = f
+            state.config.logger.logFileDbgEnabled = ( args.debug == True )
     
-    state.config.logger.info("Restart:" if args.restart else "Start:")
-    state.config.logger.referenceTime = time.clock()
-    return state.Start(isRestart=args.restart)
+            state.config.logger.info("Restart:" if args.restart else "Start:")
+            state.config.logger.referenceTime = time.clock()
+            rv = state.Start(isRestart=args.restart)
+
+    else:    
+        state.config.logger.info("Restart:" if args.restart else "Start:")
+        state.config.logger.referenceTime = time.clock()
+        rv = state.Start(isRestart=args.restart)
+
+    return rv
         
 # ################################################################################################ #
 # Script Start                                                                                     #
