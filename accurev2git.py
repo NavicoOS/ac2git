@@ -781,10 +781,10 @@ def AccuRev2GitMain(argv):
     if config.logFilename is not None:
         with codecs.open(config.logFilename, 'a', 'utf-8') as f:
             f.write(u'{0}\n'.format(u" ".join(sys.argv)))
-            PrintConfigSummary(state.config)
             state.config.logger.logFile = f
             state.config.logger.logFileDbgEnabled = ( args.debug == True )
     
+            PrintConfigSummary(state.config)
             state.config.logger.info("Restart:" if args.restart else "Start:")
             state.config.logger.referenceTime = time.clock()
             rv = state.Start(isRestart=args.restart)
