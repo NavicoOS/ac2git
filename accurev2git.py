@@ -704,7 +704,7 @@ def LoadConfigOrDefaults(scriptName):
 def PrintConfigSummary(config):
     if config is not None:
         config.logger.info('Config info:')
-        config.logger.info('  now: {0}\n'.format(datetime.now()))
+        config.logger.info('  now: {0}'.format(datetime.now()))
         config.logger.info('  git')
         config.logger.info('    repo path:{0}'.format(config.git.repoPath))
         config.logger.info('  accurev:')
