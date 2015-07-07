@@ -353,13 +353,15 @@ class AccuRev2Git(object):
 
     def GetLastCommitHash(self):
         for i in xrange(0, 3):
-            commitHash = self.gitRepo.raw_cmd([u'git', u'log', u'-1', u'--format=format:%H'])
+            cmd = [u'git', u'log', u'-1', u'--format=format:%H']
+            commitHash = self.gitRepo.raw_cmd(cmd)
             if commitHash is not None:
                 commitHash = commitHash.strip()
                 if len(commitHash) == 0:
                     commitHash = None
                 else:
                     break
+            self.config.logger.error("Failed to retrieve last git commit hash. Command `{0}` failed.".format(' '.join(cmd)))
 
         return commitHash
 
@@ -415,8 +417,10 @@ class AccuRev2Git(object):
                 if not xmlNoteWritten:
                     # The XML output in the notes is how we track our conversion progress. It is not acceptable for it to fail.
                     # Undo the commit and print an error.
-                    self.config.logger.error("Couldn't record last transaction state. Undoing the last commit {0} with `git reset {0}~1`".format(commitHash, branchName))
-                    self.gitRepo.raw_cmd([u'git', u'reset', u'--soft', u'{0}~1'.format(branchName)])
+                    branchName = 'HEAD'
+                    self.config.logger.error("Couldn't record last transaction state. Undoing the last commit {0} with `git reset --soft {1}^`".format(commitHash, branchName))
+                    self.gitRepo.raw_cmd([u'git', u'reset', u'--soft', u'{0}^'.format(branchName)])
+
                     return None
                 self.AddAccurevHistNote(commitHash=commitHash, ref=AccuRev2Git.gitNotesRef_AccurevHist, depot=depot, transaction=transaction, isXml=False)
             else:
@@ -700,6 +704,7 @@ def LoadConfigOrDefaults(scriptName):
 def PrintConfigSummary(config):
     if config is not None:
         config.logger.info('Config info:')
+        config.logger.info('  now: {0}\n'.format(datetime.now()))
         config.logger.info('  git')
         config.logger.info('    repo path:{0}'.format(config.git.repoPath))
         config.logger.info('  accurev:')
@@ -714,6 +719,8 @@ def PrintConfigSummary(config):
         config.logger.info('    end tran.:   #{0}'.format(config.accurev.endTransaction))
         config.logger.info('    username: {0}'.format(config.accurev.username))
         config.logger.info('  usermaps: {0}'.format(len(config.usermaps)))
+        config.logger.info('  log file: {0}'.format(config.logFilename))
+        config.logger.info('  verbose:  {0}'.format(config.logger.isDbgEnabled))
     
 # ################################################################################################ #
 # Script Main                                                                                      #
@@ -765,17 +772,16 @@ def AccuRev2GitMain(argv):
     
     if not ValidateConfig(config):
         return 1
+    
+    config.logger.isDbgEnabled = ( args.debug == True )
 
-    PrintConfigSummary(config)
     
     state = AccuRev2Git(config)
     
-    state.config.logger.isDbgEnabled = ( args.debug == True )
-    
-    if args.logFile is not None:
-        with codecs.open(args.logFile, 'a', 'utf-8') as f:
+    if config.logFilename is not None:
+        with codecs.open(config.logFilename, 'a', 'utf-8') as f:
             f.write(u'{0}\n'.format(u" ".join(sys.argv)))
-            f.write(u'{0}\n'.format(datetime.now()))
+            PrintConfigSummary(state.config)
             state.config.logger.logFile = f
             state.config.logger.logFileDbgEnabled = ( args.debug == True )
     
@@ -783,7 +789,8 @@ def AccuRev2GitMain(argv):
             state.config.logger.referenceTime = time.clock()
             rv = state.Start(isRestart=args.restart)
 
-    else:    
+    else:
+        PrintConfigSummary(state.config)
         state.config.logger.info("Restart:" if args.restart else "Start:")
         state.config.logger.referenceTime = time.clock()
         rv = state.Start(isRestart=args.restart)
