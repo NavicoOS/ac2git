@@ -181,7 +181,7 @@ class Config(object):
     @staticmethod
     def FilenameFromScriptName(scriptName):
         (root, ext) = os.path.splitext(scriptName)
-        return root + '.config'
+        return root + '.config.xml'
 
     @classmethod
     def fromxmlstring(cls, xmlString):
@@ -207,6 +207,16 @@ class Config(object):
         else:
             # Invalid XML for an accurev2git configuration file.
             return None
+
+    @staticmethod
+    def fromfile(filename):
+        config = None
+        if os.path.exists(filename):
+            with codecs.open(filename) as f:
+                configXml = f.read()
+                config = Config.fromxmlstring(configXml)
+        
+        return config
 
     def __init__(self, accurev = None, git = None, usermaps = None, logFilename = None):
         self.accurev     = accurev
@@ -282,7 +292,7 @@ class AccuRev2Git(object):
                 # Preserve empty directories that are not under the .git/ directory.
                 if git.GetGitDirPrefix(path) is None and len(os.listdir(path)) == 0:
                     filename = os.path.join(path, '.gitignore')
-                    with open(filename, 'w') as file:
+                    with codecs.open(filename, 'w', 'utf-8') as file:
                         #file.write('# accurev2git.py preserve empty dirs\n')
                         pass
                     if not os.path.exists(filename):
@@ -659,9 +669,8 @@ def DumpExampleConfigFile(outputFilename):
     </usermaps>
 </accurev2git>
 """
-    file = open(outputFilename, 'w')
-    file.write(exampleContents)
-    file.close()
+    with codecs.open(outputFilename, 'w') as file:
+        file.write(exampleContents)
 
 def ValidateConfig(config):
     # Validate the program args and configuration up to this point.
@@ -681,22 +690,8 @@ def ValidateConfig(config):
     
     return isValid
 
-def LoadConfigOrDefaults(scriptName):
-    # Try and load the config file
-    doesConfigExist = True
-    
-    configFilename = Config.FilenameFromScriptName(scriptName)
-    configXml = None
-    try:
-        configFile = open(configFilename)
-        configXml = configFile.read()
-        configFile.close()
-    except:
-        doesConfigExist = False
-        
-    config = None
-    if configXml is not None:
-        config = Config.fromxmlstring(configXml)
+def LoadConfigOrDefaults(configFilename):
+    config = Config.fromfile(configFilename)
 
     if config is None:
         config = Config(accurev=Config.AccuRev(None), git=Config.Git(None), usermaps=[], logFilename=None)
@@ -755,10 +750,13 @@ def AccuRev2GitMain(argv):
             exampleConfigFilename = args.exampleConfigFilename
         
         DumpExampleConfigFile(exampleConfigFilename)
-        sys.exit(0)
+        return 0
     
     # Load the config file
-    config = LoadConfigOrDefaults(args.configFilename)
+    config = Config.fromfile(filename=args.configFilename)
+    if config is None:
+        sys.stderr.write("Config file '{0}' not found.\n".format(args.configFilename))
+        return 1
 
     # Set the overrides for in the configuration from the arguments
     if args.accurevUsername is not None:
