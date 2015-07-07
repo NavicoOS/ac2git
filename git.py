@@ -340,14 +340,14 @@ class repo(object):
             if m is not None:
                 committerName = m.group(1).strip()
                 committerEmail = m.group(2).strip()
-                newEnv[u'GIT_COMMITTER_NAME'] = committerName
-                newEnv[u'GIT_COMMITTER_EMAIL'] = committerEmail
+                newEnv['GIT_COMMITTER_NAME'] = str(committerName)
+                newEnv['GIT_COMMITTER_EMAIL'] = str(committerEmail)
         
         if committer_date is not None:
             if committer_date is not None:
                 if isinstance(committer_date, datetime.datetime):
                     committer_date = committer_date.isoformat()
-            newEnv[u'GIT_COMMITTER_DATE'] = u'{0}'.format(committer_date)
+            newEnv['GIT_COMMITTER_DATE'] = str('{0}'.format(committer_date))
         
         # Execute the command
         output = self._docmd(cmd, env=newEnv)
