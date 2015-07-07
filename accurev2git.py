@@ -366,15 +366,16 @@ class AccuRev2Git(object):
         return commitHash
 
     def GetLastCommitTransaction(self):
+        hist = None
         commitHash = self.GetLastCommitHash()
         lastHistXml = self.gitRepo.notes.show(obj=commitHash, ref=AccuRev2Git.gitNotesRef_AccurevHistXml)
         if lastHistXml is not None:
             lastHistXml = lastHistXml.strip().encode('utf-8')
-            return accurev.obj.History.fromxmlstring(lastHistXml)
+            hist = accurev.obj.History.fromxmlstring(lastHistXml)
         else:
             self.config.logger.error("Failed to load the last transaction for commit {0} from {1} notes.".format(commitHash, AccuRev2Git.gitNotesRef_AccurevHistXml))
             self.config.logger.error("  i.e git notes --ref={0} show {1}    - returned nothing.".format(AccuRev2Git.gitNotesRef_AccurevHistXml, commitHash))
-        return None
+        return (hist, commitHash)
 
     def CreateCleanGitBranch(self, branchName):
         # Create the git branch.
@@ -473,6 +474,7 @@ class AccuRev2Git(object):
                 branch = b
                 break
         tr = None
+        commitHash = None
         if branch is None:
             # We are tracking a new stream:
             tr = self.GetFirstTransaction(depot=depot, streamName=streamName, startTransaction=startTransaction, endTransaction=endTransaction)
@@ -495,7 +497,7 @@ class AccuRev2Git(object):
             # Get the last processed transaction
             self.ClearGitRepo()
             self.gitRepo.checkout(branchName=branchName)
-            hist = self.GetLastCommitTransaction()
+            hist, commitHash = self.GetLastCommitTransaction()
             if hist is None:
                 self.config.logger.error("Repo in invalid state. Please reset this branch to a previous commit with valid notes.")
                 self.config.logger.error("  e.g. git reset --soft {0}~1".format(branchName))
