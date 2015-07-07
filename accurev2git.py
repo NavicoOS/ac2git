@@ -622,6 +622,7 @@ class AccuRev2Git(object):
         parent = None
         child = None
         if stream1 is not None and stream2 is not None:
+            #print ("self.GetParentChild(stream1={0}, stream2={1}, timeSpec={2}".format(str(stream1), str(stream2), str(timeSpec)))
             stream1Children = accurev.show.streams(depot=self.config.accurev.depot, stream=stream1, timeSpec=timeSpec, listChildren=True)
             stream2Children = accurev.show.streams(depot=self.config.accurev.depot, stream=stream2, timeSpec=timeSpec, listChildren=True)
 
@@ -643,6 +644,9 @@ class AccuRev2Git(object):
     def StitchBranches(self):
         branchRevMap = git_stitch.GetBranchRevisionMap(self.config.git.repoPath)
         
+        self.config.logger.info("Stitching git branches")
+
+        commitRewriteMap = OrderedDict()
         if branchRevMap is not None:
             for tree_hash in branchRevMap:
                 if len(branchRevMap[tree_hash]) > 1:
@@ -659,20 +663,25 @@ class AccuRev2Git(object):
                         firstTime = int(first[u'committer'][u'time'])
                         secondTime = int(second[u'committer'][u'time'])
     
-                        firstParents = first.get(u'parents')
-                        firstParents = firstParents if firstParents is not None else []
-                        secondParents = second.get(u'parents')
-                        secondParents = secondParents if secondParents is not None else []
+                        wereSwapped = False
                         if firstTime == secondTime:
                             # Normally both commits would have originated from the same transaction. However, if not, let's try and order them by transaciton number first.
                             firstHist = self.GetHistForCommit(commitHash=first[u'hash'])
                             secondHist = self.GetHistForCommit(commitHash=second[u'hash'])
 
                             if firstHist.transactions[0].id < secondHist.transactions[0].id:
-                                secondParents.append(first[u'hash'])
+                                # This should really never be true given that AccuRev is centralized and synchronous and that firstTime == secondTime above...
+                                pass # Already in the correct order
                             elif firstHist.transactions[0].id > secondHist.transactions[0].id:
-                                firstParents.append(second[u'hash'])
+                                # This should really never be true given that AccuRev is centralized and synchronous and that firstTime == secondTime above...
+                                # Swap them
+                                wereSwapped = True
+                                first, second = second, first
+                                firstHist, secondHist = secondHist, firstHist
                             else:
+                                # The same transaction affected both commits (the id's are unique in accurev)...
+                                # Must mean that they are substreams of eachother or sibling substreams of a third stream. Let's see which it is.
+
                                 # Get the information for the first stream
                                 firstStream = None
                                 firstBranches = self.gitRepo.branch_list(containsCommit=first[u'hash']) # This should only ever return one branch since we are processing things in order...
@@ -680,12 +689,11 @@ class AccuRev2Git(object):
                                     firstBranch = firstBranches[0]
                                     firstStream = self.GetStreamNameFromBranch(branchName=firstBranch.name)
                                 else:
-                                    # ERROR!!!
-                                    pass
-
-                                firstStreamChildren = None
-                                if firstStream is not None:
-                                    firstStreamChildren = accurev.show.streams(depot=self.config.accurev.depot, stream=firstStream, timeSpec=firstHist.transactions[0].id, listChildren=True)
+                                    # ERROR: We cannot determine what branch this commit came from and we don't include any information about which stream we were processing against the commit.
+                                    #        This means that we are processing items below a merge point and we shouldn't do that...
+                                    # SKIP!
+                                    self.config.logger.error("Branch stitching error: incorrect state. Commit {0} can be reached from multiple branches.".format(first[u'hash'][:8]))
+                                    continue
 
                                 # Get the information for the second stream
                                 secondStream = None
@@ -694,36 +702,72 @@ class AccuRev2Git(object):
                                     secondBranch = secondBranches[0]
                                     secondStream = self.GetStreamNameFromBranch(branchName=secondBranch.name)
                                 else:
-                                    # ERROR!!!
-                                    pass
-
-                                secondStreamChildren = None
-                                if secondStream is not None:
-                                    secondStreamChildren = accurev.show.streams(depot=self.config.accurev.depot, stream=secondStream, timeSpec=secondHist.transactions[0].id, listChildren=True)
+                                    # ERROR: We cannot determine what branch this commit came from and we don't include any information about which stream we were processing against the commit.
+                                    #        This means that we are processing items below a merge point and we shouldn't do that...
+                                    # SKIP!
+                                    self.config.logger.error("Branch stitching error: incorrect state. Commit {0} can be reached from multiple branches.".format(second[u'hash'][:8]))
+                                    continue
 
                                 # Find which one is the parent of the other. They must be inline since they were affected by the same transaction (since the times match)
-                                if firstStreamChildren is not None and secondStreamChildren is not None:
-                                    parentStream, childStream = self.GetParentChild(stream1=firstStream, stream2=secondStream, timeSpec=firstHist.transactions[0].id)
-                                    if parentStream is None and childStream is None:
-                                        # ERROR!!!
-                                        pass
-                                    elif parentStream == firstStream:
-                                        secondParents.append(first[u'hash'])
-                                    elif parentStream == secondStream:
-                                        firstParents.append(second[u'hash'])
+                                parentStream, childStream = self.GetParentChild(stream1=firstStream, stream2=secondStream, timeSpec=firstHist.transactions[0].id)
+                                if parentStream is None and childStream is None:
+                                    # The two streams are unrelated and are probably substreams of a third stream. Hence we should not merge them!
+                                    self.config.logger.info(u'  unrelated: {0} ({1}/{2}) is equiv. to {3} ({4}/{5}). tree {6}.'.format(first[u'hash'][:8], firstStream, firstHist.transactions[0].id, second[u'hash'][:8], secondStream, secondHist.transactions[0].id, tree_hash[:8]))
+                                    first, second = None, None
+                                    # This thrid stream should be listed as the destination stream for the transaction in our firstHist and secondHist so
+                                    # we can at least do a sanity check...
+                                    # TODO: do the sanity check!!!
+                                    pass
+                                elif parentStream == firstStream:
+                                    pass # They are already in the correct order.
+                                elif parentStream == secondStream:
+                                    # Swap them
+                                    wereSwapped = True
+                                    first, second = second, first
+                                    firstHist, secondHist = secondHist, firstHist
+                                    firstStream, secondStream = secondStream, firstStream
 
                         elif firstTime < secondTime:
-                            secondParents.append(first[u'hash'])
+                            # Already in the correct order...
+                            pass
                         else:
                             raise Exception(u'Error: wrong sort order!')
 
-                        if firstParents == first.get(u'parents') and secondParents == second.get(u'parents'):
-                            print(u'  squash {0} as equiv. to {1}. tree {2}.'.format(first[u'hash'][:8], second[u'hash'][:8], tree_hash[:8]))
-                        elif firstParents != first.get(u'parents'):
-                            print(u'  merge  {0} as parent of {1}. tree {2}. parents {3}'.format(second[u'hash'][:8], first[u'hash'][:8], tree_hash[:8], [x[:8] for x in firstParents] ))
-                        else:
-                            print(u'  merge  {0} as parent of {1}. tree {2}. parents {3}'.format(first[u'hash'][:8], second[u'hash'][:8], tree_hash[:8], [x[:8] for x in secondParents] ))
+                        if first is not None and second is not None:
+                            if second[u'hash'] not in commitRewriteMap:
+                                # Mark the commit for rewriting.
+                                commitRewriteMap[second[u'hash']] = OrderedDict() # We need a set (meaning no duplicates) but we also need them to be in order so lets use an OrderedDict().
+                                # Add the existing parrents
+                                if u'parents' in second:
+                                    for parent in second[u'parents']:
+                                        commitRewriteMap[second[u'hash']][parent] = True
+                            # Add the new parent
+                            commitRewriteMap[second[u'hash']][first[u'hash']] = True
+                            self.config.logger.info(u'  merge:     {0} as parent of {1}. tree {2}. parents {3}'.format(first[u'hash'][:8], second[u'hash'][:8], tree_hash[:8], [x[:8] for x in commitRewriteMap[second[u'hash']].iterkeys()] ))
 
+            # Write shell script
+            parentFilterPath = os.path.join(self.cwd, 'parent_filter.sh')
+            with codecs.open(parentFilterPath, 'w', 'ascii') as f:
+                # http://www.tutorialspoint.com/unix/case-esac-statement.htm
+                f.write('#!/bin/sh\n\n')
+                f.write('case "$GIT_COMMIT" in\n')
+                for commitHash in commitRewriteMap:
+                    parentString = ''
+                    for parent in commitRewriteMap[commitHash]:
+                        parentString += '-p {0}'.format(parent)
+                    f.write('    "{0}") echo "{1}"\n'.format(commitHash, parentString))
+                    f.write('    ;;\n')
+                f.write('    *) cat < /dev/stdin\n') # If we don't have the commit mapping then just print out whatever we are given on stdin...
+                f.write('    ;;\n')
+                f.write('esac\n\n')
+
+            self.config.logger.info("Branch stitching script generated: {0}".format(parentFilterPath))
+            self.config.logger.info("To apply execute the following commands:")
+            self.config.logger.info("  chmod +x {0}".format(parentFilterPath))
+            self.config.logger.info("  cd {0}".format(self.config.git.repoPath))
+            self.config.logger.info("  git filter-branch --parent-filter {0} --prune-empty".format(parentFilterPath))
+            self.config.logger.info("  rm {0}".format(parentFilterPath))
+            self.config.logger.info("  cd -")
 
     # Start
     #   Begins a new AccuRev to Git conversion process discarding the old repository (if any).
@@ -749,7 +793,7 @@ class AccuRev2Git(object):
             if accurev.login(self.config.accurev.username, self.config.accurev.password):
                 self.config.logger.info( "Accurev login successful" )
                 
-                #self.ProcessStreams()
+                self.ProcessStreams()
                 self.StitchBranches()
               
                 # Restore the working directory.
