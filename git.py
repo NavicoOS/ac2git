@@ -354,8 +354,15 @@ class repo(object):
         
         return (output is not None)
     
-    def branch_list(self):
+    def branch_list(self, containsCommit=None, mergedCommit=None, noMergedCommit=None):
         cmd = [ gitCmd, u'branch', u'-vv' ]
+
+        if containsCommit is not None:
+            cmd.extend([ u'--contains', containsCommit ])
+        elif mergedCommit is not None:
+            cmd.extend([ u'--merged', mergedCommit ])
+        elif noMergedCommit is not None:
+            cmd.extend([ u'--no-merged', noMergedCommit ])
             
         output = self._docmd(cmd)
         

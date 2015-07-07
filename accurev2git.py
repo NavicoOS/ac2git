@@ -376,9 +376,8 @@ class AccuRev2Git(object):
 
         return commitHash
 
-    def GetLastCommitTransaction(self):
+    def GetHistForCommit(self, commitHash):
         hist = None
-        commitHash = self.GetLastCommitHash()
         lastHistXml = self.gitRepo.notes.show(obj=commitHash, ref=AccuRev2Git.gitNotesRef_AccurevHistXml)
         if lastHistXml is not None:
             lastHistXml = lastHistXml.strip().encode('utf-8')
@@ -386,7 +385,7 @@ class AccuRev2Git(object):
         else:
             self.config.logger.error("Failed to load the last transaction for commit {0} from {1} notes.".format(commitHash, AccuRev2Git.gitNotesRef_AccurevHistXml))
             self.config.logger.error("  i.e git notes --ref={0} show {1}    - returned nothing.".format(AccuRev2Git.gitNotesRef_AccurevHistXml, commitHash))
-        return (hist, commitHash)
+        return hist
 
     def CreateCleanGitBranch(self, branchName):
         # Create the git branch.
@@ -508,7 +507,8 @@ class AccuRev2Git(object):
             # Get the last processed transaction
             self.ClearGitRepo()
             self.gitRepo.checkout(branchName=branchName)
-            hist, commitHash = self.GetLastCommitTransaction()
+            commitHash = self.GetLastCommitHash()
+            hist = self.GetHistForCommit(commitHash=commitHash)
             if hist is None:
                 self.config.logger.error("Repo in invalid state. Please reset this branch to a previous commit with valid notes.")
                 self.config.logger.error("  e.g. git reset --soft {0}~1".format(branchName))
@@ -536,10 +536,7 @@ class AccuRev2Git(object):
                 tr = hist.transactions[0]
 
                 # Populate
-                try:
-                    destStream = tr.versions[0].virtualNamedVersion.stream
-                except:
-                    destStream = None
+                destStream = self.GetDestinationStreamName(history=hist)
                 self.config.logger.dbg( "{0} pop: {1} {2}{3}".format(streamName, tr.Type, tr.id, " to {0}".format(destStream) if destStream is not None else "") )
                 accurev.pop(verSpec=streamName, location=self.gitRepo.path, isRecursive=True, timeSpec=tr.id, elementList='.')
 
@@ -595,7 +592,54 @@ class AccuRev2Git(object):
             self.config.logger.error("{0} not found.\n".format(gitRootDir))
             
         return False
-    
+
+    def GetDestinationStreamName(self, history=None, transaction=None):
+        destStream = None
+        if history is not None:
+            if len(history.streams) == 1:
+                return history.streams[0].name
+            else:
+                try:
+                    history.transactions[0].versions[0].virtualNamedVersion.stream
+                except:
+                    pass
+        elif transaction is not None:
+            try:
+                transaction.versions[0].virtualNamedVersion.stream
+            except:
+                pass
+        return destStream
+
+    def GetStreamNameFromBranch(self, branchName):
+        if branchName is not None:
+            for stream in self.config.accurev.streamMap:
+                if branchName == self.config.accurev.streamMap[stream]:
+                    return stream
+        return None
+
+    # Arranges the stream1 and stream2 into a tuple of (parent, child) according to accurev information
+    def GetParentChild(self, stream1, stream2, timeSpec=u'now'):
+        parent = None
+        child = None
+        if stream1 is not None and stream2 is not None:
+            stream1Children = accurev.show.streams(depot=self.config.accurev.depot, stream=stream1, timeSpec=timeSpec, listChildren=True)
+            stream2Children = accurev.show.streams(depot=self.config.accurev.depot, stream=stream2, timeSpec=timeSpec, listChildren=True)
+
+            found = False
+            for stream in stream1Children.streams:
+                if stream.name == stream2:
+                    parent = stream1
+                    child = stream2
+                    found = True
+                    break
+            if not found:
+                for stream in stream2Children.streams:
+                    if stream.name == stream1:
+                        parent = stream2
+                        child = stream1
+                        break
+        return (parent, child)
+
     def StitchBranches(self):
         branchRevMap = git_stitch.GetBranchRevisionMap(self.config.git.repoPath)
         
@@ -615,20 +659,71 @@ class AccuRev2Git(object):
                         firstTime = int(first[u'committer'][u'time'])
                         secondTime = int(second[u'committer'][u'time'])
     
+                        firstParents = first.get(u'parents')
+                        firstParents = firstParents if firstParents is not None else []
+                        secondParents = second.get(u'parents')
+                        secondParents = secondParents if secondParents is not None else []
                         if firstTime == secondTime:
-                            print(u'  squash {0} as equiv. to {1}. tree {2}.'.format(first[u'hash'][:8], second[u'hash'][:8], tree_hash[:8]))
+                            # Normally both commits would have originated from the same transaction. However, if not, let's try and order them by transaciton number first.
+                            firstHist = self.GetHistForCommit(commitHash=first[u'hash'])
+                            secondHist = self.GetHistForCommit(commitHash=second[u'hash'])
+
+                            if firstHist.transactions[0].id < secondHist.transactions[0].id:
+                                secondParents.append(first[u'hash'])
+                            elif firstHist.transactions[0].id > secondHist.transactions[0].id:
+                                firstParents.append(second[u'hash'])
+                            else:
+                                # Get the information for the first stream
+                                firstStream = None
+                                firstBranches = self.gitRepo.branch_list(containsCommit=first[u'hash']) # This should only ever return one branch since we are processing things in order...
+                                if firstBranches is not None and len(firstBranches) == 1:
+                                    firstBranch = firstBranches[0]
+                                    firstStream = self.GetStreamNameFromBranch(branchName=firstBranch.name)
+                                else:
+                                    # ERROR!!!
+                                    pass
+
+                                firstStreamChildren = None
+                                if firstStream is not None:
+                                    firstStreamChildren = accurev.show.streams(depot=self.config.accurev.depot, stream=firstStream, timeSpec=firstHist.transactions[0].id, listChildren=True)
+
+                                # Get the information for the second stream
+                                secondStream = None
+                                secondBranches = self.gitRepo.branch_list(containsCommit=second[u'hash'])
+                                if secondBranches is not None and len(secondBranches) == 1:
+                                    secondBranch = secondBranches[0]
+                                    secondStream = self.GetStreamNameFromBranch(branchName=secondBranch.name)
+                                else:
+                                    # ERROR!!!
+                                    pass
+
+                                secondStreamChildren = None
+                                if secondStream is not None:
+                                    secondStreamChildren = accurev.show.streams(depot=self.config.accurev.depot, stream=secondStream, timeSpec=secondHist.transactions[0].id, listChildren=True)
+
+                                # Find which one is the parent of the other. They must be inline since they were affected by the same transaction (since the times match)
+                                if firstStreamChildren is not None and secondStreamChildren is not None:
+                                    parentStream, childStream = self.GetParentChild(stream1=firstStream, stream2=secondStream, timeSpec=firstHist.transactions[0].id)
+                                    if parentStream is None and childStream is None:
+                                        # ERROR!!!
+                                        pass
+                                    elif parentStream == firstStream:
+                                        secondParents.append(first[u'hash'])
+                                    elif parentStream == secondStream:
+                                        firstParents.append(second[u'hash'])
+
                         elif firstTime < secondTime:
-                            try:
-                                parents = second[u'parents']
-                                if parents is None:
-                                    raise Exception()
-                            except:
-                                parents = []
-    
-                            parents.append(first[u'hash'])
-                            print(u'  merge  {0} as parent of {1}. tree {2}. parents {3}'.format(first[u'hash'][:8], second[u'hash'][:8], tree_hash[:8], [x[:8] for x in parents] ))
+                            secondParents.append(first[u'hash'])
                         else:
                             raise Exception(u'Error: wrong sort order!')
+
+                        if firstParents == first.get(u'parents') and secondParents == second.get(u'parents'):
+                            print(u'  squash {0} as equiv. to {1}. tree {2}.'.format(first[u'hash'][:8], second[u'hash'][:8], tree_hash[:8]))
+                        elif firstParents != first.get(u'parents'):
+                            print(u'  merge  {0} as parent of {1}. tree {2}. parents {3}'.format(second[u'hash'][:8], first[u'hash'][:8], tree_hash[:8], [x[:8] for x in firstParents] ))
+                        else:
+                            print(u'  merge  {0} as parent of {1}. tree {2}. parents {3}'.format(first[u'hash'][:8], second[u'hash'][:8], tree_hash[:8], [x[:8] for x in secondParents] ))
+
 
     # Start
     #   Begins a new AccuRev to Git conversion process discarding the old repository (if any).
@@ -654,7 +749,7 @@ class AccuRev2Git(object):
             if accurev.login(self.config.accurev.username, self.config.accurev.password):
                 self.config.logger.info( "Accurev login successful" )
                 
-                self.ProcessStreams()
+                #self.ProcessStreams()
                 self.StitchBranches()
               
                 # Restore the working directory.
