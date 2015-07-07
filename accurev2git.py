@@ -27,6 +27,7 @@ from collections import OrderedDict
 
 import accurev
 import git
+import git_stitch
 
 # ################################################################################################ #
 # Script Classes                                                                                   #
@@ -595,6 +596,40 @@ class AccuRev2Git(object):
             
         return False
     
+    def StitchBranches(self):
+        branchRevMap = git_stitch.GetBranchRevisionMap(self.config.git.repoPath)
+        
+        if branchRevMap is not None:
+            for tree_hash in branchRevMap:
+                if len(branchRevMap[tree_hash]) > 1:
+                    # We should make some decisions about how to merge these commits which reference the same tree
+                    # and what their ideal parents are. Once we decide we will write it to file in a nice bash friendly
+                    # format and use the git filter-branch --parent-filter ... to fix it all up!
+                    inOrder = sorted(branchRevMap[tree_hash], key=lambda x: int(x[u'committer'][u'time']))
+                    #print(u'tree: {0}'.format(tree_hash))
+                    
+                    for i in xrange(0, len(inOrder) - 1):
+                        first = inOrder[i]
+                        second = inOrder[i + 1]
+                        
+                        firstTime = int(first[u'committer'][u'time'])
+                        secondTime = int(second[u'committer'][u'time'])
+    
+                        if firstTime == secondTime:
+                            print(u'  squash {0} as equiv. to {1}. tree {2}.'.format(first[u'hash'][:8], second[u'hash'][:8], tree_hash[:8]))
+                        elif firstTime < secondTime:
+                            try:
+                                parents = second[u'parents']
+                                if parents is None:
+                                    raise Exception()
+                            except:
+                                parents = []
+    
+                            parents.append(first[u'hash'])
+                            print(u'  merge  {0} as parent of {1}. tree {2}. parents {3}'.format(first[u'hash'][:8], second[u'hash'][:8], tree_hash[:8], [x[:8] for x in parents] ))
+                        else:
+                            raise Exception(u'Error: wrong sort order!')
+
     # Start
     #   Begins a new AccuRev to Git conversion process discarding the old repository (if any).
     def Start(self, isRestart=False):
@@ -620,6 +655,7 @@ class AccuRev2Git(object):
                 self.config.logger.info( "Accurev login successful" )
                 
                 self.ProcessStreams()
+                self.StitchBranches()
               
                 # Restore the working directory.
                 os.chdir(self.cwd)

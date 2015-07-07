@@ -13,11 +13,6 @@ import re
 # Python magic that gets the directory of our script
 # and adds its subdirectory accurev2git/python/ to
 # the search path for importing the git.py module.
-scriptPath, scriptFilename = os.path.split(sys.argv[0])
-relPath = os.path.join(u'accurev2git', u'python')
-relPath = os.path.join(scriptPath, relPath)
-absPath = os.path.join(os.getcwd(), relPath)
-sys.path.append( absPath )
 import git
 
 def BuildDatabase():
