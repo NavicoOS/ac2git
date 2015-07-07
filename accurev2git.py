@@ -703,7 +703,7 @@ def PrintConfigSummary(config):
         config.logger.info('Config info:')
         config.logger.info('  now: {0}'.format(datetime.now()))
         config.logger.info('  git')
-        config.logger.info('    repo path:{0}'.format(config.git.repoPath))
+        config.logger.info('    repo path: {0}'.format(config.git.repoPath))
         config.logger.info('  accurev:')
         config.logger.info('    depot: {0}'.format(config.accurev.depot))
         if config.accurev.streamMap is not None:
@@ -757,6 +757,9 @@ def AccuRev2GitMain(argv):
     if config is None:
         sys.stderr.write("Config file '{0}' not found.\n".format(args.configFilename))
         return 1
+    elif config.git is not None:
+        if not os.path.isabs(config.git.repoPath):
+            config.git.repoPath = os.path.abspath(config.git.repoPath)
 
     # Set the overrides for in the configuration from the arguments
     if args.accurevUsername is not None:
