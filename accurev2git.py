@@ -738,6 +738,8 @@ def AccuRev2GitMain(argv):
     parser.add_argument('-r', '--restart',    dest='restart', action='store_const', const=True, help="Discard any existing conversion and start over.")
     parser.add_argument('-v', '--verbose',    dest='debug',   action='store_const', const=True, help="Print the script debug information. Makes the script more verbose.")
     parser.add_argument('-L', '--log-file',   dest='logFile', metavar='<log-filename>',         help="Sets the filename to which all console output will be logged (console output is still printed).")
+    parser.add_argument('-q', '--no-log-file', dest='disableLogFile',  action='store_const', const=True, help="Do not log info to the log file. Alternatively achieved by not specifying a log file filename in the configuration file.")
+    parser.add_argument('-l', '--reset-log-file', dest='resetLogFile', action='store_const', const=True, help="Instead of appending new log info to the file truncate it instead and start over.")
     parser.add_argument('-e', '--dump-example-config', nargs='?', dest='exampleConfigFilename', const='no-filename', default=None, metavar='<example-config-filename>', help="Generates an example configuration file and exits. If the filename isn't specified a default filename '{0}' is used. Commandline arguments, if given, override all options in the configuration file.".format(defaultExampleConfigFilename, configFilename))
     
     args = parser.parse_args()
@@ -781,8 +783,11 @@ def AccuRev2GitMain(argv):
     
     state = AccuRev2Git(config)
     
-    if config.logFilename is not None:
-        with codecs.open(config.logFilename, 'a', 'utf-8') as f:
+    if config.logFilename is not None and not args.disableLogFile:
+        mode = 'a'
+        if args.resetLogFile:
+            mode = 'w'
+        with codecs.open(config.logFilename, mode, 'utf-8') as f:
             f.write(u'{0}\n'.format(u" ".join(sys.argv)))
             state.config.logger.logFile = f
             state.config.logger.logFileDbgEnabled = ( args.debug == True )
@@ -791,7 +796,6 @@ def AccuRev2GitMain(argv):
             state.config.logger.info("Restart:" if args.restart else "Start:")
             state.config.logger.referenceTime = time.clock()
             rv = state.Start(isRestart=args.restart)
-
     else:
         PrintConfigSummary(state.config)
         state.config.logger.info("Restart:" if args.restart else "Start:")
