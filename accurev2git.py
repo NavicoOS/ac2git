@@ -721,20 +721,20 @@ def PrintConfigSummary(config):
 def AccuRev2GitMain(argv):
     global state
     
-    config = LoadConfigOrDefaults(argv[0])
     configFilename = Config.FilenameFromScriptName(argv[0])
     defaultExampleConfigFilename = '{0}.example'.format(configFilename)
     
     # Set-up and parse the command line arguments. Examples from https://docs.python.org/dev/library/argparse.html
-    parser = argparse.ArgumentParser(description="Conversion tool for migrating AccuRev repositories into Git")
-    parser.add_argument('-u', '--accurev-username', nargs='?', dest='accurevUsername', default=config.accurev.username, help="The username which will be used to retrieve and populate the history from AccuRev. (overrides the username in the '{0}')".format(configFilename))
-    parser.add_argument('-p', '--accurev-password', nargs='?', dest='accurevPassword', default=config.accurev.password, help="The password for the username provided with the --accurev-username option or specified in the '{0}' file. (overrides the password in the '{0}')".format(configFilename))
-    parser.add_argument('-t', '--accurev-depot',    nargs='?', dest='accurevDepot',    default=config.accurev.depot, help="The AccuRev depot in which the stream/s that is/are being converted is/are located.")
-    parser.add_argument('-g', '--git-repo-path',    nargs='?', dest='gitRepoPath',     default=config.git.repoPath, help="The system path to an existing folder where the git repository will be created.")
+    parser = argparse.ArgumentParser(description="Conversion tool for migrating AccuRev repositories into Git. Configuration of the script is done with a configuration file whose filename is `{0}` by default. The filename can be overridden by providing the `-c` option described below. Command line arguments, if given, override the equivalent options in the configuration file.".format(configFilename))
+    parser.add_argument('-c', '--config', dest='configFilename', default=configFilename, metavar='<config-filename>', help="The XML configuration file for this script. This file is required for the script to operate. By default this filename is set to be `{0}`.".format(configFilename))
+    parser.add_argument('-u', '--accurev-username',  dest='accurevUsername', metavar='<accurev-username>', help="The username which will be used to retrieve and populate the history from AccuRev.")
+    parser.add_argument('-p', '--accurev-password',  dest='accurevPassword', metavar='<accurev-password>', help="The password for the provided accurev username.")
+    parser.add_argument('-t', '--accurev-depot', dest='accurevDepot',        metavar='<accurev-depot>',    help="The AccuRev depot in which the streams that are being converted are located. This script currently assumes only one depot is being converted at a time.")
+    parser.add_argument('-g', '--git-repo-path', dest='gitRepoPath',         metavar='<git-repo-path>',    help="The system path to an existing folder where the git repository will be created.")
     parser.add_argument('-r', '--restart',    dest='restart', action='store_const', const=True, help="Discard any existing conversion and start over.")
     parser.add_argument('-v', '--verbose',    dest='debug',   action='store_const', const=True, help="Print the script debug information. Makes the script more verbose.")
-    parser.add_argument('-L', '--log-file',   dest='logFile', default=config.logFilename,       help="Sets the filename to which all console output will be logged (console output is still printed).")
-    parser.add_argument('-e', '--dump-example-config', nargs='?', dest='exampleConfigFilename', const='no-filename', default=None, help="Generates an example configuration file and exits. If the filename isn't specified a default filename '{0}' is used. The script automatically loads the configuration file named '{1}' when it is run. Commandline arguments, if given, override all options in the configuration file.".format(defaultExampleConfigFilename, configFilename))
+    parser.add_argument('-L', '--log-file',   dest='logFile', metavar='<log-filename>',         help="Sets the filename to which all console output will be logged (console output is still printed).")
+    parser.add_argument('-e', '--dump-example-config', nargs='?', dest='exampleConfigFilename', const='no-filename', default=None, metavar='<example-config-filename>', help="Generates an example configuration file and exits. If the filename isn't specified a default filename '{0}' is used. Commandline arguments, if given, override all options in the configuration file.".format(defaultExampleConfigFilename, configFilename))
     
     args = parser.parse_args()
     
@@ -748,11 +748,20 @@ def AccuRev2GitMain(argv):
         DumpExampleConfigFile(exampleConfigFilename)
         sys.exit(0)
     
+    # Load the config file
+    config = LoadConfigOrDefaults(args.configFilename)
+
     # Set the overrides for in the configuration from the arguments
-    config.accurev.username = args.accurevUsername
-    config.accurev.password = args.accurevPassword
-    config.accurev.depot    = args.accurevDepot
-    config.git.repoPath     = args.gitRepoPath
+    if args.accurevUsername is not None:
+        config.accurev.username = args.accurevUsername
+    if args.accurevPassword is not None:
+        config.accurev.password = args.accurevPassword
+    if args.accurevDepot is not None:
+        config.accurev.depot    = args.accurevDepot
+    if args.gitRepoPath is not None:
+        config.git.repoPath     = args.gitRepoPath
+    if args.logFile is not None:
+        config.logFilename      = args.logFile
     
     if not ValidateConfig(config):
         return 1
