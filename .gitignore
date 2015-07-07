@@ -1,0 +1,3 @@
+# Ignore the configuration file for the python script
+*.config.xml
+
