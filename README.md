@@ -26,7 +26,7 @@ AccuRev2Git is a tool to convert an AccuRev depot into a git repo. A specified A
  python accurev2git.py
  ```
 
-- If you encounter any trouble. Run the script with the --help flag for more options.
+- If you encounter any trouble. Run the script with the `--help` flag for more options.
 
  ```
  python accurev2git.py --help
