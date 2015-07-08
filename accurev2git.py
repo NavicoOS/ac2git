@@ -773,6 +773,11 @@ class AccuRev2Git(object):
     #   Begins a new AccuRev to Git conversion process discarding the old repository (if any).
     def Start(self, isRestart=False):
         global maxTransactions
+
+        if not os.path.exists(self.config.git.repoPath):
+            self.config.logger.error( "git repository directory '{0}' doesn't exist.".format(self.config.git.repoPath) )
+            self.config.logger.error( "Please create the directory and re-run the script.".format(self.config.git.repoPath) )
+            return 1
         
         if isRestart:
             self.config.logger.info( "Restarting the conversion operation." )

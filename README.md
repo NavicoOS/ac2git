@@ -7,6 +7,10 @@ AccuRev2Git is a tool to convert an AccuRev depot into a git repo. A specified A
 
 - Make sure the paths to the `accurev` and `git` executables are correct for your machine, and that git default configuration has been set.
 
+- Tested with `AccuRev 6.1.1 (2014/05/05)`, `git version 2.1.0` and `Python 2.7.8` on a Fedora 21 host.
+
+- Tested with `AccuRev 6.1.1 (2014/05/05)`, `git version 1.9.0.msysgit.0` and `Python 2.7.6` on a Window 7 host.
+
 ### How to use ###
 
 #### Converting a Depot's Streams ####
