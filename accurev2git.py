@@ -901,7 +901,7 @@ def AccuRev2GitMain(argv):
     global state
     
     configFilename = Config.FilenameFromScriptName(argv[0])
-    defaultExampleConfigFilename = '{0}.example'.format(configFilename)
+    defaultExampleConfigFilename = '{0}.example.xml'.format(configFilename)
     
     # Set-up and parse the command line arguments. Examples from https://docs.python.org/dev/library/argparse.html
     parser = argparse.ArgumentParser(description="Conversion tool for migrating AccuRev repositories into Git. Configuration of the script is done with a configuration file whose filename is `{0}` by default. The filename can be overridden by providing the `-c` option described below. Command line arguments, if given, override the equivalent options in the configuration file.".format(configFilename))

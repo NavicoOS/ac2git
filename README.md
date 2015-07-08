@@ -5,20 +5,20 @@ AccuRev2Git is a tool to convert an AccuRev depot into a git repo. A specified A
 ### Getting Started ###
 - Install python 2.7
 
-- Make sure the paths to accurev.exe and git.exe are correct for your machine, and set the default git user name
+- Make sure the paths to the `accurev` and `git` executables are correct for your machine, and that git default configuration has been set.
 
 ### How to use ###
 
-#### Converting a Depot
+#### Converting a Depot ####
 - Make an example config file:
 
  ```
  python accurev2git.py --dump-example-config
  ```
 
-- Modify the generated file 'accurev2git.config.example' (there are plenty of notes in the file and the script help menu to do this)
+- Modify the generated file, whose filename defaults to `accurev2git.config.example.xml`, (there are plenty of notes in the file and the script help menu to do this)
 
-- Rename the 'accurev2git.config.example' file as 'accurev2git.config'
+- Rename the `accurev2git.config.example.xml` file as `accurev2git.config.xml`
 
 - Run the script
 
@@ -31,11 +31,11 @@ AccuRev2Git is a tool to convert an AccuRev depot into a git repo. A specified A
  ```
  python accurev2git.py --help
  ```
-    
+
 ---
 ---
 
-Copyright (c) 2014 Ryan LaNeve
+Copyright (c) 2015 Lazar Sumar
 
 Permission is hereby granted, free of charge, to any person
 obtaining a copy of this software and associated documentation
