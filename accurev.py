@@ -1718,6 +1718,7 @@ def pop(isRecursive=False, isOverride=False, verSpec=None, location=None, dontBu
             errorAttrib = message.attrib.get('error')
             if errorAttrib is not None:
                 sys.stderr.write("accurev populate error:\n{0}\n".format(message.text))
+                return False
     
     if raw._lastCommand is not None:
         return (raw._lastCommand.returncode == 0)
