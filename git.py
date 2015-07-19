@@ -16,6 +16,7 @@ import xml.etree.ElementTree as ElementTree
 import datetime
 import re
 import types
+from math import floor
 
 gitCmd = u'git'
 
@@ -198,6 +199,36 @@ class GitBranchListItem(object):
             return cls(name=name, shortHash=shortHash, remote=remote, shortComment=comment, isCurrent=isCurrent)
         return None
     
+def getDatetimeString(date, timezone=None):
+    dateStr = None
+    if date is not None:
+        if isinstance(date, datetime.datetime):
+            date = date.isoformat()
+            if timezone is None:
+                tzoffset = date.utcoffset()
+                if tzoffset is not None:
+                    tzseconds = tzoffset.total_seconds()
+                    tzmin   = int(floor(abs(tzseconds) / 60))
+                    tzhours = int(floor(tzmin / 60))
+                    tzmin   %= 60
+
+                    timezone = int((tzhours * 100) + tzmin)
+                    if tzseconds < 0:
+                        timezone = -timezone
+
+        dateStr = u'{0}'.format(date)
+        if timezone is not None:
+            if isinstance(timezone, float):
+                timezone = int(timezone)
+
+            if isinstance(timezone, int):
+                dateStr = u'{0} {1:+04}'.format(dateStr, timezone)
+            else:
+                dateStr = u'{0} {1}'.format(dateStr, timezone)
+    
+    print ('Date String: {0}'.format(dateStr))
+    return dateStr
+
 class repo(object):
     def __init__(self, path):
         self.path = path
@@ -238,6 +269,8 @@ class repo(object):
             return output.decode('utf-8')
         else:
             return None
+
+
 
     def raw_cmd(self, cmd):
         return self._docmd(cmd)
@@ -304,7 +337,7 @@ class repo(object):
         
         return (output is not None)
     
-    def commit(self, message=None, messageFile=None, author=None, date=None, committer=None, committer_date=None, allow_empty=False, allow_empty_message=False, gitOpts=[]):
+    def commit(self, message=None, messageFile=None, author=None, date=None, tz=None, committer=None, committer_date=None, committer_tz=None, allow_empty=False, allow_empty_message=False, gitOpts=[]):
         cmd = [ gitCmd ]
         
         if gitOpts is not None and len(gitOpts) > 0:
@@ -321,9 +354,9 @@ class repo(object):
             cmd.append(u'--author="{0}"'.format(author))
         
         if date is not None:
-            if isinstance(date, datetime.datetime):
-                date = date.isoformat()
-            cmd.append(u'--date="{0}"'.format(date))
+            dateStr = getDatetimeString(date, tz)
+            if dateStr is not None:
+                cmd.append(u'--date="{0}"'.format(dateStr))
         
         if message is not None and len(message) > 0:
             cmd.extend([ u'-m', unicode(message) ])
@@ -344,10 +377,9 @@ class repo(object):
                 newEnv['GIT_COMMITTER_EMAIL'] = str(committerEmail)
         
         if committer_date is not None:
-            if committer_date is not None:
-                if isinstance(committer_date, datetime.datetime):
-                    committer_date = committer_date.isoformat()
-            newEnv['GIT_COMMITTER_DATE'] = str('{0}'.format(committer_date))
+            committer_date_str = getDatetimeString(committer_date, committer_tz)
+            if committer_date_str is not None:
+                newEnv['GIT_COMMITTER_DATE'] = str('{0}'.format(committer_date_str))
         
         # Execute the command
         output = self._docmd(cmd, env=newEnv)

@@ -416,7 +416,12 @@ class AccuRev2Git(object):
         committerDate = transaction.time
         lastCommitHash = self.GetLastCommitHash()
         commitHash = None
-        if self.gitRepo.commit(messageFile=messageFilePath, committer=committer, committer_date=committerDate, author=committer, date=committerDate, allow_empty_message=True, gitOpts=[u'-c', u'core.autocrlf=false']):
+
+        # Since the accurev.obj namespace is populated from the XML output of accurev commands all times are given in UTC.
+        # For now just force the time to be UTC centric but preferrably we would have this set-up to either use the local timezone
+        # or allow each user to be given a timezone for geographically distributed teams...
+        # The PyTz library should be considered for the timezone conversions. Do not roll your own...
+        if self.gitRepo.commit(messageFile=messageFilePath, committer=committer, committer_date=committerDate, committer_tz="+0000", author=committer, date=committerDate, tz="+0000", allow_empty_message=True, gitOpts=[u'-c', u'core.autocrlf=false']):
             commitHash = self.GetLastCommitHash()
             if lastCommitHash != commitHash:
                 self.config.logger.dbg( "Committed {0}".format(commitHash) )
@@ -799,7 +804,7 @@ class AccuRev2Git(object):
                 self.config.logger.info( "Accurev login successful" )
                 
                 self.ProcessStreams()
-                self.StitchBranches()
+                #self.StitchBranches()
               
                 # Restore the working directory.
                 os.chdir(self.cwd)
