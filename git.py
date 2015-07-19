@@ -226,7 +226,6 @@ def getDatetimeString(date, timezone=None):
             else:
                 dateStr = u'{0} {1}'.format(dateStr, timezone)
     
-    print ('Date String: {0}'.format(dateStr))
     return dateStr
 
 class repo(object):
