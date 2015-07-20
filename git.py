@@ -222,7 +222,7 @@ def getDatetimeString(date, timezone=None):
                 timezone = int(timezone)
 
             if isinstance(timezone, int):
-                dateStr = u'{0} {1:+04}'.format(dateStr, timezone)
+                dateStr = u'{0} {1:+05}'.format(dateStr, timezone)
             else:
                 dateStr = u'{0} {1}'.format(dateStr, timezone)
     
@@ -263,7 +263,7 @@ class repo(object):
         self.lastStderr = error.decode('utf-8')
         self.lastStdout = output.decode('utf-8')
         self.lastReturnCode = process.returncode
- 
+
         if process.returncode == 0:
             return output.decode('utf-8')
         else:

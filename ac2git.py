@@ -16,12 +16,13 @@ import os.path
 import shutil
 import subprocess
 import xml.etree.ElementTree as ElementTree
-from datetime import datetime
+from datetime import datetime, timedelta
 import time
 import re
 import types
 import copy
 import codecs
+import pytz
 
 from collections import OrderedDict
 
@@ -153,6 +154,7 @@ class Config(object):
                 accurevUsername = None
                 gitName         = None
                 gitEmail        = None
+                timezone        = None
                 
                 accurevElement = xmlElement.find('accurev')
                 if accurevElement is not None:
@@ -161,20 +163,23 @@ class Config(object):
                 if gitElement is not None:
                     gitName  = gitElement.attrib.get('name')
                     gitEmail = gitElement.attrib.get('email')
+                    timezone = gitElement.attrib.get('timezone')
                 
-                return cls(accurevUsername, gitName, gitEmail)
+                return cls(accurevUsername=accurevUsername, gitName=gitName, gitEmail=gitEmail, timezone=timezone)
             else:
                 return None
             
-        def __init__(self, accurevUsername, gitName, gitEmail):
+        def __init__(self, accurevUsername, gitName, gitEmail, timezone=None):
             self.accurevUsername = accurevUsername
             self.gitName         = gitName
             self.gitEmail        = gitEmail
+            self.timezone        = timezone
     
         def __repr__(self):
             str = "Config.UserMap(accurevUsername=" + repr(self.accurevUsername)
             str += ", gitName="                     + repr(self.gitName)
             str += ", gitEmail="                    + repr(self.gitEmail)
+            str += ", timezone="                    + repr(self.timezone)
             str += ")"
             
             return str
@@ -307,6 +312,67 @@ class AccuRev2Git(object):
         state.config.logger.error("Cannot find git details for accurev username {0}".format(accurevUsername))
         return accurevUsername
 
+    def GetGitTimezoneFromDelta(self, time_delta):
+        seconds = time_delta.total_seconds()
+        absSec = abs(seconds)
+        offset = (int(absSec / 3600) * 100) + (int(absSec / 60) % 60)
+        if seconds < 0:
+            offset = -offset
+        return offset
+
+    def GetDeltaFromGitTimezone(self, timezone):
+        # Git timezone strings follow the +0100 format
+        tz = int(timezone)
+        tzAbs = abs(tz)
+        tzdelta = timedelta(seconds=((int(tzAbs / 100) * 3600) + ((tzAbs % 100) * 60)))
+        return tzdelta
+
+    def GetGitDatetime(self, accurevUsername, accurevDatetime):
+        usertime = accurevDatetime
+        tz = None
+        if accurevUsername is not None:
+            for usermap in self.config.usermaps:
+                if usermap.accurevUsername == accurevUsername:
+                    tz = usermap.timezone
+                    break
+
+        if tz is None:
+            # Take the following default times 48 hours from Epoch as reference to compute local time.
+            refTimestamp = 172800
+            utcRefTime = datetime.utcfromtimestamp(refTimestamp)
+            refTime = datetime.fromtimestamp(refTimestamp)
+
+            tzdelta = (refTime - utcRefTime)
+            usertime = accurevDatetime + tzdelta
+            
+            tz = self.GetGitTimezoneFromDelta(tzdelta)
+        else:
+            match = re.match(r'^[+-][0-9]{4}$', tz)
+            if match:
+                # This is the git style format
+                tzdelta = self.GetDeltaFromGitTimezone(tz)
+                usertime = accurevDatetime + tzdelta
+                tz = int(tz)
+            else:
+                # Assuming it is an Olson timezone format
+                userTz = pytz.timezone(tz)
+                usertime = userTz.localize(accurevDatetime)
+                tzdelta = usertime.utcoffset() # We need two aware times to get the datetime.timedelta.
+                usertime = accurevDatetime + tzdelta # Adjust the time by the timezone since localize din't.
+                tz = self.GetGitTimezoneFromDelta(tzdelta)
+
+        return usertime, tz
+    
+    def GetGitDatetimeStr(self, accurevUsername, accurevDatetime):
+        usertime, tz = self.GetGitDatetime(accurevUsername=accurevUsername, accurevDatetime=accurevDatetime)
+
+        gitDatetimeStr = None
+        if usertime is not None:
+            gitDatetimeStr = "{0}".format(usertime.isoformat())
+            if tz is not None:
+                gitDatetimeStr = "{0} {1:+05}".format(gitDatetimeStr, tz)
+        return gitDatetimeStr
+
     def AddAccurevHistNote(self, commitHash, ref, depot, transaction, isXml=False):
         # Write the commit notes consisting of the accurev hist xml output for the given transaction.
         # Note: It is important to use the depot instead of the stream option for the accurev hist command since if the transaction
@@ -413,7 +479,7 @@ class AccuRev2Git(object):
                 messageFile.write(transaction.comment)
         
         committer = self.GetGitUserFromAccuRevUser(transaction.user)
-        committerDate = transaction.time
+        committerDate, committerTimezone = self.GetGitDatetime(accurevUsername=transaction.user, accurevDatetime=transaction.time)
         lastCommitHash = self.GetLastCommitHash()
         commitHash = None
 
@@ -421,7 +487,7 @@ class AccuRev2Git(object):
         # For now just force the time to be UTC centric but preferrably we would have this set-up to either use the local timezone
         # or allow each user to be given a timezone for geographically distributed teams...
         # The PyTz library should be considered for the timezone conversions. Do not roll your own...
-        if self.gitRepo.commit(messageFile=messageFilePath, committer=committer, committer_date=committerDate, committer_tz="+0000", author=committer, date=committerDate, tz="+0000", allow_empty_message=True, gitOpts=[u'-c', u'core.autocrlf=false']):
+        if self.gitRepo.commit(messageFile=messageFilePath, committer=committer, committer_date=committerDate, committer_tz=committerTimezone, author=committer, date=committerDate, tz=committerTimezone, allow_empty_message=True, gitOpts=[u'-c', u'core.autocrlf=false']):
             commitHash = self.GetLastCommitHash()
             if lastCommitHash != commitHash:
                 self.config.logger.dbg( "Committed {0}".format(commitHash) )
@@ -793,6 +859,8 @@ class AccuRev2Git(object):
         self.cwd = os.getcwd()
         os.chdir(self.config.git.repoPath)
         
+        # This try/catch/finally block is here to ensure that we change directory back to self.cwd in order
+        # to allow other scripts to safely call into this method.
         if self.InitGitRepo(self.config.git.repoPath):
             self.gitRepo = git.open(self.config.git.repoPath)
             self.gitBranchList = self.gitRepo.branch_list()
@@ -800,26 +868,40 @@ class AccuRev2Git(object):
                 #self.gitRepo.reset(isHard=True)
                 self.gitRepo.clean(force=True)
             
-            if accurev.login(self.config.accurev.username, self.config.accurev.password):
-                self.config.logger.info( "Accurev login successful" )
-                
-                self.ProcessStreams()
-                #self.StitchBranches()
-              
-                # Restore the working directory.
-                os.chdir(self.cwd)
-                
-                if accurev.logout():
-                    self.config.logger.info( "Accurev logout successful" )
-                    return 0
+            acInfo = accurev.info()
+            isLoggedIn = (acInfo.principal == self.config.accurev.username)
+    
+            # Login the requested user
+            if not isLoggedIn:
+                if acInfo.principal is not None and acInfo.principal != "(not logged in)":
+                    # Different username, logout the other user first.
+                    logoutSuccess = accurev.logout()
+                    self.config.logger.info("Accurev logout for '{0}' {1}".format(acInfo.principal, 'succeeded' if logoutSuccess else 'failed'))
+    
+                if accurev.login(self.config.accurev.username, self.config.accurev.password):
+                    self.config.logger.info("Accurev login for '{0}' succeeded.".format(self.config.accurev.username))
                 else:
-                    self.config.logger.error("Accurev logout failed\n")
+                    self.config.logger.error("AccuRev login for '{0}' failed.\n", self.config.accurev.username)
                     return 1
             else:
-                self.config.logger.error("AccuRev login failed.\n")
-                return 1
+                self.config.logger.info("Accurev user '{0}', already logged in.".format(acInfo.principal))
+                
+            self.ProcessStreams()
+            #self.StitchBranches()
+              
+            if not isLoggedIn:
+                if accurev.logout():
+                    self.config.logger.info( "Accurev logout successful." )
+                else:
+                    self.config.logger.error("Accurev logout failed.\n")
+                    return 1
         else:
             self.config.logger.error( "Could not create git repository." )
+
+        # Restore the working directory.
+        os.chdir(self.cwd)
+        
+        return 0
             
 # ################################################################################################ #
 # Script Functions                                                                                 #
@@ -850,7 +932,12 @@ def DumpExampleConfigFile(outputFilename):
     <logfile>accurev2git.log<logfile>
     <!-- The user maps are used to convert users from AccuRev into git. Please spend the time to fill them in properly. -->
     <usermaps>
-        <map-user><accurev username="joe_bloggs" /><git name="Joe Bloggs" email="joe@bloggs.com" /></map-user>
+        <!-- The timezone attribute is optional. All times are retrieved in UTC from AccuRev and will converted to the local timezone by default.
+             If you want to override this behavior then set the timezone to either an Olson timezone string (e.g. Europe/Belgrade) or a git style
+             timezone string (e.g. +0100, sign and 4 digits required). -->
+        <map-user><accurev username="joe_bloggs" /><git name="Joe Bloggs" email="joe@bloggs.com" timezone="Europe/Belgrade" /></map-user>
+        <map-user><accurev username="joanna_bloggs" /><git name="Joanna Bloggs" email="joanna@bloggs.com" timezone="+0500" /></map-user>
+        <map-user><accurev username="joey_bloggs" /><git name="Joey Bloggs" email="joey@bloggs.com" /></map-user>
     </usermaps>
 </accurev2git>
 """

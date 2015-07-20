@@ -1097,7 +1097,7 @@ class raw(object):
             outputFile = open(outputFilename, "w")
             accurevCommand = subprocess.Popen(cmd, stdout=outputFile, stdin=subprocess.PIPE)
         else:
-            accurevCommand = subprocess.Popen(cmd, stdout=subprocess.PIPE, stdin=subprocess.PIPE)
+            accurevCommand = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.PIPE)
             
         xmlOutput = ''
         accurevCommand.poll()
