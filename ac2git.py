@@ -873,7 +873,7 @@ class AccuRev2Git(object):
     
             # Login the requested user
             if not isLoggedIn:
-                if acInfo.principal is not None and acInfo.principal != "(not logged in)":
+                if accurev.ext.is_loggedin(infoObj=acInfo):
                     # Different username, logout the other user first.
                     logoutSuccess = accurev.logout()
                     self.config.logger.info("Accurev logout for '{0}' {1}".format(acInfo.principal, 'succeeded' if logoutSuccess else 'failed'))
@@ -885,7 +885,10 @@ class AccuRev2Git(object):
                     return 1
             else:
                 self.config.logger.info("Accurev user '{0}', already logged in.".format(acInfo.principal))
-                
+            
+            # If this script is being run on a replica then ensure that it is up-to-date before processing the streams.
+            accurev.replica.sync()
+
             self.ProcessStreams()
             #self.StitchBranches()
               

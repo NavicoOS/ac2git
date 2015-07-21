@@ -1797,8 +1797,9 @@ class replica(object):
 # ################################################################################################ #
 class ext(object):
     @staticmethod
-    def is_loggedin():
-        infoObj = info()
+    def is_loggedin(infoObj=None):
+        if infoObj is None:
+            infoObj = info()
         return (infoObj.principal != "(not logged in)")
 
     # Get the last chstream transaction. If no chstream transactions have been made the mkstream
