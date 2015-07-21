@@ -566,7 +566,16 @@ class AccuRev2Git(object):
                 except:
                     destStream = None
                 self.config.logger.dbg( "{0} pop (init): {1} {2}{3}".format(streamName, tr.Type, tr.id, " to {0}".format(destStream) if destStream is not None else "") )
-                accurev.pop(verSpec=streamName, location=self.gitRepo.path, isRecursive=True, timeSpec=tr.id, elementList='.')
+                popResult = accurev.pop(verSpec=streamName, location=self.gitRepo.path, isRecursive=True, timeSpec=tr.id, elementList='.')
+                if not popResult:
+                    self.config.logger.error("accurev pop failed:")
+                    for message in popResult.messages:
+                        if message.error is not None and message.error:
+                            self.config.logger.error("  {0}".format(message.text))
+                        else:
+                            self.config.logger.info("  {0}".format(message.text))
+                    return
+                
                 commitHash = self.Commit(depot=depot, transaction=tr)
                 if not commitHash:
                     self.config.logger.dbg( "{0} first commit has failed. Is it an empty commit? Continuing...".format(streamName) )
