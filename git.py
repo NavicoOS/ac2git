@@ -39,11 +39,12 @@ class GitStatus(object):
     fileRe          = re.compile(r'^\s+(new file|modified|deleted):\s+(\S+)\s*(\(.+\))?$')
     untrackedFileRe = re.compile(r'^\s+(\S+)\s*$')
         
-    def __init__(self, branch=None, staged=[], changed=[], untracked=[]):
+    def __init__(self, branch=None, staged=[], changed=[], untracked=[], initial_commit=None):
         self.branch    = branch    # Name of the branch.
         self.staged    = staged    # A list of (filename, file_status) tuples
         self.changed   = changed   # A list of (filename, file_status) tuples
         self.untracked = untracked # A list of (filename,) tuples
+        self.initial_commit = initial_commit # A boolean value indicating if this is an initial commit.
 
     def __repr__(self):
         str  = u'On branch {0}\n'.format(self.branch)
@@ -67,7 +68,8 @@ class GitStatus(object):
     @classmethod
     def fromgitoutput(cls, gitOutput):
         lines = gitOutput.split(u'\n')
-        # git status output example
+        # git status output example 1
+        # ===========================
         # On branch <branch name>
         # Changes to be committed:
         #   (use "git reset HEAD <file>..." to unstage)
@@ -88,7 +90,29 @@ class GitStatus(object):
         #  
         #  file5.ext
         #  file6.ext
+        # ---------------------------
         
+        # git status output example 2 (not yet fully handled. TODO: nothing to commit message)
+        # ===========================
+        # On branch master
+        # 
+        # Initial commit
+        # 
+        # nothing to commit (create/copy files and use "git add" to track)
+        # ---------------------------
+
+        # git status output example 3 (not yet fully handled. TODO: Remote branch and nothing to commit message)
+        # ===========================
+        # On branch master
+        # Your branch is up-to-date with 'origin/master'.
+        # Untracked files:
+        #   (use "git add <file>..." to include in what will be committed)
+        # 
+        # 	ac2git.config.xml
+        # 
+        # nothing added to commit but untracked files present (use "git add" to track)
+        # ---------------------------
+
         # Parse the branch
         branchName    = None
         branchSpec    = lines.pop(0)
@@ -96,6 +120,7 @@ class GitStatus(object):
         if branchReMatch:
             branchName = branchReMatch.group(1)
         
+        isInitialCommit = False
         stagedFiles = []
         changedFiles = []
         untrackedFiles = []
@@ -149,13 +174,15 @@ class GitStatus(object):
                     untrackedFiles.append((fileName,))
                     
                     nextLine = lines.pop(0)
-            
+            elif lastHeading == u'Initial commit':
+                isInitialCommit = True
+
             if len(lines) > 0:
                 lastHeading = lines.pop(0)
         
         # stagedFiles and changedFiles are lists of tuples containing two items: (filename, file_status)
         # untracked is also a list of tuples containing two items but the second items is always empty: (filename,)
-        return cls(branch=branchName, staged=stagedFiles, changed=changedFiles, untracked=untrackedFiles)
+        return cls(branch=branchName, staged=stagedFiles, changed=changedFiles, untracked=untrackedFiles, initial_commit=isInitialCommit)
 
 # GitBranchListItem is an object serialization of a single branch output when the git branch -vv
 # command is run.
