@@ -736,7 +736,11 @@ class AccuRev2Git(object):
                     deletedPathList = self.DeleteDiffItemsFromRepo(diff=diff)
                 except:
                     popOverwrite = True
-                    self.config.logger.info("Error trying to delete changed elements. Doing full populate! Non-fatal, continuing.")
+                    self.config.logger.info("Error trying to delete changed elements. Fatal, aborting!")
+                    # This might be ok only in the case when the files/directories were changed but not in the case when there
+                    # was a deletion that occurred. Abort and be safe!
+                    # TODO: This must be solved somehow since this could hinder this script from continuing at all!
+                    return (None, None)
 
                 # The accurev hist command here must be used with the depot option since the transaction that has affected us may not
                 # be a promotion into the stream we are looking at but into one of its parent streams. Hence we must query the history
@@ -756,7 +760,11 @@ class AccuRev2Git(object):
                     self.DeleteEmptyDirs()
                 except:
                     popOverwrite = True
-                    self.config.logger.info("Error trying to delete empty directories. Doing full populate! Non-fatal, continuing.")
+                    self.config.logger.info("Error trying to delete empty directories. Fatal, aborting!")
+                    # This might be ok only in the case when the files/directories were changed but not in the case when there
+                    # was a deletion that occurred. Abort and be safe!
+                    # TODO: This must be solved somehow since this could hinder this script from continuing at all!
+                    return (None, None)
 
                 popResult = self.TryPop(streamName=streamName, transaction=tr, overwrite=popOverwrite)
                 if not popResult:
