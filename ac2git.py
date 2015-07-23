@@ -272,14 +272,7 @@ class AccuRev2Git(object):
     def DeletePath(self, path):
         if os.path.exists(path):
             if os.path.isdir(path):
-                for root, dirs, files in os.walk(path, topdown=False):
-                    for name in files:
-                        p = os.path.join(root, name)
-                        os.remove(p)
-                    for name in dirs:
-                        p = os.path.join(root, name)
-                        os.rmdir(p)
-                os.rmdir(path)
+                shutil.rmtree(path)
             elif os.path.isfile(path):
                 os.remove(path)
             
@@ -329,6 +322,7 @@ class AccuRev2Git(object):
                     if delete:
                         if not self.DeletePath(path):
                             self.config.logger.error("Failed to delete empty directory '{0}'.".format(path))
+                            raise Exception("Failed to delete '{0}'".format(path))
                         else:
                             deletedDirs.append(path)
         return deletedDirs
@@ -637,6 +631,7 @@ class AccuRev2Git(object):
                         path = os.path.join(self.gitRepo.path, name)
                         if not self.DeletePath(path):
                             self.config.logger.error("Failed to delete '{0}'.".format(path))
+                            raise Exception("Failed to delete '{0}'".format(path))
                         else:
                             deletedPathList.append(path)
 
@@ -649,9 +644,9 @@ class AccuRev2Git(object):
                 break
         return endTrHist
 
-    def TryPop(self, streamName, transaction):
+    def TryPop(self, streamName, transaction, overwrite=False):
         for i in xrange(0, AccuRev2Git.commandFailureRetryCount):
-            popResult = accurev.pop(verSpec=streamName, location=self.gitRepo.path, isRecursive=True, timeSpec=transaction.id, elementList='.')
+            popResult = accurev.pop(verSpec=streamName, location=self.gitRepo.path, isRecursive=True, isOverride=overwrite, timeSpec=transaction.id, elementList='.')
             if popResult:
                 break
             else:
@@ -694,7 +689,7 @@ class AccuRev2Git(object):
                 except:
                     destStream = None
                 self.config.logger.dbg( "{0} pop (init): {1} {2}{3}".format(streamName, tr.Type, tr.id, " to {0}".format(destStream) if destStream is not None else "") )
-                popResult = self.TryPop(streamName=streamName, transaction=tr)
+                popResult = self.TryPop(streamName=streamName, transaction=tr, overwrite=True)
                 if not popResult:
                     return (None, None)
                 
@@ -736,7 +731,12 @@ class AccuRev2Git(object):
             if nextTr <= endTr.id:
                 # Right now nextTr is an integer representation of our next transaction.
                 # Delete all of the files which are even mentioned in the diff so that we can do a quick populate (wouth the overwrite option)
-                deletedPathList = self.DeleteDiffItemsFromRepo(diff=diff)
+                try:
+                    popOverwrite = False
+                    deletedPathList = self.DeleteDiffItemsFromRepo(diff=diff)
+                except:
+                    popOverwrite = True
+                    self.config.logger.info("Error trying to delete changed elements. Doing full populate! Non-fatal, continuing.")
 
                 # The accurev hist command here must be used with the depot option since the transaction that has affected us may not
                 # be a promotion into the stream we are looking at but into one of its parent streams. Hence we must query the history
@@ -752,9 +752,13 @@ class AccuRev2Git(object):
                 self.config.logger.dbg( "{0} pop: {1} {2}{3}".format(streamName, tr.Type, tr.id, " to {0}".format(destStream) if destStream is not None else "") )
 
                 # Remove all the empty directories (this includes directories which contain an empty .gitignore file since that's what we is done to preserve them)
-                self.DeleteEmptyDirs()
+                try:
+                    self.DeleteEmptyDirs()
+                except:
+                    popOverwrite = True
+                    self.config.logger.info("Error trying to delete empty directories. Doing full populate! Non-fatal, continuing.")
 
-                popResult = self.TryPop(streamName=streamName, transaction=tr)
+                popResult = self.TryPop(streamName=streamName, transaction=tr, overwrite=popOverwrite)
                 if not popResult:
                     return (None, None)
 
