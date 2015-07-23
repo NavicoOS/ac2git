@@ -364,6 +364,12 @@ class repo(object):
         return (output is not None)
     
     def commit(self, message=None, messageFile=None, author=None, date=None, tz=None, committer=None, committer_date=None, committer_tz=None, allow_empty=False, allow_empty_message=False, gitOpts=[]):
+        # git commit example output
+        # =========================
+        # git commit -m "Parameterizing hardcoded values."
+        # [master 0a0d053] Parameterizing hardcoded values.
+        #  1 file changed, 9 insertions(+), 7 deletions(-)
+        #--------------------------
         cmd = [ gitCmd ]
         
         if gitOpts is not None and len(gitOpts) > 0:
