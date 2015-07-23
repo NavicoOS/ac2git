@@ -375,7 +375,7 @@ class AccuRev2Git(object):
                 gitDatetimeStr = "{0} {1:+05}".format(gitDatetimeStr, tz)
         return gitDatetimeStr
 
-    def AddAccurevHistNote(self, commitHash, ref, depot, transaction, isXml=False):
+    def AddAccurevHistNote(self, commitHash, ref, depot, transaction, committer=None, committerDate=None, committerTimezone=None, isXml=False):
         # Write the commit notes consisting of the accurev hist xml output for the given transaction.
         # Note: It is important to use the depot instead of the stream option for the accurev hist command since if the transaction
         #       did not occur on that stream we will get the closest transaction that was a promote into the specified stream instead of an error!
@@ -388,7 +388,7 @@ class AccuRev2Git(object):
             else:
                 notesFile.write(arHistXml.decode("utf-8"))
 
-        rv = self.gitRepo.notes.add(messageFile=notesFilePath, obj=commitHash, ref=ref, force=True)
+        rv = self.gitRepo.notes.add(messageFile=notesFilePath, obj=commitHash, ref=ref, force=True, committer=committer, committerDate=committerDate, committerTimezone=committerTimezone, author=committer, authorDate=committerDate, authorTimezone=committerTimezone)
         
         if rv is not None:
             os.remove(notesFilePath)
@@ -461,12 +461,30 @@ class AccuRev2Git(object):
 
         return commitHash
 
-    def GetHistForCommit(self, commitHash):
+    def GetHistForCommit(self, commitHash, branchName=None):
         hist = None
-        for i in xrange(0, AccuRev2Git.commandFailureRetryCount):
-            lastHistXml = self.gitRepo.notes.show(obj=commitHash, ref=AccuRev2Git.gitNotesRef_AccurevHistXml)
+        lastHistXml = None
+
+        # Try and search the branch namespace.
+        if branchName is not None:
+            for i in xrange(0, AccuRev2Git.commandFailureRetryCount):
+                lastHistXml = self.gitRepo.notes.show(obj=commitHash, ref=branchName)
+                if lastHistXml is not None:
+                    break
+
             if lastHistXml is not None:
-                break
+                lastHistXml = lastHistXml.strip().encode('utf-8')
+                hist = accurev.obj.History.fromxmlstring(lastHistXml)
+            else:
+                self.config.logger.error("Failed to load the last transaction for commit {0} from {1} notes.".format(commitHash, branchName))
+                self.config.logger.error("  i.e git notes --ref={0} show {1}    - returned nothing.".format(branchName, commitHash))
+
+        # If the branch namespace doesn't work try the default one.
+        if lastHistXml is None:
+            for i in xrange(0, AccuRev2Git.commandFailureRetryCount):
+                lastHistXml = self.gitRepo.notes.show(obj=commitHash, ref=AccuRev2Git.gitNotesRef_AccurevHistXml)
+                if lastHistXml is not None:
+                    break
 
         if lastHistXml is not None:
             lastHistXml = lastHistXml.strip().encode('utf-8')
@@ -486,7 +504,7 @@ class AccuRev2Git(object):
         self.gitRepo.rm(fileList=['.'], force=True, recursive=True)
         self.ClearGitRepo()
 
-    def Commit(self, depot, transaction, isFirstCommit=False):
+    def Commit(self, depot, transaction, branchName=None, isFirstCommit=False):
         self.PreserveEmptyDirs()
 
         # Add all of the files to the index
@@ -523,7 +541,11 @@ class AccuRev2Git(object):
                     self.config.logger.dbg( "Committed {0}".format(commitHash) )
                     xmlNoteWritten = False
                     for i in xrange(0, AccuRev2Git.commandFailureRetryCount):
-                        xmlNoteWritten = ( self.AddAccurevHistNote(commitHash=commitHash, ref=AccuRev2Git.gitNotesRef_AccurevHistXml, depot=depot, transaction=transaction, isXml=True) is not None )
+                        ref = branchName
+                        if ref is None:
+                            ref = AccuRev2Git.gitNotesRef_AccurevHistXml
+                            self.config.logger.error("Commit to an unspecified branch. Using default `git notes` ref for the script [{0}] at current time.".format(ref))
+                        xmlNoteWritten = ( self.AddAccurevHistNote(commitHash=commitHash, ref=ref, depot=depot, transaction=transaction, isXml=True, committerDate=committerDate, committerTimezone=committerTimezone) is not None )
                         if xmlNoteWritten:
                             break
                     if not xmlNoteWritten:
@@ -534,7 +556,7 @@ class AccuRev2Git(object):
                         self.gitRepo.raw_cmd([u'git', u'reset', u'--hard', u'{0}^'.format(branchName)])
 
                         return None
-                    self.AddAccurevHistNote(commitHash=commitHash, ref=AccuRev2Git.gitNotesRef_AccurevHist, depot=depot, transaction=transaction, isXml=False)
+                    #self.AddAccurevHistNote(commitHash=commitHash, ref=AccuRev2Git.gitNotesRef_AccurevHist, depot=depot, transaction=transaction, isXml=False)
                 else:
                     self.config.logger.error("Commit command returned True when nothing was committed...? Last commit hash {0} didn't change after the commit command executed.".format(lastCommitHash))
                     return None
@@ -647,7 +669,7 @@ class AccuRev2Git(object):
                 if not popResult:
                     return (None, None)
                 
-                commitHash = self.Commit(depot=depot, transaction=tr, isFirstCommit=True)
+                commitHash = self.Commit(depot=depot, transaction=tr, branchName=branchName, isFirstCommit=True)
                 if not commitHash:
                     self.config.logger.dbg( "{0} first commit has failed. Is it an empty commit? Continuing...".format(streamName) )
                 else:
@@ -658,7 +680,7 @@ class AccuRev2Git(object):
         else:
             # Get the last processed transaction
             commitHash = self.GetLastCommitHash(branchName=branchName)
-            hist = self.GetHistForCommit(commitHash=commitHash)
+            hist = self.GetHistForCommit(commitHash=commitHash, branchName=branchName)
 
             if hist is None:
                 self.config.logger.error("Repo in invalid state. Please reset this branch to a previous commit with valid notes.")
@@ -704,7 +726,7 @@ class AccuRev2Git(object):
                     return (None, None)
 
                 # Commit
-                commitHash = self.Commit(depot=depot, transaction=tr)
+                commitHash = self.Commit(depot=depot, transaction=tr, branchName=branchName, isFirstCommit=False)
                 if commitHash is None:
                     if"nothing to commit" in self.gitRepo.lastStdout:
                         self.config.logger.error( "diff info ({0} elements):".format(len(diff.elements)) )
