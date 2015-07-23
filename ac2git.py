@@ -566,7 +566,7 @@ class AccuRev2Git(object):
                         if ref is None:
                             ref = AccuRev2Git.gitNotesRef_AccurevHistXml
                             self.config.logger.error("Commit to an unspecified branch. Using default `git notes` ref for the script [{0}] at current time.".format(ref))
-                        xmlNoteWritten = ( self.AddAccurevHistNote(commitHash=commitHash, ref=ref, depot=depot, transaction=transaction, isXml=True, committerDate=committerDate, committerTimezone=committerTimezone) is not None )
+                        xmlNoteWritten = ( self.AddAccurevHistNote(commitHash=commitHash, ref=ref, depot=depot, transaction=transaction, isXml=True, committer=committer, committerDate=committerDate, committerTimezone=committerTimezone) is not None )
                         if xmlNoteWritten:
                             break
                     if not xmlNoteWritten:
