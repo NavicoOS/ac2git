@@ -36,7 +36,7 @@ class GitStatus(object):
     # The fileRe - Has a clause at the end for possible submodule modifications where git prints 
     #                (untracked content, modified content)
     #              suffixed messages. This suffix is currently ignored.
-    fileRe          = re.compile(r'^\s+(new file|modified|deleted):\s+(\S+)\s*(\(.+\))?$')
+    fileRe          = re.compile(r'^\s+(new file|modified|deleted):\s+(.+)\s*(\(.+\))?$')
     untrackedFileRe = re.compile(r'^\s+(\S+)\s*$')
         
     def __init__(self, branch=None, staged=[], changed=[], untracked=[], initial_commit=None):
