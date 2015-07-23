@@ -783,6 +783,9 @@ class AccuRev2Git(object):
                         self.config.logger.error( "deleted {0} files:".format(len(deletedPathList)) )
                         for p in deletedPathList:
                             self.config.logger.error( "  {0}".format(p) )
+                        self.config.logger.error( "populated {0} files:".format(len(popResult.elements)) )
+                        for e in popResult.elements:
+                            self.config.logger.error( "  {0}".format(e.location) )
                         self.config.logger.info("Non-fatal error. Continuing.")
                     else:
                         break # Early return from processing this stream. Restarting should clean everything up.
