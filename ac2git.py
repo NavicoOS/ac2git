@@ -108,7 +108,7 @@ class Config(object):
             else:
                 return None
             
-        def __init__(self, depot, username = None, password = None, startTransaction = None, endTransaction = None, streamMap = None):
+        def __init__(self, depot = None, username = None, password = None, startTransaction = None, endTransaction = None, streamMap = None):
             self.depot    = depot
             self.username = username
             self.password = password
@@ -919,7 +919,8 @@ class AccuRev2Git(object):
 # Script Functions                                                                                 #
 # ################################################################################################ #
 def DumpExampleConfigFile(outputFilename):
-    exampleContents = """<accurev2git>
+    with codecs.open(outputFilename, 'w') as file:
+        file.write("""<accurev2git>
     <!-- AccuRev details:
             username:             The username that will be used to log into AccuRev and retrieve and populate the history
             password:             The password for the given username. Note that you can pass this in as an argument which is safer and preferred!
@@ -932,7 +933,7 @@ def DumpExampleConfigFile(outputFilename):
         password="joanna" 
         depot="Trunk" 
         start-transaction="1" 
-        end-transaction="500" >
+        end-transaction="now" >
         <!-- The stream-list is optional. If not given all streams are processed -->
         <!-- The branch-name attribute is also optional for each stream element. If provided it specifies the git branch name to which the stream will be mapped. -->
         <stream-list>
@@ -944,7 +945,7 @@ def DumpExampleConfigFile(outputFilename):
     <logfile>accurev2git.log<logfile>
     <!-- The user maps are used to convert users from AccuRev into git. Please spend the time to fill them in properly. -->
     <usermaps>
-        <!-- The timezone attribute is optional. All times are retrieved in UTC from AccuRev and will converted to the local timezone by default.
+         <!-- The timezone attribute is optional. All times are retrieved in UTC from AccuRev and will converted to the local timezone by default.
              If you want to override this behavior then set the timezone to either an Olson timezone string (e.g. Europe/Belgrade) or a git style
              timezone string (e.g. +0100, sign and 4 digits required). -->
         <map-user><accurev username="joe_bloggs" /><git name="Joe Bloggs" email="joe@bloggs.com" timezone="Europe/Belgrade" /></map-user>
@@ -952,9 +953,196 @@ def DumpExampleConfigFile(outputFilename):
         <map-user><accurev username="joey_bloggs" /><git name="Joey Bloggs" email="joey@bloggs.com" /></map-user>
     </usermaps>
 </accurev2git>
-"""
-    with codecs.open(outputFilename, 'w') as file:
-        file.write(exampleContents)
+        """)
+        return 0
+    return 1
+
+def AutoConfigFile(filename, args, preserveConfig=False):
+    if os.path.exists(filename):
+        # Backup the file
+        backupNumber = 1
+        backupFilename = "{0}.{1}".format(filename, backupNumber)
+        while os.path.exists(backupFilename):
+            backupNumber += 1
+            backupFilename = "{0}.{1}".format(filename, backupNumber)
+
+        shutil.copy2(filename, backupFilename)
+
+    config = Config.fromfile(filename=args.configFilename)
+    
+    if config is None:
+        config = Config(accurev=Config.AccuRev(), git=Config.Git(), usermaps=[], logFilename=None)
+    elif not preserveConfig:
+        # preserve only the accurev username and passowrd
+        arUsername = config.accurev.username
+        arPassword = config.accurev.password
+        
+        # reset config
+        config = Config(accurev=Config.AccuRev(), git=Config.Git(repoPath=None), usermaps=[], logFilename=None)
+
+        config.accurev.username = arUsername
+        config.accurev.password = arPassword
+
+
+    SetConfigFromArgs(config, args)
+    if config.accurev.username is None:
+        if config.accurev.username is None:
+            config.logger.error("No accurev username provided for auto-configuration.")
+        return 1
+    else:
+        info = accurev.info()
+        if info.principal != config.accurev.username:
+            if config.accurev.password is None:
+                config.logger.error("No accurev password provided for auto-configuration. You can either provide one on the command line, in the config file or just login to accurev before running the script.")
+                return 1
+            if not accurev.login(config.accurev.username, config.accurev.password):
+                config.logger.error("accurev login for '{0}' failed.".format(config.accurev.username))
+                return 1
+        elif config.accurev.password is None:
+            config.accurev.password = ''
+
+    if config.accurev.depot is None:
+        depots = accurev.show.depots()
+        if depots is not None and depots.depots is not None and len(depots.depots) > 0:
+            config.accurev.depot = depots.depots[0].name
+            config.logger.info("No depot specified. Selecting first depot available: {0}.".format(config.accurev.depot))
+        else:
+            config.logger.error("Failed to find an accurev depot. You can specify one on the command line to resolve the error.")
+            return 1
+
+    if config.git.repoPath is None:
+        config.git.repoPath = './{0}'.format(config.accurev.depot)
+
+    if config.logFilename is None:
+        config.logFilename = 'ac2git.log'
+
+    with codecs.open(filename, 'w') as file:
+        file.write("""<accurev2git>
+    <!-- AccuRev details:
+            username:             The username that will be used to log into AccuRev and retrieve and populate the history
+            password:             The password for the given username. Note that you can pass this in as an argument which is safer and preferred!
+            depot:                The depot in which the stream/s we are converting are located
+            start-transaction:    The conversion will start at this transaction. If interrupted the next time it starts it will continue from where it stopped.
+            end-transaction:      Stop at this transaction. This can be the keword "now" if you want it to convert the repo up to the latest transaction.
+    -->
+    <accurev 
+        username="{accurev_username}" 
+        password="{accurev_password}" 
+        depot="{accurev_depot}" 
+        start-transaction="{start_transaction}" 
+        end-transaction="{end_transaction}" >
+        <!-- The stream-list is optional. If not given all streams are processed -->
+        <!-- The branch-name attribute is also optional for each stream element. If provided it specifies the git branch name to which the stream will be mapped. -->
+        <stream-list>""".format(accurev_username=config.accurev.username, accurev_password=config.accurev.password, accurev_depot=config.accurev.depot, start_transaction=1, end_transaction="now"))
+
+        if preserveConfig:
+            for stream in config.accurev.streamMap:
+                file.write("""
+            <stream branch-name="{branch_name}">{stream_name}</stream>""".format(stream_name=stream, branch_name=config.accurev.streamMap[stream]))
+
+        streams = accurev.show.streams(depot=config.accurev.depot)
+        if streams is not None and streams.streams is not None:
+            for stream in streams.streams:
+                if not (preserveConfig and stream in config.accurev.streamMap):
+                    file.write("""
+            <stream branch-name="accurev/{stream_name}" depot="{stream_depot}">{stream_name}</stream>""".format(stream_name=stream.name, stream_depot=stream.depotName))
+
+        file.write("""
+        </stream-list>
+    </accurev>
+    <git repo-path="{git_repo_path}" /> <!-- The system path where you want the git repo to be populated. Note: this folder should already exist. -->
+    <logfile>{log_filename}<logfile>
+    <!-- The user maps are used to convert users from AccuRev into git. Please spend the time to fill them in properly. -->""".format(git_repo_path=config.git.repoPath, log_filename=config.logFilename))
+        file.write("""
+    <usermaps>
+         <!-- The timezone attribute is optional. All times are retrieved in UTC from AccuRev and will converted to the local timezone by default.
+             If you want to override this behavior then set the timezone to either an Olson timezone string (e.g. Europe/Belgrade) or a git style
+             timezone string (e.g. +0100, sign and 4 digits required). -->
+        <!-- e.g.
+        <map-user><accurev username="joe_bloggs" /><git name="Joe Bloggs" email="joe@bloggs.com" timezone="Europe/Belgrade" /></map-user>
+        <map-user><accurev username="joanna_bloggs" /><git name="Joanna Bloggs" email="joanna@bloggs.com" timezone="+0500" /></map-user>
+        <map-user><accurev username="joey_bloggs" /><git name="Joey Bloggs" email="joey@bloggs.com" /></map-user>
+        -->""")
+
+        if preserveConfig:
+            for usermap in config.usermaps:
+                file.write("""
+        <map-user><accurev username="{accurev_username}" /><git name="{git_name}" email="{git_email}"{timezone_tag} /></map-user>""".format(accurev_username=usermap.accurevUsername, git_name=usermap.gitName, git_email=usermap.gitEmail, timezone_tag="" if usermap.timezone is None else ' timezone="{0}"'.format(usermap.timezone)))
+
+
+        users = accurev.show.users()
+        if users is not None and users.users is not None:
+            for user in users.users:
+                if not (preserveConfig and user.name in [x.accurevUsername for x in config.usermaps]):
+                    file.write("""
+        <map-user><accurev username="{accurev_username}" /><git name="{accurev_username}" email="" /></map-user>""".format(accurev_username=user.name))
+
+        file.write("""
+    </usermaps>
+</accurev2git>
+        """)
+        return 0
+    return 1
+
+def TryGetAccurevUserlist(username, password):
+    info = accurev.info()
+    
+    isLoggedIn = False
+    if username is not None and info.principal != username:
+        if password is not None:
+            isLoggedIn = accurev.login(username, password)
+    else:
+        isLoggedIn = accurev.ext.is_loggedin()
+
+    userList = None
+    if isLoggedIn:
+        users = accurev.show.users()
+        if users is not None:
+            userList = []
+            for user in users.users:
+                userList.append(user.name)
+    
+    return userList
+
+def GetMissingUsers(config):
+    # Try and validate accurev usernames
+    userList = TryGetAccurevUserlist(config.accurev.username, config.accurev.password)
+    missingList = None
+
+    if config is not None and config.usermaps is not None:
+        missingList = []
+        if userList is not None and len(userList) > 0:
+            for user in userList:
+                found = False
+                for usermap in config.usermaps:
+                    if user == usermap.accurevUsername:
+                        found = True
+                        break
+                if not found:
+                    missingList.append(user)
+
+    return missingList
+
+def PrintMissingUsers(config):
+    missingUsers = GetMissingUsers(config)
+    if missingUsers is not None:
+        if len(missingUsers) > 0:
+            missingUsers.sort()
+            config.logger.info("Unmapped accurev users:")
+            for user in missingUsers:
+                config.logger.info("    {0}".format(user))
+
+def SetConfigFromArgs(config, args):
+    if args.accurevUsername is not None:
+        config.accurev.username = args.accurevUsername
+    if args.accurevPassword is not None:
+        config.accurev.password = args.accurevPassword
+    if args.accurevDepot is not None:
+        config.accurev.depot    = args.accurevDepot
+    if args.gitRepoPath is not None:
+        config.git.repoPath     = args.gitRepoPath
+    if args.logFile is not None:
+        config.logFilename      = args.logFile
 
 def ValidateConfig(config):
     # Validate the program args and configuration up to this point.
@@ -971,7 +1159,7 @@ def ValidateConfig(config):
     if config.git.repoPath is None:
         config.logger.error("No Git repository specified.\n")
         isValid = False
-    
+
     return isValid
 
 def LoadConfigOrDefaults(configFilename):
@@ -1024,19 +1212,30 @@ def AccuRev2GitMain(argv):
     parser.add_argument('-L', '--log-file',   dest='logFile', metavar='<log-filename>',         help="Sets the filename to which all console output will be logged (console output is still printed).")
     parser.add_argument('-q', '--no-log-file', dest='disableLogFile',  action='store_const', const=True, help="Do not log info to the log file. Alternatively achieved by not specifying a log file filename in the configuration file.")
     parser.add_argument('-l', '--reset-log-file', dest='resetLogFile', action='store_const', const=True, help="Instead of appending new log info to the file truncate it instead and start over.")
-    parser.add_argument('-e', '--dump-example-config', nargs='?', dest='exampleConfigFilename', const='no-filename', default=None, metavar='<example-config-filename>', help="Generates an example configuration file and exits. If the filename isn't specified a default filename '{0}' is used. Commandline arguments, if given, override all options in the configuration file.".format(defaultExampleConfigFilename, configFilename))
+    parser.add_argument('--example-config', nargs='?', dest='exampleConfigFilename', const=defaultExampleConfigFilename, default=None, metavar='<example-config-filename>', help="Generates an example configuration file and exits. If the filename isn't specified a default filename '{0}' is used. Commandline arguments, if given, override all options in the configuration file.".format(defaultExampleConfigFilename, configFilename))
+    parser.add_argument('-m', '--check-missing-users', dest='checkMissingUsers', action='store_const', const=True, help="It will print a list of usernames that are in accurev but were not found in the usermap.")
+    parser.add_argument('--auto-config', nargs='?', dest='autoConfigFilename', const=configFilename, default=None, metavar='<config-filename>', help="Auto-generate the configuration file from known AccuRev information. It is required that an accurev username and password are provided either in an existing config file or via the -u and -p options. If there is an existing config file it is backed up and only the accurev username and password will be copied to the new configuration file. If you wish to preserve the config but add more information to it then it is recommended that you use the --fixup-config option instead.")
+    parser.add_argument('--fixup-config', nargs='?', dest='fixupConfigFilename', const=configFilename, default=None, metavar='<config-filename>', help="Fixup the configuration file by adding updated AccuRev information. It is the same as the --auto-config option but the existing configuration file options are preserved. Other command line arguments that are provided will override the existing configuration file options for the new configuration file.")
     
     args = parser.parse_args()
     
     # Dump example config if specified
+    doEarlyReturn = False
+    earlyReturnCode = 0
     if args.exampleConfigFilename is not None:
-        if args.exampleConfigFilename == 'no-filename':
-            exampleConfigFilename = defaultExampleConfigFilename
-        else:
-            exampleConfigFilename = args.exampleConfigFilename
-        
-        DumpExampleConfigFile(exampleConfigFilename)
-        return 0
+        earlyReturnCode = DumpExampleConfigFile(exampleConfigFilename)
+        doEarlyReturn = True
+
+    if args.autoConfigFilename is not None:
+        earlyReturnCode = AutoConfigFile(filename=args.autoConfigFilename, args=args, preserveConfig=False)
+        doEarlyReturn = True
+
+    if args.fixupConfigFilename is not None:
+        earlyReturnCode = AutoConfigFile(filename=args.fixupConfigFilename, args=args, preserveConfig=True)
+        doEarlyReturn = True
+
+    if doEarlyReturn:
+        return earlyReturnCode
     
     # Load the config file
     config = Config.fromfile(filename=args.configFilename)
@@ -1048,23 +1247,13 @@ def AccuRev2GitMain(argv):
             config.git.repoPath = os.path.abspath(config.git.repoPath)
 
     # Set the overrides for in the configuration from the arguments
-    if args.accurevUsername is not None:
-        config.accurev.username = args.accurevUsername
-    if args.accurevPassword is not None:
-        config.accurev.password = args.accurevPassword
-    if args.accurevDepot is not None:
-        config.accurev.depot    = args.accurevDepot
-    if args.gitRepoPath is not None:
-        config.git.repoPath     = args.gitRepoPath
-    if args.logFile is not None:
-        config.logFilename      = args.logFile
+    SetConfigFromArgs(config=config, args=args)
     
     if not ValidateConfig(config):
         return 1
     
     config.logger.isDbgEnabled = ( args.debug == True )
 
-    
     state = AccuRev2Git(config)
     
     if config.logFilename is not None and not args.disableLogFile:
@@ -1077,11 +1266,15 @@ def AccuRev2GitMain(argv):
             state.config.logger.logFileDbgEnabled = ( args.debug == True )
     
             PrintConfigSummary(state.config)
+            if args.checkMissingUsers:
+                PrintMissingUsers(state.config)
             state.config.logger.info("Restart:" if args.restart else "Start:")
             state.config.logger.referenceTime = time.clock()
             rv = state.Start(isRestart=args.restart)
     else:
         PrintConfigSummary(state.config)
+        if args.checkMissingUsers:
+            PrintMissingUsers(state.config)
         state.config.logger.info("Restart:" if args.restart else "Start:")
         state.config.logger.referenceTime = time.clock()
         rv = state.Start(isRestart=args.restart)
