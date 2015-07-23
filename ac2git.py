@@ -259,6 +259,8 @@ class Config(object):
 class AccuRev2Git(object):
     gitNotesRef_AccurevHistXml = 'accurev/xml/hist'
     gitNotesRef_AccurevHist    = 'accurev/hist'
+
+    commandFailureRetryCount = 3
     
     def __init__(self, config):
         self.config = config
@@ -399,7 +401,7 @@ class AccuRev2Git(object):
 
     def GetFirstTransaction(self, depot, streamName, startTransaction=None, endTransaction=None):
         # Get the stream creation transaction (mkstream). Note: The first stream in the depot doesn't have an mkstream transaction.
-        for i in xrange(0, 3):
+        for i in xrange(0, AccuRev2Git.commandFailureRetryCount):
             mkstream = accurev.hist(stream=streamName, transactionKind="mkstream", timeSpec="now")
             if mkstream is not None:
                 break
@@ -442,7 +444,7 @@ class AccuRev2Git(object):
 
     def GetLastCommitHash(self, branchName=None):
         cmd = []
-        for i in xrange(0, 3):
+        for i in xrange(0, AccuRev2Git.commandFailureRetryCount):
             cmd = [u'git', u'log', u'-1', u'--format=format:%H']
             if branchName is not None:
                 cmd.append(branchName)
@@ -461,7 +463,7 @@ class AccuRev2Git(object):
 
     def GetHistForCommit(self, commitHash):
         hist = None
-        for i in xrange(0, 3):
+        for i in xrange(0, AccuRev2Git.commandFailureRetryCount):
             lastHistXml = self.gitRepo.notes.show(obj=commitHash, ref=AccuRev2Git.gitNotesRef_AccurevHistXml)
             if lastHistXml is not None:
                 break
@@ -520,7 +522,7 @@ class AccuRev2Git(object):
                 if lastCommitHash != commitHash:
                     self.config.logger.dbg( "Committed {0}".format(commitHash) )
                     xmlNoteWritten = False
-                    for i in xrange(0, 3):
+                    for i in xrange(0, AccuRev2Git.commandFailureRetryCount):
                         xmlNoteWritten = ( self.AddAccurevHistNote(commitHash=commitHash, ref=AccuRev2Git.gitNotesRef_AccurevHistXml, depot=depot, transaction=transaction, isXml=True) is not None )
                         if xmlNoteWritten:
                             break
@@ -549,7 +551,7 @@ class AccuRev2Git(object):
         return commitHash
 
     def TryDiff(self, streamName, firstTrNumber, secondTrNumber):
-        for i in xrange(0, 3):
+        for i in xrange(0, AccuRev2Git.commandFailureRetryCount):
             diff = accurev.diff(all=True, informationOnly=True, verSpec1=streamName, verSpec2=streamName, transactionRange="{0}-{1}".format(firstTrNumber, secondTrNumber))
             if diff is not None:
                 break
@@ -590,14 +592,14 @@ class AccuRev2Git(object):
         return deletedPathList
 
     def TryHist(self, depot, trNum):
-        for i in xrange(0, 3):
+        for i in xrange(0, AccuRev2Git.commandFailureRetryCount):
             endTrHist = accurev.hist(depot=depot, timeSpec="{0}.1".format(trNum))
             if endTrHist is not None:
                 break
         return endTrHist
 
     def TryPop(self, streamName, transaction):
-        for i in xrange(0, 3):
+        for i in xrange(0, AccuRev2Git.commandFailureRetryCount):
             popResult = accurev.pop(verSpec=streamName, location=self.gitRepo.path, isRecursive=True, timeSpec=transaction.id, elementList='.')
             if popResult:
                 break
