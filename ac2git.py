@@ -533,7 +533,7 @@ class AccuRev2Git(object):
             if diff is not None:
                 break
         if diff is None:
-            self.config.logger.error( "accurev diff failed! stream: {0} time-spec: {1}-{2}".format(streamName, startTrNumber, endTrNumber) )
+            self.config.logger.error( "accurev diff failed! stream: {0} time-spec: {1}-{2}".format(streamName, firstTrNumber, secondTrNumber) )
         return diff
     
     def FindNextChangeTransaction(self, streamName, startTrNumber, endTrNumber):
