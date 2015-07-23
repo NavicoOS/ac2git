@@ -566,7 +566,14 @@ class AccuRev2Git(object):
                         self.DeletePath(path)
                         deletedPathList.append(path)
 
-        return deletedPathList 
+        return deletedPathList
+
+    def TryHist(self, depot, trNum):
+        for i in xrange(0, 3):
+            endTrHist = accurev.hist(depot=depot, timeSpec="{0}.1".format(trNum))
+            if endTrHist is not None:
+                break
+        return endTrHist
 
     def TryPop(self, streamName, transaction):
         for i in xrange(0, 3):
@@ -637,7 +644,10 @@ class AccuRev2Git(object):
             tr = hist.transactions[0]
             self.config.logger.dbg("{0}: last processed transaction was #{1}".format(streamName, tr.id))
 
-        endTrHist = accurev.hist(depot=depot, timeSpec="{0}.1".format(endTransaction))
+        endTrHist = self.TryHist(depot=depot, trNum=endTransaction)
+        if endTrHist is None:
+            self.config.logger.dbg("accurev hist -p {0} -t {1}.1 failed.".format(depot, endTransaction))
+            return (None, None)
         endTr = endTrHist.transactions[0]
         self.config.logger.info("{0}: processing transaction range #{1} - #{2}".format(streamName, tr.id, endTr.id))
 
@@ -656,7 +666,10 @@ class AccuRev2Git(object):
                 # The accurev hist command here must be used with the depot option since the transaction that has affected us may not
                 # be a promotion into the stream we are looking at but into one of its parent streams. Hence we must query the history
                 # of the depot and not the stream itself.
-                hist = accurev.hist(depot=depot, timeSpec="{0}.1".format(nextTr))
+                hist = self.TryHist(depot=depot, trNum=nextTr)
+                if hist is None:
+                    self.config.logger.dbg("accurev hist -p {0} -t {1}.1 failed.".format(depot, endTransaction))
+                    return (None, None)
                 tr = hist.transactions[0]
 
                 # Populate
@@ -696,7 +709,7 @@ class AccuRev2Git(object):
             depot  = self.config.accurev.depot
             tr, commitHash = self.ProcessStream(depot=depot, streamName=stream, branchName=branch, startTransaction=self.config.accurev.startTransaction, endTransaction=self.config.accurev.endTransaction)
             if tr is None or commitHash is None:
-                self.config.logger.error( "Error while processing stream {0}, branch {1}".format(streamName, branch) )
+                self.config.logger.error( "Error while processing stream {0}, branch {1}".format(stream, branch) )
 
     def InitGitRepo(self, gitRepoPath):
         gitRootDir, gitRepoDir = os.path.split(gitRepoPath)
