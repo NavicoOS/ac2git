@@ -1093,7 +1093,8 @@ def AutoConfigFile(filename, args, preserveConfig=False):
             for stream in streams.streams:
                 if not (preserveConfig and stream in config.accurev.streamMap):
                     file.write("""
-            <stream branch-name="accurev/{stream_name}" depot="{stream_depot}">{stream_name}</stream>""".format(stream_name=stream.name, stream_depot=stream.depotName))
+            <stream branch-name="accurev/{stream_name}">{stream_name}</stream>""".format(stream_name=stream.name))
+                    # TODO: Add depot and start/end transaction overrides for each stream...
 
         file.write("""
         </stream-list>
