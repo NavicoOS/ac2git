@@ -267,7 +267,8 @@ class AccuRev2Git(object):
         self.cwd = None
         self.gitRepo = None
         self.gitBranchList = None
- 
+
+    # Returns True if the path was deleted, otherwise false
     def DeletePath(self, path):
         if os.path.exists(path):
             if os.path.isdir(path):
@@ -278,8 +279,11 @@ class AccuRev2Git(object):
                     for name in dirs:
                         p = os.path.join(root, name)
                         os.rmdir(p)
+                os.rmdir(path)
             elif os.path.isfile(path):
                 os.remove(path)
+            
+        return not os.path.exists(path)
    
     def ClearGitRepo(self):
         # Delete everything except the .git folder from the destination (git repo)
@@ -294,6 +298,7 @@ class AccuRev2Git(object):
                     os.rmdir(path)
 
     def PreserveEmptyDirs(self):
+        preservedDirs = []
         for root, dirs, files in os.walk(self.gitRepo.path, topdown=True):
             for name in dirs:
                 path = os.path.join(root, name).replace('\\','/')
@@ -302,9 +307,31 @@ class AccuRev2Git(object):
                     filename = os.path.join(path, '.gitignore')
                     with codecs.open(filename, 'w', 'utf-8') as file:
                         #file.write('# accurev2git.py preserve empty dirs\n')
-                        pass
+                        preservedDirs.append(filename)
                     if not os.path.exists(filename):
-                        self.config.logger.error("Failed to preserve directory. Couldn't create {0}.".format(filename))
+                        self.config.logger.error("Failed to preserve directory. Couldn't create '{0}'.".format(filename))
+        return preservedDirs
+
+    def DeleteEmptyDirs(self):
+        deletedDirs = []
+        for root, dirs, files in os.walk(self.gitRepo.path, topdown=True):
+            for name in dirs:
+                path = os.path.join(root, name).replace('\\','/')
+                # Delete empty directories that are not under the .git/ directory.
+                if git.GetGitDirPrefix(path) is None:
+                    dirlist = os.listdir(path)
+                    count = len(dirlist)
+                    delete = (len(dirlist) == 0)
+                    if len(dirlist) == 1 and '.gitignore' in dirlist:
+                        with codecs.open(os.path.join(path, '.gitignore')) as gi:
+                            contents = gi.read().strip()
+                            delete = (len(contents) == 0)
+                    if delete:
+                        if not self.DeletePath(path):
+                            self.config.logger.error("Failed to delete empty directory '{0}'.".format(path))
+                        else:
+                            deletedDirs.append(path)
+        return deletedDirs
 
     def GetGitUserFromAccuRevUser(self, accurevUsername):
         if accurevUsername is not None:
@@ -608,8 +635,10 @@ class AccuRev2Git(object):
                     if stream is not None and stream.name is not None:
                         name = stream.name.replace('\\', '/').lstrip('/')
                         path = os.path.join(self.gitRepo.path, name)
-                        self.DeletePath(path)
-                        deletedPathList.append(path)
+                        if not self.DeletePath(path):
+                            self.config.logger.error("Failed to delete '{0}'.".format(path))
+                        else:
+                            deletedPathList.append(path)
 
         return deletedPathList
 
@@ -721,6 +750,10 @@ class AccuRev2Git(object):
                 # Populate
                 destStream = self.GetDestinationStreamName(history=hist)
                 self.config.logger.dbg( "{0} pop: {1} {2}{3}".format(streamName, tr.Type, tr.id, " to {0}".format(destStream) if destStream is not None else "") )
+
+                # Remove all the empty directories (this includes directories which contain an empty .gitignore file since that's what we is done to preserve them)
+                self.DeleteEmptyDirs()
+
                 popResult = self.TryPop(streamName=streamName, transaction=tr)
                 if not popResult:
                     return (None, None)
