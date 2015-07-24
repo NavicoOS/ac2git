@@ -629,11 +629,12 @@ class AccuRev2Git(object):
                     if stream is not None and stream.name is not None:
                         name = stream.name.replace('\\', '/').lstrip('/')
                         path = os.path.join(self.gitRepo.path, name)
-                        if not self.DeletePath(path):
-                            self.config.logger.error("Failed to delete '{0}'.".format(path))
-                            raise Exception("Failed to delete '{0}'".format(path))
-                        else:
-                            deletedPathList.append(path)
+                        if os.path.exists(path):
+                            if not self.DeletePath(path):
+                                self.config.logger.error("Failed to delete '{0}'.".format(path))
+                                raise Exception("Failed to delete '{0}'".format(path))
+                            else:
+                                deletedPathList.append(path)
 
         return deletedPathList
 
@@ -742,6 +743,17 @@ class AccuRev2Git(object):
                     # TODO: This must be solved somehow since this could hinder this script from continuing at all!
                     return (None, None)
 
+                # Remove all the empty directories (this includes directories which contain an empty .gitignore file since that's what we is done to preserve them)
+                try:
+                    self.DeleteEmptyDirs()
+                except:
+                    popOverwrite = True
+                    self.config.logger.info("Error trying to delete empty directories. Fatal, aborting!")
+                    # This might be ok only in the case when the files/directories were changed but not in the case when there
+                    # was a deletion that occurred. Abort and be safe!
+                    # TODO: This must be solved somehow since this could hinder this script from continuing at all!
+                    return (None, None)
+
                 # The accurev hist command here must be used with the depot option since the transaction that has affected us may not
                 # be a promotion into the stream we are looking at but into one of its parent streams. Hence we must query the history
                 # of the depot and not the stream itself.
@@ -754,17 +766,6 @@ class AccuRev2Git(object):
                 # Populate
                 destStream = self.GetDestinationStreamName(history=hist)
                 self.config.logger.dbg( "{0} pop: {1} {2}{3}".format(streamName, tr.Type, tr.id, " to {0}".format(destStream) if destStream is not None else "") )
-
-                # Remove all the empty directories (this includes directories which contain an empty .gitignore file since that's what we is done to preserve them)
-                try:
-                    self.DeleteEmptyDirs()
-                except:
-                    popOverwrite = True
-                    self.config.logger.info("Error trying to delete empty directories. Fatal, aborting!")
-                    # This might be ok only in the case when the files/directories were changed but not in the case when there
-                    # was a deletion that occurred. Abort and be safe!
-                    # TODO: This must be solved somehow since this could hinder this script from continuing at all!
-                    return (None, None)
 
                 popResult = self.TryPop(streamName=streamName, transaction=tr, overwrite=popOverwrite)
                 if not popResult:
