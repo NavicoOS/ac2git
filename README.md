@@ -26,12 +26,12 @@ AccuRev2Git is a tool to convert an AccuRev depot into a git repo. A specified A
 - Make an example config file:
 
  ```
- python accurev2git.py --dump-example-config
+ python ac2git.py --example-config
  ```
 
-- Modify the generated file, whose filename defaults to `accurev2git.config.example.xml`, (there are plenty of notes in the file and the script help menu to do this)
+- Modify the generated file, whose filename defaults to `ac2git.config.example.xml`, (there are plenty of notes in the file and the script help menu to do this)
 
-- Rename the `accurev2git.config.example.xml` file as `accurev2git.config.xml`
+- Rename the `ac2git.config.example.xml` file as `ac2git.config.xml`
 
 - Modify the configuration file and add the following information:
 
@@ -50,13 +50,13 @@ AccuRev2Git is a tool to convert an AccuRev depot into a git repo. A specified A
 - Run the script
 
  ```
- python accurev2git.py
+ python ac2git.py
  ```
 
 - If you encounter any trouble. Run the script with the `--help` flag for more options.
 
  ```
- python accurev2git.py --help
+ python ac2git.py --help
  ```
 
 ### How it works ###

@@ -1380,7 +1380,7 @@ def AccuRev2GitMain(argv):
     doEarlyReturn = False
     earlyReturnCode = 0
     if args.exampleConfigFilename is not None:
-        earlyReturnCode = DumpExampleConfigFile(exampleConfigFilename)
+        earlyReturnCode = DumpExampleConfigFile(args.exampleConfigFilename)
         doEarlyReturn = True
 
     if args.autoConfigFilename is not None:
