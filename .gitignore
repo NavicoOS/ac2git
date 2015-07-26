@@ -187,3 +187,7 @@ FakesAssemblies/
 # Ignore vim/gvim swap files
 *.swp
 
+# Ignore default script configuration and log files.
+*.log
+*.config.xml
+
