@@ -1195,9 +1195,9 @@ class raw(object):
         outputFile = None
         if outputFilename is not None:
             outputFile = open(outputFilename, "w")
-            accurevCommand = subprocess.Popen(cmd, stdout=outputFile, stdin=subprocess.PIPE)
+            accurevCommand = subprocess.Popen(cmd, stdout=outputFile, stdin=subprocess.PIPE, universal_newlines=True)
         else:
-            accurevCommand = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.PIPE)
+            accurevCommand = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.PIPE, universal_newlines=True)
             
         xmlOutput = ''
         accurevCommand.poll()
@@ -1232,7 +1232,7 @@ class raw(object):
     @staticmethod
     def login(username = None, password = None):
         if username is not None and password is not None:
-            accurevCommand = subprocess.Popen([ "accurev", "login" ], stdout=subprocess.PIPE, stdin=subprocess.PIPE)
+            accurevCommand = subprocess.Popen([ "accurev", "login" ], stdout=subprocess.PIPE, stdin=subprocess.PIPE, universal_newlines=True)
             accurevCommand.communicate(username + '\n' + password + '\n')
             accurevCommand.wait()
             
@@ -1242,7 +1242,7 @@ class raw(object):
         
     @staticmethod
     def logout():
-        accurevCommand = subprocess.Popen([ "accurev", "logout" ])
+        accurevCommand = subprocess.Popen([ "accurev", "logout" ], universal_newlines=True)
         accurevCommand.wait()
         
         return (accurevCommand.returncode == 0)

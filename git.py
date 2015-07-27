@@ -275,7 +275,7 @@ class repo(object):
         os.chdir(self._cwdQueue.pop(0))
     
     def _docmd(self, cmd, env=None):
-        process = subprocess.Popen(args=(to_utf8(c) for c in cmd), cwd=self.path, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        process = subprocess.Popen(args=(to_utf8(c) for c in cmd), cwd=self.path, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
 
         output = ''
         error  = ''
