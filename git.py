@@ -264,15 +264,7 @@ class repo(object):
         self.lastStdout = None
         self.lastReturnCode = None
         # Private
-        self._cwdQueue = []
         self._lastCommand = None
-        
-    def _pushd(self, newPath):
-        self._cwdQueue.insert(0, os.getcwd())
-        os.chdir(newPath)
-    
-    def _popd(self):
-        os.chdir(self._cwdQueue.pop(0))
     
     def _docmd(self, cmd, env=None):
         process = subprocess.Popen(args=(to_utf8(c) for c in cmd), cwd=self.path, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
