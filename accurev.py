@@ -454,6 +454,25 @@ class obj:
             str += ")"
             
             return str
+
+        # Extension method which returns the name or number of the stream
+        # which is affected by this transaction (the stream on which the
+        # transaction was performed). i.e. A promote to a stream called
+        # Stream1 whose id is 1734 would return ("Stream1", 1734).
+        def affectedStream(self):
+            streamName   = None
+            streamNumber = None
+            if self.versions is not None and len(self.versions) > 0:
+                version = self.versions[0]
+                if version.virtualNamedVersion is not None:
+                    streamName   = version.virtualNamedVersion.stream
+                if version.virtual is not None:
+                    streamNumber = int(version.virtual.stream)
+            elif self.stream is not None:
+                streamName   = self.stream.name
+                streamNumber = self.stream.streamNumber
+
+            return (streamName, streamNumber)
         
         @classmethod
         def fromxmlelement(cls, xmlElement):
@@ -1962,10 +1981,6 @@ class ext(object):
         return parentObjects
 
     @staticmethod
-    def _parent_deep_hist(depot, stream, timeSpec):
-        pass
-
-    @staticmethod
     # Retrieves a list of _all transactions_ which affect the given stream, directly or indirectly (via parent promotes).
     # Returns a list of obj.Transaction(object) types.
     def deep_hist(depot, stream, timeSpec):
@@ -1985,23 +2000,17 @@ class ext(object):
         if stream is None:
             raise Exception("ext.deep_hist only makes sense to run on streams that are not None")
 
-        print("{0}/{1}".format(depot, stream))
-
         isAsc = ts.is_asc()
         if not isAsc:
             # Make descending
-            print("Reversing: {0}".format(ts))
             ts = ts.reversed()
         
-        print( ts )
-
         # The transaction list that combines all of the transactions which affect this stream.
         trList = []
 
         # Get the history for the requested stream.
         history = hist(depot=depot, stream=stream, timeSpec=str(ts))
 
-        print history
         prevTr = None
         parentTs = ts
         for tr in history.transactions:
@@ -2028,6 +2037,40 @@ class ext(object):
         if not isAsc:
             rv.reverse()
 
+        return rv
+
+    @staticmethod
+    # Returns a list of streams which are affected by the given transaction.
+    # The transaction must be of type obj.Transaction which is obtained from the obj.History.transactions
+    # which is returned by the hist() function.
+    def affected_streams(depot, transaction, includeWorkspaces=True):
+        if not isinstance(transaction, obj.Transaction):
+            transaction = hist(depot=depot, timeSpec=str(transaction)).transactions[0]
+        
+        rv = None
+
+        destStream = transaction.affectedStream()[0]
+
+        if destStream is not None:
+            streamMap = ext.stream_dict(depot=depot, transaction=transaction.id)
+
+            childrenSet = set()
+            newChildrenSet = set()
+
+            newChildrenSet.add(destStream)
+            while len(newChildrenSet) > 0:
+                childrenSet |= newChildrenSet
+                newChildrenSet = set()
+
+                for stream in streamMap:
+                    if streamMap[stream].basis in childrenSet and stream not in childrenSet:
+                        if includeWorkspaces or streamMap[stream].Type.lower() != "workspace":
+                            newChildrenSet.add(stream)
+            
+            rv = []
+            for stream in childrenSet:
+                rv.append(streamMap[stream])
+            
         return rv
 
 # ################################################################################################ #
