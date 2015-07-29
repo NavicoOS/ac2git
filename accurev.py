@@ -175,6 +175,16 @@ class obj:
                 return obj.TimeSpec.compare_transaction_specs(self.start, self.end) > 0
             except:
                 return False
+
+        def reversed(self):
+            return obj.TimeSpec.reverse(self)
+
+        @classmethod
+        def reverse(cls, timespec):
+            rv = None
+            if isinstance(timespec, cls):
+                rv = cls(start=timespec.end, end=timespec.start, limit=timespec.limit)
+            return rv
         
         @staticmethod
         def parse_simple(timespec):
@@ -197,10 +207,10 @@ class obj:
 
         @classmethod
         def fromstring(cls, string):
-            if TimeSpec.timeSpecRe is None:
-                TimeSpec.timeSpecRe = re.compile(r'^(?P<start>.*?) *(?:- *(?P<end>.*?))?(?:\.(?P<limit>\d+))?$')
+            if obj.TimeSpec.timeSpecRe is None:
+                obj.TimeSpec.timeSpecRe = re.compile(r'^(?P<start>.*?) *(?:- *(?P<end>.*?))?(?:\.(?P<limit>\d+))?$')
 
-            timeSpecMatch = TimeSpec.timeSpecRe.search(string)
+            timeSpecMatch = obj.TimeSpec.timeSpecRe.search(string)
             
             if timeSpecMatch is not None:
                 timeSpecDict = timeSpecMatch.groupdict()
@@ -1952,12 +1962,19 @@ class ext(object):
         return parentObjects
 
     @staticmethod
-    def _deep_hist_rec(depot, stream, timeSpec, chstreams, history, parentList):
+    def _parent_deep_hist(depot, stream, timeSpec):
         pass
 
     @staticmethod
+    # Retrieves a list of _all transactions_ which affect the given stream, directly or indirectly (via parent promotes).
+    # Returns a list of obj.Transaction(object) types.
     def deep_hist(depot, stream, timeSpec):
-        ts = obj.TimeSpec.fromstring(timeSpec)
+        if isinstance(timeSpec, obj.TimeSpec):
+            ts = timeSpec
+        elif isinstance(timeSpec, str):
+            ts = obj.TimeSpec.fromstring(timeSpec)
+        else:
+            raise Exception("Unrecognized time-spec type {0}".format(type(timeSpec)))
 
         if ts.end is None or ts.limit == 1:
             # If ts.end is None this means that we are not processing a transaction range.
@@ -1965,60 +1982,53 @@ class ext(object):
             # needed. A simple hist query will do.
             return hist(stream=stream, timeSpec=timeSpec)
 
-        isDesc = ts.is_desc()
-        if not isDesc:
+        if stream is None:
+            raise Exception("ext.deep_hist only makes sense to run on streams that are not None")
+
+        print("{0}/{1}".format(depot, stream))
+
+        isAsc = ts.is_asc()
+        if not isAsc:
             # Make descending
-            ts = obj.TimeSpec(start=ts.end, end=ts.start, limit=ts.limit)
+            print("Reversing: {0}".format(ts))
+            ts = ts.reversed()
         
         print( ts )
 
-        # Get the promote history for the requested stream.
-        history = hist(stream=stream, timeSpec=str(ts), transactionKind='promote')
+        # The transaction list that combines all of the transactions which affect this stream.
+        trList = []
 
-        # Get the stream parents from the highest transaction we are looking for.
-        parents = ext.stream_parent_list(depot=depot, stream=stream, transaction=ts.start)
+        # Get the history for the requested stream.
+        history = hist(depot=depot, stream=stream, timeSpec=str(ts))
 
-        if len(parents) > 1:
-            parentsById = { s.streamNumber: s for s in parents }
+        print history
+        prevTr = None
+        parentTs = ts
+        for tr in history.transactions:
+            if tr.Type == "chstream":
+                # Parent stream changed.
+                if prevTr is not None:
+                    parentTs = obj.TimeSpec(start=parentTs.start, end=(tr.id - 1))
+                    # includeDeactevatedItems and includeOldDefinitons might be good to set here...
+                    parentStream = show.streams(depot=depot, stream=stream, timeSpec=parentTs.start).streams[0].basis
+                    if parentStream is not None:
+                        parentTrList = ext.deep_hist(depot=depot, stream=parentStream, timeSpec=parentTs)
+                        trList.extend(parentTrList)
+                    parentTs = obj.TimeSpec(start=tr.id, end=parentTs.end)
 
-            # Check if there are any chstream transactions in the range which could affect this stream
-            # or its parents.
-            chstreams = hist(depot=depot, timeSpec=str(ts), transactionKind='chstream')
+            trList.append(tr)
+            prevTr = tr
 
-            parentChangelist = []
-            if len(chstreams.transactions) > 0:
-                for tr in chstreams.transactions: # transactions are in descending order
-                    if tr.stream.streamNumber in parentsById:
-                        doAppend = False
+        parentStream = show.streams(depot=depot, stream=stream, timeSpec=parentTs.start).streams[0].basis
+        if parentStream is not None:
+            parentTrList = ext.deep_hist(depot=depot, stream=parentStream, timeSpec=parentTs)
+            trList.extend(parentTrList)
 
-                        # Has the basis changed in our parent-chain?
-                        if tr.stream.prevBasisStreamNumber is not None and tr.stream.basisStreamNumber != tr.stream.prevBasisStreamNumber:
-                            print( 'tr #{0}: {1} stream changed basis {2} -> {3}'.format(tr.id, tr.stream.name, tr.stream.prevBasis, tr.stream.basis) )
-                            # Record the new parents against this transaction in the changelist.
-                            doAppend = True
-                        if tr.stream.time is not None and GetTimestamp(tr.stream.time) != 0:
-                            print( 'tr #{0}: {1} stream changed time lock {2} -> {3}'.format(tr.id, tr.stream.name, tr.stream.prevTime, tr.stream.time) )
-                            doAppend = True
-                        # Has it been renamed? Do we care?
-                        if tr.stream.prevName is not None and tr.stream.name != tr.stream.prevName:
-                            print( 'tr #{0}: stream renamed {2} -> {3}'.format(tr.id, tr.stream.prevName, tr.stream.name) )
+        rv = sorted(trList, key=lambda tr: tr.id)
+        if not isAsc:
+            rv.reverse()
 
-                        if doAppend:
-                            parentChangelist.append( (tr, ext.stream_parent_list(depot=depot, stream=stream, transaction=tr.id)) )
-
-                #print( chstreams.transactions )
-
-            # Get the stream state as it is at the last requested transaction.
-
-            # Build a list of stream states for each chstream transaction that is in the range...
-            #print()
-            #print( parents )
-
-        transactions = sorted(history.transactions, key=lambda tr: tr.id)
-        if isDesc:
-            transactions.reverse()
-
-        return transactions
+        return rv
 
 # ################################################################################################ #
 # Script Main                                                                                      #
