@@ -2085,7 +2085,7 @@ def clDeepHist(args):
     try:
         transactions = ext.deep_hist(depot=args.depot, stream=args.stream, timeSpec=args.timeSpec)
         if transactions is not None and len(transactions) > 0:
-            print("tr. type; destination stream; username;")
+            print("tr. type; destination stream; tr. number; username;")
             for tr in transactions:
                 print("{Type}; {stream}; {id}; {user};".format(id=tr.id, user=tr.user, Type=tr.Type, stream=tr.affectedStream()[0]))
             return 0
