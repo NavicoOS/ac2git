@@ -2065,7 +2065,7 @@ class ext(object):
     # Returns a list of streams which are affected by the given transaction.
     # The transaction must be of type obj.Transaction which is obtained from the obj.History.transactions
     # which is returned by the hist() function.
-    def affected_streams(depot, transaction, includeWorkspaces=True):
+    def affected_streams(depot, transaction, includeWorkspaces=True, ignoreTimelocks=True):
         if not isinstance(transaction, obj.Transaction):
             transaction = hist(depot=depot, timeSpec=str(transaction)).transactions[0]
         
@@ -2087,7 +2087,8 @@ class ext(object):
                 for stream in streamMap:
                     if streamMap[stream].basis in childrenSet and stream not in childrenSet:
                         if includeWorkspaces or streamMap[stream].Type.lower() != "workspace":
-                            newChildrenSet.add(stream)
+                            if ignoreTimelocks or streamMap[stream].time is None or streamMap[stream].time >= transaction.time:
+                                newChildrenSet.add(stream)
             
             rv = []
             for stream in childrenSet:
@@ -2113,7 +2114,7 @@ def clDeepHist(args):
         return 1
 
 def clAffectedStreams(args):
-    streams = ext.affected_streams(depot=args.depot, transaction=args.transaction, includeWorkspaces=args.includeWorkspaces)
+    streams = ext.affected_streams(depot=args.depot, transaction=args.transaction, includeWorkspaces=args.includeWorkspaces, ignoreTimelocks=args.ignoreTimelocks)
     if streams is not None and len(streams) > 0:
         print("stream name; stream id; stream type;")
         for s in streams:
@@ -2145,6 +2146,7 @@ if __name__ == "__main__":
     affectedStreamsParser.add_argument('-p', '--depot',     dest='depot',    required=True, help='The name of the depot in which the transaction occurred')
     affectedStreamsParser.add_argument('-t', '--transaction', dest='transaction', required=True, help='The accurev transaction number for which we want to know the affected streams.')
     affectedStreamsParser.add_argument('-w', '--include-workspaces', dest='includeWorkspaces', action='store_true', default=False, help='The returned set of streams will include workspaces if this option is specified.')
+    affectedStreamsParser.add_argument('-i', '--ignore-timelocks', dest='ignoreTimelocks', action='store_true', default=False, help='The returned set of streams will include streams whose timelocks would have otherwise prevented this stream from affecting them.')
 
     affectedStreamsParser.set_defaults(func=clAffectedStreams)
 
