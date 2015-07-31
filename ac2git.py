@@ -198,6 +198,11 @@ class Config(object):
             accurev = Config.AccuRev.fromxmlelement(xmlRoot.find('accurev'))
             git     = Config.Git.fromxmlelement(xmlRoot.find('git'))
             
+            method = "diff" # Defaults to diff
+            methodElem = xmlRoot.find('method')
+            if methodElem is not None:
+                method = methodElem.text
+
             logFilename = None
             logFileElem = xmlRoot.find('logfile')
             if logFileElem is not None:
@@ -209,7 +214,7 @@ class Config(object):
                 for userMapElem in userMapsElem.findall('map-user'):
                     usermaps.append(Config.UserMap.fromxmlelement(userMapElem))
             
-            return cls(accurev=accurev, git=git, usermaps=usermaps, logFilename=logFilename)
+            return cls(accurev=accurev, git=git, usermaps=usermaps, method=method, logFilename=logFilename)
         else:
             # Invalid XML for an accurev2git configuration file.
             return None
@@ -224,10 +229,11 @@ class Config(object):
         
         return config
 
-    def __init__(self, accurev = None, git = None, usermaps = None, logFilename = None):
+    def __init__(self, accurev = None, git = None, usermaps = None, method = None, logFilename = None):
         self.accurev     = accurev
         self.git         = git
         self.usermaps    = usermaps
+        self.method      = method
         self.logFilename = logFilename
         self.logger      = Config.Logger()
         
@@ -602,23 +608,44 @@ class AccuRev2Git(object):
             self.config.logger.error( "accurev diff failed! stream: {0} time-spec: {1}-{2}".format(streamName, firstTrNumber, secondTrNumber) )
         return diff
     
-    def FindNextChangeTransaction(self, streamName, startTrNumber, endTrNumber):
+    def FindNextChangeTransaction(self, streamName, startTrNumber, endTrNumber, deepHist=None):
         # Iterate over transactions in order using accurev diff -a -i -v streamName -V streamName -t <lastProcessed>-<current iterator>
-        nextTr = startTrNumber + 1
-        diff = self.TryDiff(streamName=streamName, firstTrNumber=startTrNumber, secondTrNumber=nextTr)
-        if diff is None:
-            return (None, None)
-
-        # Note: This is likely to be a hot path. However, it cannot be optimized since a revert of a transaction would not show up in the diff even though the
-        #       state of the stream was changed during that period in time. Hence to be correct we must iterate over the transactions one by one unless we have
-        #       explicit knowlege of all the transactions which could affect us via some sort of deep history option...
-        while nextTr <= endTrNumber and len(diff.elements) == 0:
-            nextTr += 1
+        if self.config.method == "diff":
+            nextTr = startTrNumber + 1
             diff = self.TryDiff(streamName=streamName, firstTrNumber=startTrNumber, secondTrNumber=nextTr)
             if diff is None:
                 return (None, None)
+    
+            # Note: This is likely to be a hot path. However, it cannot be optimized since a revert of a transaction would not show up in the diff even though the
+            #       state of the stream was changed during that period in time. Hence to be correct we must iterate over the transactions one by one unless we have
+            #       explicit knowlege of all the transactions which could affect us via some sort of deep history option...
+            while nextTr <= endTrNumber and len(diff.elements) == 0:
+                nextTr += 1
+                diff = self.TryDiff(streamName=streamName, firstTrNumber=startTrNumber, secondTrNumber=nextTr)
+                if diff is None:
+                    return (None, None)
         
-        return (nextTr, diff)
+            self.config.logger.dbg("FindNextChangeTransaction diff: {0}".format(tr.id))
+            return (nextTr, diff)
+        elif self.config.method == "deep-hist":
+            if deepHist is None:
+                raise Exception("Script error! deepHist argument cannot be none when running a deep-hist method.")
+            # Find the next transaction
+            for tr in deepHist:
+                if tr.id > startTrNumber:
+                    diff = self.TryDiff(streamName=streamName, firstTrNumber=startTrNumber, secondTrNumber=tr.id)
+                    if diff is None:
+                        return (None, None)
+                    self.config.logger.dbg("FindNextChangeTransaction deep-hist: {0}".format(tr.id))
+                    return (tr.id, diff)
+            diff = self.TryDiff(streamName=streamName, firstTrNumber=startTrNumber, secondTrNumber=endTrNumber)
+            return (endTrNumber, diff)
+        elif self.config.method == "pop":
+            self.config.logger.dbg("FindNextChangeTransaction pop: {0}".format(startTrNumber + 1))
+            return (startTrNumber + 1, None)
+        else:
+            self.config.logger.error("Method is unrecognized, allowed values are 'pop', 'diff' and 'deep-hist'")
+            raise Exception("Invalid configuration, method unrecognized!")
 
     def DeleteDiffItemsFromRepo(self, diff):
         # Delete all of the files which are even mentioned in the diff so that we can do a quick populate (wouth the overwrite option)
@@ -721,38 +748,47 @@ class AccuRev2Git(object):
             return (None, None)
         endTr = endTrHist.transactions[0]
         self.config.logger.info("{0}: processing transaction range #{1} - #{2}".format(streamName, tr.id, endTr.id))
-
+        
+        deepHist = None
+        if self.config.method == "deep-hist":
+            self.config.logger.dbg("accurev.ext.deep_hist(depot={0}, stream={1}, timeSpec='{2}-{3}'".format(depot, streamName, startTransaction, endTransaction))
+            deepHist = accurev.ext.deep_hist(depot=depot, stream=streamName, timeSpec="{0}-{1}".format(startTransaction, endTransaction))
+            if deepHist is None:
+                raise Exception("accurev.ext.deep_hist() failed to return a result!")
         while True:
-            nextTr, diff = self.FindNextChangeTransaction(streamName=streamName, startTrNumber=tr.id, endTrNumber=endTr.id)
+            nextTr, diff = self.FindNextChangeTransaction(streamName=streamName, startTrNumber=tr.id, endTrNumber=endTr.id, deepHist=deepHist)
             if nextTr is None or diff is None:
-                self.config.logger.dbg( "FindNextChangeTransaction(streamName='{0}', startTrNumber={1}, endTrNumber={2}) failed!".format(streamName, tr.id, endTr.id) )
+                self.config.logger.dbg( "FindNextChangeTransaction(streamName='{0}', startTrNumber={1}, endTrNumber={2}, deepHist={3}) failed!".format(streamName, tr.id, endTr.id, deepHist) )
                 return (None, None)
 
             self.config.logger.dbg( "{0}: next transaction {1}".format(streamName, nextTr) )
             if nextTr <= endTr.id:
                 # Right now nextTr is an integer representation of our next transaction.
                 # Delete all of the files which are even mentioned in the diff so that we can do a quick populate (wouth the overwrite option)
-                try:
-                    popOverwrite = False
-                    deletedPathList = self.DeleteDiffItemsFromRepo(diff=diff)
-                except:
-                    popOverwrite = True
-                    self.config.logger.info("Error trying to delete changed elements. Fatal, aborting!")
-                    # This might be ok only in the case when the files/directories were changed but not in the case when there
-                    # was a deletion that occurred. Abort and be safe!
-                    # TODO: This must be solved somehow since this could hinder this script from continuing at all!
-                    return (None, None)
+                popOverwrite = (self.config.method == "pop")
+                if self.config.method == "pop":
+                    self.ClearGitRepo()
+                else:
+                    try:
+                        deletedPathList = self.DeleteDiffItemsFromRepo(diff=diff)
+                    except:
+                        popOverwrite = True
+                        self.config.logger.info("Error trying to delete changed elements. Fatal, aborting!")
+                        # This might be ok only in the case when the files/directories were changed but not in the case when there
+                        # was a deletion that occurred. Abort and be safe!
+                        # TODO: This must be solved somehow since this could hinder this script from continuing at all!
+                        return (None, None)
 
-                # Remove all the empty directories (this includes directories which contain an empty .gitignore file since that's what we is done to preserve them)
-                try:
-                    self.DeleteEmptyDirs()
-                except:
-                    popOverwrite = True
-                    self.config.logger.info("Error trying to delete empty directories. Fatal, aborting!")
-                    # This might be ok only in the case when the files/directories were changed but not in the case when there
-                    # was a deletion that occurred. Abort and be safe!
-                    # TODO: This must be solved somehow since this could hinder this script from continuing at all!
-                    return (None, None)
+                    # Remove all the empty directories (this includes directories which contain an empty .gitignore file since that's what we is done to preserve them)
+                    try:
+                        self.DeleteEmptyDirs()
+                    except:
+                        popOverwrite = True
+                        self.config.logger.info("Error trying to delete empty directories. Fatal, aborting!")
+                        # This might be ok only in the case when the files/directories were changed but not in the case when there
+                        # was a deletion that occurred. Abort and be safe!
+                        # TODO: This must be solved somehow since this could hinder this script from continuing at all!
+                        return (None, None)
 
                 # The accurev hist command here must be used with the depot option since the transaction that has affected us may not
                 # be a promotion into the stream we are looking at but into one of its parent streams. Hence we must query the history
@@ -1098,6 +1134,20 @@ def DumpExampleConfigFile(outputFilename):
         </stream-list>
     </accurev>
     <git repo-path="/put/the/git/repo/here" /> <!-- The system path where you want the git repo to be populated. Note: this folder should already exist. -->
+    <method>deep-hist</method> <!-- The method specifies what approach is taken to perform the conversion. Allowed values are 'deep-hist', 'diff' and 'pop'.
+                                     - deep-hist: Works by using the accurev.ext.deep_hist() function to return a list of transactions that could have affected the stream.
+                                                  It then performs a diff between the transactions and only populates the files that have changed like the 'diff' method.
+                                                  It is the quickest method but is only as reliable as the information that accurev.ext.deep_hist() provides.
+                                     - diff: This method's first commit performs a full `accurev pop` command on either the streams `mkstream` transaction or the start
+                                             transaction (whichever is highest). Subsequently it increments the transaction number by one and performs an
+                                             `accurev diff -a -i -v <stream> -V <stream>` to find all changed files. If not files have changed it takes the next transaction
+                                             and performs the diff again. Otherwise, any files returned by the diff are deleted and an `accurev pop -R` performed which only
+                                             downloads the changed files. This is slower than the 'deep-hist' method but faster than the 'pop' method by a large margin.
+                                             It's reliability is directly dependent on the reliability of the `accurev diff` command.
+                                     - pop: This is the naive method which doesn't care about changes and always performs a full deletion of the whole tree and a complete
+                                            `accurev pop` command. It is a lot slower than the other methods for streams with a lot of files but should work even with older
+                                            accurev releases. This is the method originally implemented by Ryan LaNeve in his https://github.com/rlaneve/accurev2git repo.
+                               -->
     <logfile>accurev2git.log<logfile>
     <!-- The user maps are used to convert users from AccuRev into git. Please spend the time to fill them in properly. -->
     <usermaps>
@@ -1208,8 +1258,9 @@ def AutoConfigFile(filename, args, preserveConfig=False):
         </stream-list>
     </accurev>
     <git repo-path="{git_repo_path}" /> <!-- The system path where you want the git repo to be populated. Note: this folder should already exist. -->
+    <method>{method}</method>
     <logfile>{log_filename}<logfile>
-    <!-- The user maps are used to convert users from AccuRev into git. Please spend the time to fill them in properly. -->""".format(git_repo_path=config.git.repoPath, log_filename=config.logFilename))
+    <!-- The user maps are used to convert users from AccuRev into git. Please spend the time to fill them in properly. -->""".format(git_repo_path=config.git.repoPath, method=config.method, log_filename=config.logFilename))
         file.write("""
     <usermaps>
          <!-- The timezone attribute is optional. All times are retrieved in UTC from AccuRev and will converted to the local timezone by default.
@@ -1298,6 +1349,8 @@ def SetConfigFromArgs(config, args):
         config.accurev.depot    = args.accurevDepot
     if args.gitRepoPath is not None:
         config.git.repoPath     = args.gitRepoPath
+    if args.conversionMethod is not None:
+        config.method = args.conversionMethod
     if args.logFile is not None:
         config.logFilename      = args.logFile
 
@@ -1344,6 +1397,7 @@ def PrintConfigSummary(config):
         config.logger.info('    start tran.: #{0}'.format(config.accurev.startTransaction))
         config.logger.info('    end tran.:   #{0}'.format(config.accurev.endTransaction))
         config.logger.info('    username: {0}'.format(config.accurev.username))
+        config.logger.info('  method: {0}'.format(config.method))
         config.logger.info('  usermaps: {0}'.format(len(config.usermaps)))
         config.logger.info('  log file: {0}'.format(config.logFilename))
         config.logger.info('  verbose:  {0}'.format(config.logger.isDbgEnabled))
@@ -1360,10 +1414,11 @@ def AccuRev2GitMain(argv):
     # Set-up and parse the command line arguments. Examples from https://docs.python.org/dev/library/argparse.html
     parser = argparse.ArgumentParser(description="Conversion tool for migrating AccuRev repositories into Git. Configuration of the script is done with a configuration file whose filename is `{0}` by default. The filename can be overridden by providing the `-c` option described below. Command line arguments, if given, override the equivalent options in the configuration file.".format(configFilename))
     parser.add_argument('-c', '--config', dest='configFilename', default=configFilename, metavar='<config-filename>', help="The XML configuration file for this script. This file is required for the script to operate. By default this filename is set to be `{0}`.".format(configFilename))
-    parser.add_argument('-u', '--accurev-username',  dest='accurevUsername', metavar='<accurev-username>', help="The username which will be used to retrieve and populate the history from AccuRev.")
-    parser.add_argument('-p', '--accurev-password',  dest='accurevPassword', metavar='<accurev-password>', help="The password for the provided accurev username.")
-    parser.add_argument('-t', '--accurev-depot', dest='accurevDepot',        metavar='<accurev-depot>',    help="The AccuRev depot in which the streams that are being converted are located. This script currently assumes only one depot is being converted at a time.")
-    parser.add_argument('-g', '--git-repo-path', dest='gitRepoPath',         metavar='<git-repo-path>',    help="The system path to an existing folder where the git repository will be created.")
+    parser.add_argument('-u', '--accurev-username',  dest='accurevUsername', metavar='<accurev-username>',  help="The username which will be used to retrieve and populate the history from AccuRev.")
+    parser.add_argument('-p', '--accurev-password',  dest='accurevPassword', metavar='<accurev-password>',  help="The password for the provided accurev username.")
+    parser.add_argument('-t', '--accurev-depot', dest='accurevDepot',        metavar='<accurev-depot>',     help="The AccuRev depot in which the streams that are being converted are located. This script currently assumes only one depot is being converted at a time.")
+    parser.add_argument('-g', '--git-repo-path', dest='gitRepoPath',         metavar='<git-repo-path>',     help="The system path to an existing folder where the git repository will be created.")
+    parser.add_argument('-M', '--method',     dest='conversionMethod',       metavar='<conversion-method>', help="Specifies the method which is used to perform the conversion. Can be either 'pop', 'diff' or 'deep-hist'. 'pop' specifies that every transaction is populated in full. 'diff' specifies that only the differences are populated but transactions are iterated one at a time. 'deep-hist' specifies that only the differences are populated and that only transactions that could have affected this stream are iterated.")
     parser.add_argument('-r', '--restart',    dest='restart', action='store_const', const=True, help="Discard any existing conversion and start over.")
     parser.add_argument('-v', '--verbose',    dest='debug',   action='store_const', const=True, help="Print the script debug information. Makes the script more verbose.")
     parser.add_argument('-L', '--log-file',   dest='logFile', metavar='<log-filename>',         help="Sets the filename to which all console output will be logged (console output is still printed).")
