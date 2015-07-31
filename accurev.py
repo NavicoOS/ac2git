@@ -2019,11 +2019,28 @@ class ext(object):
             ts.limit = None
         elif ts.end is None:
             ts.end = ts.start
-        #   3. Finally, we must ensure that the transactions are traversed in ascending order.
+        #   3. We must ensure that the transactions are traversed in ascending order.
         isAsc = ts.is_asc()
         if not isAsc:
             # Make descending
             ts = ts.reversed()
+        #   4. We need to ensure that we don't query things before the stream existed.
+        mkstream = hist(stream=stream, transactionKind="mkstream", timeSpec="now")
+        if len(mkstream.transactions) == 0:
+            # the assumption is that the depot name matches the root stream name (for which there is no mkstream transaction)
+            firstTr = hist(depot=depot, timeSpec="1")
+            if firstTr is None or len(firstTr.transactions) == 0:
+                raise Exception("Error: assumption that the root stream has the same name as the depot doesn't hold. Aborting...")
+            mkstreamTr = firstTr.transactions[0]
+        else:
+            mkstreamTr = mkstream.transactions[0]
+            if len(mkstream.transactions) != 1:
+                raise Exception("There seem to be multiple mkstream transactions for the stream {0}".format(stream))
+        if ts.start < mkstreamTr.id:
+            if ts.end < mkstreamTr.id:
+                return [] # Nothing to be done here. The stream doesn't exist in the range.
+            else:
+                ts.start = mkstreamTr.id
 
         # Perform deep-hist algorithm
         # ===========================
