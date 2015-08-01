@@ -636,10 +636,14 @@ class AccuRev2Git(object):
                     diff = self.TryDiff(streamName=streamName, firstTrNumber=startTrNumber, secondTrNumber=tr.id)
                     if diff is None:
                         return (None, None)
-                    self.config.logger.dbg("FindNextChangeTransaction deep-hist: {0}".format(tr.id))
-                    return (tr.id, diff)
+                    elif len(diff.elements) > 0:
+                        self.config.logger.dbg("FindNextChangeTransaction deep-hist: {0}".format(tr.id))
+                        return (tr.id, diff)
+                    else:
+                        self.config.logger.dbg("FindNextChangeTransaction deep-hist skipping: {0}, diff was empty...".format(tr.id))
+
             diff = self.TryDiff(streamName=streamName, firstTrNumber=startTrNumber, secondTrNumber=endTrNumber)
-            return (endTrNumber, diff)
+            return (endTrNumber + 1, diff) # The end transaction number is inclusive. We need to return the one after it.
         elif self.config.method == "pop":
             self.config.logger.dbg("FindNextChangeTransaction pop: {0}".format(startTrNumber + 1))
             return (startTrNumber + 1, None)
@@ -761,7 +765,7 @@ class AccuRev2Git(object):
                 self.config.logger.dbg( "FindNextChangeTransaction(streamName='{0}', startTrNumber={1}, endTrNumber={2}, deepHist={3}) failed!".format(streamName, tr.id, endTr.id, deepHist) )
                 return (None, None)
 
-            self.config.logger.dbg( "{0}: next transaction {1}".format(streamName, nextTr) )
+            self.config.logger.dbg( "{0}: next transaction {1} (end tr. {2})".format(streamName, nextTr, endTr.id) )
             if nextTr <= endTr.id:
                 # Right now nextTr is an integer representation of our next transaction.
                 # Delete all of the files which are even mentioned in the diff so that we can do a quick populate (wouth the overwrite option)
