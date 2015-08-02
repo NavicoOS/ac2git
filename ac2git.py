@@ -405,7 +405,7 @@ class AccuRev2Git(object):
 
     # Adds a JSON string respresentation of `stateDict` to the given commit using `git notes add`.
     def AddScriptStateNote(self, depotName, stream, transaction, commitHash, ref, committer=None, committerDate=None, committerTimezone=None):
-        stateDict = { "depot": depotName, "stream": stream.name, "stream_number": stream.streamNumber, "transaction_number": transaction.id }
+        stateDict = { "depot": depotName, "stream": stream.name, "stream_number": stream.streamNumber, "transaction_number": transaction.id, "transaction_kind": transaction.Type }
         notesFilePath = os.path.join(self.cwd, 'notes_message')
         with codecs.open(notesFilePath, 'w', "utf-8") as notesFile:
             notesFile.write(json.dumps(stateDict).decode("utf-8"))
@@ -727,7 +727,8 @@ class AccuRev2Git(object):
                 if branch is None:
                     self.CreateCleanGitBranch(branchName=branchName)
                 try:
-                    destStream = tr.versions[0].virtualNamedVersion.stream
+                    #destStream = self.GetDestinationStreamName(history=hist, depot=depot) # Slower: This performes an extra accurev.show.streams() command for correct stream names.
+                    destStream = self.GetDestinationStreamName(history=hist, depot=None) # Quicker: This does not perform an extra accurev.show.streams() command for correct stream names.
                 except:
                     destStream = None
                 self.config.logger.dbg( "{0} pop (init): {1} {2}{3}".format(stream.name, tr.Type, tr.id, " to {0}".format(destStream) if destStream is not None else "") )
@@ -817,7 +818,8 @@ class AccuRev2Git(object):
                 stream = accurev.show.streams(depot=depot, stream=stream.streamNumber, timeSpec=tr.id).streams[0]
 
                 # Populate
-                destStream = self.GetDestinationStreamName(history=hist)
+                #destStream = self.GetDestinationStreamName(history=hist, depot=depot) # Slower: This performes an extra accurev.show.streams() command for correct stream names.
+                destStream = self.GetDestinationStreamName(history=hist, depot=None) # Quicker: This does not perform an extra accurev.show.streams() command for correct stream names.
                 self.config.logger.dbg( "{0} pop: {1} {2}{3}".format(stream.name, tr.Type, tr.id, " to {0}".format(destStream) if destStream is not None else "") )
 
                 popResult = self.TryPop(streamName=stream.name, transaction=tr, overwrite=popOverwrite)
@@ -885,22 +887,36 @@ class AccuRev2Git(object):
             
         return False
 
-    def GetDestinationStreamName(self, history=None, transaction=None):
-        destStream = None
+    # Returns a string representing the name of the stream on which a transaction was performed.
+    # If the history (an accurev.obj.History object) is given then it is attempted to retrieve it from the stream list first and
+    # should this fail then the history object's transaction's virtual version specs are used.
+    # If the transaction (an accurev.obj.Transaction object) is given it is attempted to retrieve the name of the stream from the
+    # virtual version spec.
+    # The `depot` argument is used both for the accurev.show.streams() command and to control its use. If it is None then the
+    # command isn't used at all which could mean a quicker conversion. When specified it indicates that the name of the stream
+    # from the time of the transaction should be retrieved. Otherwise the current name of the stream is returned (assumint it was
+    # renamed at some point).
+    def GetDestinationStreamName(self, history=None, transaction=None, depot=None):
+        # depot given as None indicates that accurev.show.streams() command is not to be run.
         if history is not None:
-            if len(history.streams) == 1:
+            if depot is None and len(history.streams) == 1:
                 return history.streams[0].name
-            else:
+            elif len(history.transactions) > 0:
+                rv = self.GetDestinationStreamName(history=None, transaction=history.transactions[0], depot=depot)
+                if rv is not None:
+                    return rv
+
+        if transaction is not None:
+            streamName, streamNumber = transaction.affectedStream()
+            if streamNumber is not None and depot is not None:
                 try:
-                    history.transactions[0].versions[0].virtualNamedVersion.stream
+                    stream = accurev.show.streams(depot=depot, stream=streamNumber, timeSpec=transaction.id).streams[0] # could be expensive
+                    if stream is not None and stream.name is not None:
+                        return stream.name
                 except:
                     pass
-        elif transaction is not None:
-            try:
-                transaction.versions[0].virtualNamedVersion.stream
-            except:
-                pass
-        return destStream
+            return streamName
+        return None
 
     def GetStreamNameFromBranch(self, branchName):
         if branchName is not None:
