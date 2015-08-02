@@ -404,8 +404,8 @@ class AccuRev2Git(object):
         return gitDatetimeStr
 
     # Adds a JSON string respresentation of `stateDict` to the given commit using `git notes add`.
-    def AddScriptStateNote(self, depotName, streamName, trNum, commitHash, ref, committer=None, committerDate=None, committerTimezone=None):
-        stateDict = { "depot": depotName, "stream": streamName, "transaction_number": trNum }
+    def AddScriptStateNote(self, depotName, stream, transaction, commitHash, ref, committer=None, committerDate=None, committerTimezone=None):
+        stateDict = { "depot": depotName, "stream": stream.name, "stream_number": stream.streamNumber, "transaction_number": transaction.id }
         notesFilePath = os.path.join(self.cwd, 'notes_message')
         with codecs.open(notesFilePath, 'w', "utf-8") as notesFile:
             notesFile.write(json.dumps(stateDict).decode("utf-8"))
@@ -416,7 +416,7 @@ class AccuRev2Git(object):
             os.remove(notesFilePath)
             self.config.logger.dbg( "Added script state note for {0}.".format(commitHash) )
         else:
-            self.config.logger.error( "Failed to add script state note for {0}, tr. {1}".format(commitHash, trNum) )
+            self.config.logger.error( "Failed to add script state note for {0}, tr. {1}".format(commitHash, transaction.id) )
             self.config.logger.error(self.gitRepo.lastStderr)
 
         return rv
@@ -583,7 +583,7 @@ class AccuRev2Git(object):
                         if ref is None:
                             ref = AccuRev2Git.gitNotesRef_AccurevHistXml
                             self.config.logger.error("Commit to an unspecified branch. Using default `git notes` ref for the script [{0}] at current time.".format(ref))
-                        stateNoteWritten = ( self.AddScriptStateNote(depotName=depot, streamName=stream, trNum=transaction.id, commitHash=commitHash, ref=ref, committer=committer, committerDate=committerDate, committerTimezone=committerTimezone) is not None )
+                        stateNoteWritten = ( self.AddScriptStateNote(depotName=depot, stream=stream, transaction=transaction, commitHash=commitHash, ref=ref, committer=committer, committerDate=committerDate, committerTimezone=committerTimezone) is not None )
                         if stateNoteWritten:
                             break
                     if not stateNoteWritten:
@@ -701,8 +701,8 @@ class AccuRev2Git(object):
         
         return popResult
 
-    def ProcessStream(self, depot, streamName, branchName, startTransaction, endTransaction):
-        self.config.logger.info( "Processing {0} -> {1} : {2} - {3}".format(streamName, branchName, startTransaction, endTransaction) )
+    def ProcessStream(self, depot, stream, branchName, startTransaction, endTransaction):
+        self.config.logger.info( "Processing {0} -> {1} : {2} - {3}".format(stream.name, branchName, startTransaction, endTransaction) )
 
         # Find the matching git branch
         branch = None
@@ -722,7 +722,7 @@ class AccuRev2Git(object):
         commitHash = None
         if status is None or status.initial_commit:
             # We are tracking a new stream:
-            tr = self.GetFirstTransaction(depot=depot, streamName=streamName, startTransaction=startTransaction, endTransaction=endTransaction)
+            tr = self.GetFirstTransaction(depot=depot, streamName=stream.name, startTransaction=startTransaction, endTransaction=endTransaction)
             if tr is not None:
                 if branch is None:
                     self.CreateCleanGitBranch(branchName=branchName)
@@ -730,18 +730,19 @@ class AccuRev2Git(object):
                     destStream = tr.versions[0].virtualNamedVersion.stream
                 except:
                     destStream = None
-                self.config.logger.dbg( "{0} pop (init): {1} {2}{3}".format(streamName, tr.Type, tr.id, " to {0}".format(destStream) if destStream is not None else "") )
-                popResult = self.TryPop(streamName=streamName, transaction=tr, overwrite=True)
+                self.config.logger.dbg( "{0} pop (init): {1} {2}{3}".format(stream.name, tr.Type, tr.id, " to {0}".format(destStream) if destStream is not None else "") )
+                popResult = self.TryPop(streamName=stream.name, transaction=tr, overwrite=True)
                 if not popResult:
                     return (None, None)
                 
-                commitHash = self.Commit(depot=depot, stream=streamName, transaction=tr, branchName=branchName, isFirstCommit=True)
+                stream = accurev.show.streams(depot=depot, stream=stream.streamNumber, timeSpec=tr.id).streams[0]
+                commitHash = self.Commit(depot=depot, stream=stream, transaction=tr, branchName=branchName, isFirstCommit=True)
                 if not commitHash:
-                    self.config.logger.dbg( "{0} first commit has failed. Is it an empty commit? Continuing...".format(streamName) )
+                    self.config.logger.dbg( "{0} first commit has failed. Is it an empty commit? Continuing...".format(stream.name) )
                 else:
-                    self.config.logger.info( "stream {0}: tr. #{1} {2} into {3} -> commit {4} on {5}".format(streamName, tr.id, tr.Type, destStream if destStream is not None else 'unknown', commitHash[:8], branchName) )
+                    self.config.logger.info( "stream {0}: tr. #{1} {2} into {3} -> commit {4} on {5}".format(stream.name, tr.id, tr.Type, destStream if destStream is not None else 'unknown', commitHash[:8], branchName) )
             else:
-                self.config.logger.info( "Failed to get the first transaction for {0} from accurev. Won't process any further.".format(streamName) )
+                self.config.logger.info( "Failed to get the first transaction for {0} from accurev. Won't process any further.".format(stream.name) )
                 return (None, None)
         else:
             # Get the last processed transaction
@@ -754,28 +755,29 @@ class AccuRev2Git(object):
                 return (None, None)
 
             tr = hist.transactions[0]
-            self.config.logger.dbg("{0}: last processed transaction was #{1}".format(streamName, tr.id))
+            stream = accurev.show.streams(depot=depot, stream=stream.streamNumber, timeSpec=tr.id).streams[0]
+            self.config.logger.dbg("{0}: last processed transaction was #{1}".format(stream.name, tr.id))
 
         endTrHist = self.TryHist(depot=depot, trNum=endTransaction)
         if endTrHist is None:
             self.config.logger.dbg("accurev hist -p {0} -t {1}.1 failed.".format(depot, endTransaction))
             return (None, None)
         endTr = endTrHist.transactions[0]
-        self.config.logger.info("{0}: processing transaction range #{1} - #{2}".format(streamName, tr.id, endTr.id))
+        self.config.logger.info("{0}: processing transaction range #{1} - #{2}".format(stream.name, tr.id, endTr.id))
         
         deepHist = None
         if self.config.method == "deep-hist":
-            self.config.logger.dbg("accurev.ext.deep_hist(depot={0}, stream={1}, timeSpec='{2}-{3}'".format(depot, streamName, startTransaction, endTransaction))
-            deepHist = accurev.ext.deep_hist(depot=depot, stream=streamName, timeSpec="{0}-{1}".format(startTransaction, endTransaction))
+            self.config.logger.dbg("accurev.ext.deep_hist(depot={0}, stream={1}, timeSpec='{2}-{3}'".format(depot, stream.name, startTransaction, endTransaction))
+            deepHist = accurev.ext.deep_hist(depot=depot, stream=stream.name, timeSpec="{0}-{1}".format(startTransaction, endTransaction))
             if deepHist is None:
                 raise Exception("accurev.ext.deep_hist() failed to return a result!")
         while True:
-            nextTr, diff = self.FindNextChangeTransaction(streamName=streamName, startTrNumber=tr.id, endTrNumber=endTr.id, deepHist=deepHist)
+            nextTr, diff = self.FindNextChangeTransaction(streamName=stream.name, startTrNumber=tr.id, endTrNumber=endTr.id, deepHist=deepHist)
             if nextTr is None or diff is None:
-                self.config.logger.dbg( "FindNextChangeTransaction(streamName='{0}', startTrNumber={1}, endTrNumber={2}, deepHist={3}) failed!".format(streamName, tr.id, endTr.id, deepHist) )
+                self.config.logger.dbg( "FindNextChangeTransaction(streamName='{0}', startTrNumber={1}, endTrNumber={2}, deepHist={3}) failed!".format(stream.name, tr.id, endTr.id, deepHist) )
                 return (None, None)
 
-            self.config.logger.dbg( "{0}: next transaction {1} (end tr. {2})".format(streamName, nextTr, endTr.id) )
+            self.config.logger.dbg( "{0}: next transaction {1} (end tr. {2})".format(stream.name, nextTr, endTr.id) )
             if nextTr <= endTr.id:
                 # Right now nextTr is an integer representation of our next transaction.
                 # Delete all of the files which are even mentioned in the diff so that we can do a quick populate (wouth the overwrite option)
@@ -812,17 +814,18 @@ class AccuRev2Git(object):
                     self.config.logger.dbg("accurev hist -p {0} -t {1}.1 failed.".format(depot, endTransaction))
                     return (None, None)
                 tr = hist.transactions[0]
+                stream = accurev.show.streams(depot=depot, stream=stream.streamNumber, timeSpec=tr.id).streams[0]
 
                 # Populate
                 destStream = self.GetDestinationStreamName(history=hist)
-                self.config.logger.dbg( "{0} pop: {1} {2}{3}".format(streamName, tr.Type, tr.id, " to {0}".format(destStream) if destStream is not None else "") )
+                self.config.logger.dbg( "{0} pop: {1} {2}{3}".format(stream.name, tr.Type, tr.id, " to {0}".format(destStream) if destStream is not None else "") )
 
-                popResult = self.TryPop(streamName=streamName, transaction=tr, overwrite=popOverwrite)
+                popResult = self.TryPop(streamName=stream.name, transaction=tr, overwrite=popOverwrite)
                 if not popResult:
                     return (None, None)
 
                 # Commit
-                commitHash = self.Commit(depot=depot, stream=streamName, transaction=tr, branchName=branchName, isFirstCommit=False)
+                commitHash = self.Commit(depot=depot, stream=stream, transaction=tr, branchName=branchName, isFirstCommit=False)
                 if commitHash is None:
                     if"nothing to commit" in self.gitRepo.lastStdout:
                         self.config.logger.error( "diff info ({0} elements):".format(len(diff.elements)) )
@@ -841,9 +844,9 @@ class AccuRev2Git(object):
                     else:
                         break # Early return from processing this stream. Restarting should clean everything up.
                 else:
-                    self.config.logger.info( "stream {0}: tr. #{1} {2} into {3} -> commit {4} on {5}".format(streamName, tr.id, tr.Type, destStream if destStream is not None else 'unknown', commitHash[:8], branchName) )
+                    self.config.logger.info( "stream {0}: tr. #{1} {2} into {3} -> commit {4} on {5}".format(stream.name, tr.id, tr.Type, destStream if destStream is not None else 'unknown', commitHash[:8], branchName) )
             else:
-                self.config.logger.info( "Reached end transaction #{0} for {1} -> {2}".format(endTr.id, streamName, branchName) )
+                self.config.logger.info( "Reached end transaction #{0} for {1} -> {2}".format(endTr.id, stream.name, branchName) )
                 break
 
         return (tr, commitHash)
@@ -852,7 +855,10 @@ class AccuRev2Git(object):
         for stream in self.config.accurev.streamMap:
             branch = self.config.accurev.streamMap[stream]
             depot  = self.config.accurev.depot
-            tr, commitHash = self.ProcessStream(depot=depot, streamName=stream, branchName=branch, startTransaction=self.config.accurev.startTransaction, endTransaction=self.config.accurev.endTransaction)
+            streamInfo = accurev.show.streams(depot=depot, stream=stream).streams[0]
+            if depot is None or len(depot) == 0:
+                depot = streamInfo.depotName
+            tr, commitHash = self.ProcessStream(depot=depot, stream=streamInfo, branchName=branch, startTransaction=self.config.accurev.startTransaction, endTransaction=self.config.accurev.endTransaction)
             if tr is None or commitHash is None:
                 self.config.logger.error( "Error while processing stream {0}, branch {1}".format(stream, branch) )
 
