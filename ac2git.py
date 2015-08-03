@@ -635,7 +635,7 @@ class AccuRev2Git(object):
                 if diff is None:
                     return (None, None)
         
-            self.config.logger.dbg("FindNextChangeTransaction diff: {0}".format(tr.id))
+            self.config.logger.dbg("FindNextChangeTransaction diff: {0}".format(nextTr))
             return (nextTr, diff)
         elif self.config.method == "deep-hist":
             if deepHist is None:
