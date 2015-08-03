@@ -2042,6 +2042,8 @@ class ext(object):
             else:
                 ts.start = mkstreamTr.id
 
+        #print('{0}:{1}'.format(stream, ts))
+
         # Perform deep-hist algorithm
         # ===========================
         # The transaction list that combines all of the transactions which affect this stream.
@@ -2062,7 +2064,7 @@ class ext(object):
                     if parentStream is not None:
                         parentTrList = ext.deep_hist(depot=depot, stream=parentStream, timeSpec=parentTs)
                         trList.extend(parentTrList)
-                    parentTs = obj.TimeSpec(start=tr.id, end=parentTs.end)
+                    parentTs = obj.TimeSpec(start=tr.id, end=ts.end)
 
             trList.append(tr)
             prevTr = tr
