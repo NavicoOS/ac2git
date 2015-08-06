@@ -863,6 +863,9 @@ class AccuRev2Git(object):
             except IndexError:
                 self.config.logger.error( "Failed to get stream information. `accurev show streams -p {0} -s {1}` returned no streams".format(depot, stream) )
                 return
+            except AttributeError:
+                self.config.logger.error( "Failed to get stream information. `accurev show streams -p {0} -s {1}` returned None".format(depot, stream) )
+                return
 
             if depot is None or len(depot) == 0:
                 depot = streamInfo.depotName
