@@ -507,8 +507,8 @@ class AccuRev2Git(object):
 
         return commitHash
 
-    def GetHistForCommit(self, commitHash, branchName=None):
-        hist = None
+    def GetStateForCommit(self, commitHash, branchName=None):
+        stateObj = None
 
         # Try and search the branch namespace.
         if branchName is None:
@@ -523,13 +523,19 @@ class AccuRev2Git(object):
         if stateJson is not None:
             stateJson = stateJson.strip().encode('utf-8')
             stateObj = json.loads(stateJson)
+        else:
+            self.config.logger.error("Failed to load the last transaction for commit {0} from {1} notes.".format(commitHash, branchName))
+            self.config.logger.error("  i.e git notes --ref={0} show {1}    - returned nothing.".format(branchName, commitHash))
+
+        return stateObj
+
+    def GetHistForCommit(self, commitHash, branchName=None):
+        stateObj = self.GetStateForCommit(commitHash=commitHash, branchName=branchName)
+        if stateObj is not None:
             trNum = stateObj["transaction_number"]
             depot = stateObj["depot"]
             if trNum is not None and depot is not None:
                 hist = accurev.hist(depot=depot, timeSpec=trNum)
-        else:
-            self.config.logger.error("Failed to load the last transaction for commit {0} from {1} notes.".format(commitHash, branchName))
-            self.config.logger.error("  i.e git notes --ref={0} show {1}    - returned nothing.".format(branchName, commitHash))
 
         return hist
 
@@ -967,6 +973,13 @@ class AccuRev2Git(object):
 
         commitRewriteMap = OrderedDict()
         if branchRevMap is not None:
+            ## Build a dictionary that will act as our "squashMap". Both the key and value are a commit hash.
+            ## The commit referenced by the key will be replaced by the commit referenced by the value in this map.
+            #squashMap = {}
+            #for tree_hash in branchRevMap:
+            #    for commit in branchRevMap[tree_hash]:
+            #        squashMap[commit] = commit # Initially each commit maps to itself.
+
             for tree_hash in branchRevMap:
                 if len(branchRevMap[tree_hash]) > 1:
                     # We should make some decisions about how to merge these commits which reference the same tree
@@ -1064,7 +1077,7 @@ class AccuRev2Git(object):
                             commitRewriteMap[second[u'hash']][first[u'hash']] = True
                             self.config.logger.info(u'  merge:     {0} as parent of {1}. tree {2}. parents {3}'.format(first[u'hash'][:8], second[u'hash'][:8], tree_hash[:8], [x[:8] for x in commitRewriteMap[second[u'hash']].iterkeys()] ))
 
-            # Write shell script
+            # Write parent filter shell script
             parentFilterPath = os.path.join(self.cwd, 'parent_filter.sh')
             with codecs.open(parentFilterPath, 'w', 'ascii') as f:
                 # http://www.tutorialspoint.com/unix/case-esac-statement.htm
@@ -1138,7 +1151,7 @@ class AccuRev2Git(object):
             accurev.replica.sync()
 
             self.ProcessStreams()
-            #self.StitchBranches()
+            self.StitchBranches()
               
             if not isLoggedIn:
                 if accurev.logout():
