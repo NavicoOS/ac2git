@@ -529,15 +529,17 @@ class AccuRev2Git(object):
 
         return stateObj
 
-    def GetHistForCommit(self, commitHash, branchName=None):
-        stateObj = self.GetStateForCommit(commitHash=commitHash, branchName=branchName)
+    def GetHistForCommit(self, commitHash, branchName=None, stateObj=None):
+        #self.config.logger.dbg("GetHistForCommit(commitHash={0}, branchName={1}, stateObj={2}".format(commitHash, branchName, stateObj))
+        if stateObj is None:
+            stateObj = self.GetStateForCommit(commitHash=commitHash, branchName=branchName)
         if stateObj is not None:
             trNum = stateObj["transaction_number"]
             depot = stateObj["depot"]
             if trNum is not None and depot is not None:
                 hist = accurev.hist(depot=depot, timeSpec=trNum)
-
-        return hist
+                return hist
+        return None
 
     def CreateCleanGitBranch(self, branchName):
         # Create the git branch.
@@ -967,18 +969,18 @@ class AccuRev2Git(object):
         return (parent, child)
 
     def StitchBranches(self):
+        self.config.logger.dbg("Getting branch revision map from git_stitch.py")
         branchRevMap = git_stitch.GetBranchRevisionMap(self.config.git.repoPath)
         
         self.config.logger.info("Stitching git branches")
-
         commitRewriteMap = OrderedDict()
         if branchRevMap is not None:
-            ## Build a dictionary that will act as our "squashMap". Both the key and value are a commit hash.
-            ## The commit referenced by the key will be replaced by the commit referenced by the value in this map.
-            #squashMap = {}
-            #for tree_hash in branchRevMap:
-            #    for commit in branchRevMap[tree_hash]:
-            #        squashMap[commit] = commit # Initially each commit maps to itself.
+            # Build a dictionary that will act as our "squashMap". Both the key and value are a commit hash.
+            # The commit referenced by the key will be replaced by the commit referenced by the value in this map.
+            aliasMap = {}
+            for tree_hash in branchRevMap:
+                for commit in branchRevMap[tree_hash]:
+                    aliasMap[commit[u'hash']] = commit[u'hash'] # Initially each commit maps to itself.
 
             for tree_hash in branchRevMap:
                 if len(branchRevMap[tree_hash]) > 1:
@@ -998,8 +1000,8 @@ class AccuRev2Git(object):
                         wereSwapped = False
                         if firstTime == secondTime:
                             # Normally both commits would have originated from the same transaction. However, if not, let's try and order them by transaciton number first.
-                            firstHist = self.GetHistForCommit(commitHash=first[u'hash'])
-                            secondHist = self.GetHistForCommit(commitHash=second[u'hash'])
+                            firstHist = self.GetHistForCommit(commitHash=first[u'hash'], branchName=first[u'branch'].name)
+                            secondHist = self.GetHistForCommit(commitHash=second[u'hash'], branchName=second[u'branch'].name)
 
                             if firstHist.transactions[0].id < secondHist.transactions[0].id:
                                 # This should really never be true given that AccuRev is centralized and synchronous and that firstTime == secondTime above...
@@ -1042,23 +1044,13 @@ class AccuRev2Git(object):
 
                                 # Find which one is the parent of the other. They must be inline since they were affected by the same transaction (since the times match)
                                 parentStream, childStream = self.GetParentChild(stream1=firstStream, stream2=secondStream, timeSpec=firstHist.transactions[0].id, onlyDirectChild=True)
-                                if parentStream is None and childStream is None:
-                                    # The two streams are unrelated and are probably substreams of a third stream. Hence we should not merge them!
+                                if parentStream is not None and childStream is not None:
+                                    self.config.logger.info(u'  squashing: {0} ({1}/{2}) is equiv. to {3} ({4}/{5}). tree {6}.'.format(first[u'hash'][:8], firstStream, firstHist.transactions[0].id, second[u'hash'][:8], secondStream, secondHist.transactions[0].id, tree_hash[:8]))
+                                    # Map the child commit (discarded) as an alias of the parent commit (kept)
+                                    aliasMap[childStream] = parentStream
+                                else:
                                     self.config.logger.info(u'  unrelated: {0} ({1}/{2}) is equiv. to {3} ({4}/{5}). tree {6}.'.format(first[u'hash'][:8], firstStream, firstHist.transactions[0].id, second[u'hash'][:8], secondStream, secondHist.transactions[0].id, tree_hash[:8]))
-                                    first, second = None, None
-                                    # This thrid stream should be listed as the destination stream for the transaction in our firstHist and secondHist so
-                                    # we can at least do a sanity check...
-                                    # TODO: do the sanity check!!!
-                                    pass
-                                elif parentStream == firstStream:
-                                    pass # They are already in the correct order.
-                                elif parentStream == secondStream:
-                                    # Swap them
-                                    wereSwapped = True
-                                    first, second = second, first
-                                    firstHist, secondHist = secondHist, firstHist
-                                    firstStream, secondStream = secondStream, firstStream
-
+                                    
                         elif firstTime < secondTime:
                             # Already in the correct order...
                             pass
@@ -1077,6 +1069,57 @@ class AccuRev2Git(object):
                             commitRewriteMap[second[u'hash']][first[u'hash']] = True
                             self.config.logger.info(u'  merge:     {0} as parent of {1}. tree {2}. parents {3}'.format(first[u'hash'][:8], second[u'hash'][:8], tree_hash[:8], [x[:8] for x in commitRewriteMap[second[u'hash']].iterkeys()] ))
 
+            # Remap the commitRewriteMap keys w.r.t. the aliases in the aliasMap
+            discardedRewriteCommits = []
+            for commitHash in commitRewriteMap:
+                # Find the non-aliased commit
+                if commitHash in aliasMap:
+                    if commitHash != aliasMap[commitHash]:
+                        # Aliased commit.
+                        discardedRewriteCommits.append(commitHash) # mark for deletion from map.
+    
+                        # Move its parents to the first non-aliased commit.
+                        h = commitHash
+                        while h in aliasMap:
+                            if h == aliasMap[h]:
+                                # When a commit maps to itself this commit has no alias.
+                                break
+                            h = aliasMap[h]
+                        # h is non-aliased
+                        for parent in commitRewriteMap[commitHash]:
+                            commitRewriteMap[h][parent] = True
+                else:
+                    Exception("Invariant falacy! aliasMap should contain every commit that we have processed.")
+
+            # Delete aliased keys
+            for commitHash in discardedRewriteCommits:
+                del commitRewriteMap[commitHash]
+            
+            
+            # Remap the commitRewriteMap values (parents) w.r.t. the aliases in the aliasMap
+            discardedParentCommits = []
+            for commitHash in discardedRewriteCommits:
+                for parent in commitRewriteMap[commitHash]:
+                    if parent in aliasMap:
+                        if parent != aliasMap[parent]:
+                            # Aliased parent commit.
+                            discardedParentCommits.append(parent)
+
+                            # Remap the parent
+                            p = parent
+                            while p in aliasMap:
+                                if p == aliasMap[p]:
+                                    break
+                                p = aliasMap[p]
+                            commitRewriteMap[commitHash][p] = True # Add the non-aliased parent
+                    else:
+                        Exception("Invariant falacy! aliasMap should contain every commit that we have processed.")
+
+                # Delete the aliased parents
+                for parent in discardedParentCommits:
+                    del commitRewriteMap[commitHash][parent]
+
+
             # Write parent filter shell script
             parentFilterPath = os.path.join(self.cwd, 'parent_filter.sh')
             with codecs.open(parentFilterPath, 'w', 'ascii') as f:
@@ -1086,18 +1129,34 @@ class AccuRev2Git(object):
                 for commitHash in commitRewriteMap:
                     parentString = ''
                     for parent in commitRewriteMap[commitHash]:
-                        parentString += '-p {0}'.format(parent)
-                    f.write('    "{0}") echo "{1}"\n'.format(commitHash, parentString))
+                        parentString += '-p $(map {0}) '.format(parent)
+                    f.write('    "{0}") echo {1}\n'.format(commitHash, parentString))
                     f.write('    ;;\n')
                 f.write('    *) cat < /dev/stdin\n') # If we don't have the commit mapping then just print out whatever we are given on stdin...
+                f.write('    ;;\n')
+                f.write('esac\n\n')
+
+            # Write the commit filter shell script
+            commitFilterPath = os.path.join(self.cwd, 'commit_filter.sh')
+            with codecs.open(commitFilterPath, 'w', 'ascii') as f:
+                # http://www.tutorialspoint.com/unix/case-esac-statement.htm
+                f.write('#!/bin/sh\n\n')
+                f.write('case "$GIT_COMMIT" in\n')
+                for commitHash in aliasMap:
+                    if commitHash != aliasMap[commitHash]:
+                        # Skip this commit
+                        f.write('    "{0}") skip_commit "$@"\n'.format(commitHash))
+                        f.write('    ;;\n')
+                f.write('    *) git commit-tree "$@";\n') # If we don't have the commit mapping then just print out whatever we are given on stdin...
                 f.write('    ;;\n')
                 f.write('esac\n\n')
 
             self.config.logger.info("Branch stitching script generated: {0}".format(parentFilterPath))
             self.config.logger.info("To apply execute the following commands:")
             self.config.logger.info("  chmod +x {0}".format(parentFilterPath))
+            self.config.logger.info("  chmod +x {0}".format(commitFilterPath))
             self.config.logger.info("  cd {0}".format(self.config.git.repoPath))
-            self.config.logger.info("  git filter-branch --parent-filter {0} --prune-empty".format(parentFilterPath))
+            self.config.logger.info("  git filter-branch --parent-filter {parent_filter} --commit-filter {commit_filter} --prune-empty".format(parent_filter=parentFilterPath, commit_filter=commitFilterPath))
             self.config.logger.info("  rm {0}".format(parentFilterPath))
             self.config.logger.info("  cd -")
 
@@ -1150,7 +1209,7 @@ class AccuRev2Git(object):
             # If this script is being run on a replica then ensure that it is up-to-date before processing the streams.
             accurev.replica.sync()
 
-            self.ProcessStreams()
+            #self.ProcessStreams()
             self.StitchBranches()
               
             if not isLoggedIn:
