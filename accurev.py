@@ -38,7 +38,10 @@ def UTCDateTimeOrNone(value):
         return None
     if type(value) is str or type(value) is int:
         value = float(value)
-    return datetime.datetime.utcfromtimestamp(value)
+        return datetime.datetime.utcfromtimestamp(value)
+    if isinstance(value, datetime.datetime):
+        return value
+    raise Exception("UTCDateTimeOrNone(value={0}) - Invalid conversion!".format(value))
 
 def GetTimestamp(datetimeValue):
     if datetimeValue is None:
@@ -1979,6 +1982,67 @@ class ext(object):
             parentObjects.append(streamDict[parentName])
 
         return parentObjects
+
+    @staticmethod
+    def normalize_timespec(depot, timeSpec):
+        if isinstance(timeSpec, obj.TimeSpec):
+            ts = timeSpec
+        elif isinstance(timeSpec, str):
+            ts = obj.TimeSpec.fromstring(timeSpec)
+        else:
+            raise Exception("Unrecognized time-spec type {0}".format(type(timeSpec)))
+
+        # Normalize the timeSpec
+        # ======================
+        #   1. Change the accurev keywords (e.g. highest, now) and dates into transaction numbers:
+        #      Note: The keywords highest/now are translated w.r.t. the depot and not the stream.
+        #            Otherwise we might miss later promotes to parent streams...
+        if not isinstance(ts.start, int):
+            ts.start = hist(depot=depot, timeSpec=ts.start).transactions[0].id
+        if not isinstance(ts.end, int):
+            ts.end = hist(depot=depot, timeSpec=ts.end).transactions[0].id
+        #   2. If there is a limit set on the number of transactions convert it into a start and end without a limit...
+        if ts.limit is not None:
+            if ts.end is None or abs(ts.end - ts.start + 1) > ts.limit:
+                if ts.end > ts.start:
+                    ts.end = ts.start - ts.limit + 1
+                else:
+                    ts.start = ts.end - ts.limit + 1
+            ts.limit = None
+        elif ts.end is None:
+            ts.end = ts.start
+
+        return ts
+
+    @staticmethod
+    def restrict_timespec_to_timelock(depot=None, timeSpec=None, timelock=None):
+        if timeSpec is not None and timelock is not None:
+            # Validate timelock
+            timelock = UTCDateTimeOrNone(timelock)
+            if timelock is None:
+                return timeSpec # Timelock won't have any affect on the timeSpec.
+            timelock = GetTimestamp(timelock)
+            if timelock == 0:
+                return timeSpec # Timelock won't have any affect on the timeSpec
+
+            
+            if depot is None and not (isinstance(timeSpec.start, datetime.datetime) and isinstance(timeSpec.end, datetime.datetime)):
+                raise Exception("Argument error! depot is required for non-time based timelocks!")
+            elif depot is None: # Here we are dealing with simple date times that must be less than a range.
+                if timelock < GetTimestamp(timeSpec.start):
+                    return None # This timeSpec is after the timelock in its entirety.
+                elif timelock < GetTimestamp(timeSpec.end):
+                    timeSpec.end = UTCDateTimeOrNone(timelock)
+            if depot is not None: # Here we must figure out what transaction range is before the timelock.
+                timeSpec = ext.normalize_timespec(depot=depot, timeSpec=timeSpec)
+                if timeSpec is not None:
+                    preLockTr = hist(depot=depot, timeSpec=UTCDateTimeOrNone(timelock)).transactions[0]
+                    if timeSpec.start > preLockTr.id + 1:
+                        return None
+                    elif timeSpec.end > preLockTr.id:
+                        timeSpec.end = preLockTr.id
+
+        return timeSpec
 
     @staticmethod
     # Retrieves a list of _all transactions_ which affect the given stream, directly or indirectly (via parent promotes).
