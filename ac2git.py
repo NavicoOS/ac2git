@@ -1010,8 +1010,11 @@ class AccuRev2Git(object):
                         wereSwapped = False
                         if firstTime == secondTime:
                             # Normally both commits would have originated from the same transaction. However, if not, let's try and order them by transaciton number first.
-                            firstHist = self.GetHistForCommit(commitHash=first[u'hash'], branchName=first[u'branch'].name)
-                            secondHist = self.GetHistForCommit(commitHash=second[u'hash'], branchName=second[u'branch'].name)
+                            firstState = self.GetStateForCommit(commitHash=first[u'hash'], branchName=first[u'branch'].name)
+                            secondState = self.GetStateForCommit(commitHash=second[u'hash'], branchName=second[u'branch'].name)
+
+                            firstHist = self.GetHistForCommit(commitHash=first[u'hash'], branchName=first[u'branch'].name, stateObj=firstState)
+                            secondHist = self.GetHistForCommit(commitHash=second[u'hash'], branchName=second[u'branch'].name, stateObj=secondState)
 
                             if firstHist.transactions[0].id < secondHist.transactions[0].id:
                                 # This should really never be true given that AccuRev is centralized and synchronous and that firstTime == secondTime above...
@@ -1027,30 +1030,40 @@ class AccuRev2Git(object):
                                 # Must mean that they are substreams of eachother or sibling substreams of a third stream. Let's see which it is.
 
                                 # Get the information for the first stream
-                                firstStream = None
-                                firstBranches = self.gitRepo.branch_list(containsCommit=first[u'hash']) # This should only ever return one branch since we are processing things in order...
-                                if firstBranches is not None and len(firstBranches) == 1:
-                                    firstBranch = firstBranches[0]
-                                    firstStream = self.GetStreamNameFromBranch(branchName=firstBranch.name)
-                                else:
-                                    # ERROR: We cannot determine what branch this commit came from and we don't include any information about which stream we were processing against the commit.
-                                    #        This means that we are processing items below a merge point and we shouldn't do that...
-                                    # SKIP!
-                                    self.config.logger.error("Branch stitching error: incorrect state. Commit {0} can be reached from multiple branches.".format(first[u'hash'][:8]))
-                                    continue
+                                firstStream = firstState.get('stream')
+                                if firstStream is None:
+                                    self.config.logger.error("Could not get stream name from state {0}. Trying to reverse map from the containing branch name.".format(firstState))
+                                    firstBranches = self.gitRepo.branch_list(containsCommit=first[u'hash']) # This should only ever return one branch since we are processing things in order...
+                                    if firstBranches is not None and len(firstBranches) == 1:
+                                        firstBranch = firstBranches[0]
+                                        firstStream = self.GetStreamNameFromBranch(branchName=firstBranch.name)
+                                        if firstStream is None:
+                                            self.config.logger.error("Branch stitching error: incorrect state. Could not get stream name for branch {0}.".format(firstBranch))
+                                            continue
+                                    else:
+                                        # ERROR: We cannot determine what branch this commit came from and we don't include any information about which stream we were processing against the commit.
+                                        #        This means that we are processing items below a merge point and we shouldn't do that...
+                                        # SKIP!
+                                        self.config.logger.error("Branch stitching error: incorrect state. Commit {0} can be reached from multiple branches.".format(first[u'hash'][:8]))
+                                        continue
 
                                 # Get the information for the second stream
-                                secondStream = None
-                                secondBranches = self.gitRepo.branch_list(containsCommit=second[u'hash'])
-                                if secondBranches is not None and len(secondBranches) == 1:
-                                    secondBranch = secondBranches[0]
-                                    secondStream = self.GetStreamNameFromBranch(branchName=secondBranch.name)
-                                else:
-                                    # ERROR: We cannot determine what branch this commit came from and we don't include any information about which stream we were processing against the commit.
-                                    #        This means that we are processing items below a merge point and we shouldn't do that...
-                                    # SKIP!
-                                    self.config.logger.error("Branch stitching error: incorrect state. Commit {0} can be reached from multiple branches.".format(second[u'hash'][:8]))
-                                    continue
+                                secondStream = secondState.get('stream')
+                                if secondStream is None:
+                                    self.config.logger.error("Could not get stream name from state {0}. Trying to reverse map from the containing branch name.".format(firstState))
+                                    secondBranches = self.gitRepo.branch_list(containsCommit=second[u'hash'])
+                                    if secondBranches is not None and len(secondBranches) == 1:
+                                        secondBranch = secondBranches[0]
+                                        secondStream = self.GetStreamNameFromBranch(branchName=secondBranch.name)
+                                        if secondStream is None:
+                                            self.config.logger.error("Branch stitching error: incorrect state. Could not get stream name for branch {0}.".format(secondBranch))
+                                            continue
+                                    else:
+                                        # ERROR: We cannot determine what branch this commit came from and we don't include any information about which stream we were processing against the commit.
+                                        #        This means that we are processing items below a merge point and we shouldn't do that...
+                                        # SKIP!
+                                        self.config.logger.error("Branch stitching error: incorrect state. Commit {0} can be reached from multiple branches.".format(second[u'hash'][:8]))
+                                        continue
 
                                 # Find which one is the parent of the other. They must be inline since they were affected by the same transaction (since the times match)
                                 parentStream, childStream = self.GetParentChild(stream1=firstStream, stream2=secondStream, timeSpec=firstHist.transactions[0].id, onlyDirectChild=True)
