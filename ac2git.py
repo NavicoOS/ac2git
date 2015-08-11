@@ -1117,8 +1117,11 @@ class AccuRev2Git(object):
                                 break
                             h = aliasMap[h]
                         # h is non-aliased
-                        for parent in commitRewriteMap[commitHash]:
-                            commitRewriteMap[h][parent] = True
+                        if h not in commitRewriteMap:
+                            commitRewriteMap[h] = commitRewriteMap[commitHash]
+                        else:
+                            for parent in commitRewriteMap[commitHash]:
+                                commitRewriteMap[h][parent] = True
                 else:
                     Exception("Invariant falacy! aliasMap should contain every commit that we have processed.")
 
@@ -1129,8 +1132,8 @@ class AccuRev2Git(object):
             
             self.config.logger.info("Remapping aliased parent commits.")
             # Remap the commitRewriteMap values (parents) w.r.t. the aliases in the aliasMap
-            discardedParentCommits = []
-            for commitHash in discardedRewriteCommits:
+            for commitHash in commitRewriteMap:
+                discardedParentCommits = []
                 for parent in commitRewriteMap[commitHash]:
                     if parent in aliasMap:
                         if parent != aliasMap[parent]:
@@ -1162,10 +1165,10 @@ class AccuRev2Git(object):
                 for commitHash in commitRewriteMap:
                     parentString = ''
                     for parent in commitRewriteMap[commitHash]:
-                        parentString += '-p $(map {0}) '.format(parent)
-                    f.write('    "{0}") echo {1}\n'.format(commitHash, parentString))
+                        parentString += '-p $(map "{0}") '.format(parent)
+                    f.write('    "{0}") echo \'{1}\'\n'.format(commitHash, parentString))
                     f.write('    ;;\n')
-                f.write('    *) cat < /dev/stdin\n') # If we don't have the commit mapping then just print out whatever we are given on stdin...
+                f.write('    *) echo "cat < /dev/stdin"\n') # If we don't have the commit mapping then just print out whatever we are given on stdin...
                 f.write('    ;;\n')
                 f.write('esac\n\n')
 
@@ -1179,9 +1182,9 @@ class AccuRev2Git(object):
                 for commitHash in aliasMap:
                     if commitHash != aliasMap[commitHash]:
                         # Skip this commit
-                        f.write('    "{0}") skip_commit "$@"\n'.format(commitHash))
+                        f.write('    "{0}") echo skip_commit \\$@\n'.format(commitHash))
                         f.write('    ;;\n')
-                f.write('    *) git commit-tree "$@";\n') # If we don't want to skip this commit then just commit it...
+                f.write('    *) echo git_commit_non_empty_tree \\$@;\n') # If we don't want to skip this commit then just commit it...
                 f.write('    ;;\n')
                 f.write('esac\n\n')
 
@@ -1190,11 +1193,11 @@ class AccuRev2Git(object):
             with codecs.open(stitchScriptPath, 'w', 'ascii') as f:
                 # http://www.tutorialspoint.com/unix/case-esac-statement.htm
                 f.write('#!/bin/sh\n\n')
-                f.write('chmod +x {0}'.format(parentFilterPath))
-                f.write('chmod +x {0}'.format(commitFilterPath))
-                f.write('cd {0}'.format(self.config.git.repoPath))
-                f.write('git filter-branch --parent-filter {parent_filter} --commit-filter {commit_filter} --prune-empty'.format(parent_filter=parentFilterPath, commit_filter=commitFilterPath))
-                f.write('cd -')
+                f.write('chmod +x {0}\n'.format(parentFilterPath))
+                f.write('chmod +x {0}\n'.format(commitFilterPath))
+                f.write('cd {0}\n'.format(self.config.git.repoPath))
+                f.write('git filter-branch --parent-filter="{parent_filter} $@ | eval" --commit-filter="{commit_filter} $@ | eval"\n'.format(parent_filter=parentFilterPath, commit_filter=commitFilterPath))
+                f.write('cd -\n')
 
             self.config.logger.info("Branch stitching script generated: {0}".format(stitchScriptPath))
             self.config.logger.info("To apply execute the following command:")
