@@ -134,16 +134,26 @@ class Config(object):
         def fromxmlelement(cls, xmlElement):
             if xmlElement is not None and xmlElement.tag == 'git':
                 repoPath = xmlElement.attrib.get('repo-path')
+                finalize = xmlElement.attrib.get('finalize')
+                if finalize is not None:
+                    if finalize.lower() == "true":
+                        finalize = True
+                    elif finalize.lower() == "false":
+                        finalize = False
+                    else:
+                        Exception("Error, could not parse finalize attribute '{0}'. Valid values are 'true' and 'false'.".format(finalize))
                 
-                return cls(repoPath)
+                return cls(repoPath=repoPath, finalize=finalize)
             else:
                 return None
             
-        def __init__(self, repoPath):
+        def __init__(self, repoPath, finalize=None):
             self.repoPath = repoPath
+            self.finalize = finalize
 
         def __repr__(self):
             str = "Config.Git(repoPath=" + repr(self.repoPath)
+            str += ", finalize="         + repr(self.finalize)
             str += ")"
             
             return str
@@ -507,8 +517,8 @@ class AccuRev2Git(object):
 
         return commitHash
 
-    def GetHistForCommit(self, commitHash, branchName=None):
-        hist = None
+    def GetStateForCommit(self, commitHash, branchName=None):
+        stateObj = None
 
         # Try and search the branch namespace.
         if branchName is None:
@@ -523,15 +533,23 @@ class AccuRev2Git(object):
         if stateJson is not None:
             stateJson = stateJson.strip().encode('utf-8')
             stateObj = json.loads(stateJson)
-            trNum = stateObj["transaction_number"]
-            depot = stateObj["depot"]
-            if trNum is not None and depot is not None:
-                hist = accurev.hist(depot=depot, timeSpec=trNum)
         else:
             self.config.logger.error("Failed to load the last transaction for commit {0} from {1} notes.".format(commitHash, branchName))
             self.config.logger.error("  i.e git notes --ref={0} show {1}    - returned nothing.".format(branchName, commitHash))
 
-        return hist
+        return stateObj
+
+    def GetHistForCommit(self, commitHash, branchName=None, stateObj=None):
+        #self.config.logger.dbg("GetHistForCommit(commitHash={0}, branchName={1}, stateObj={2}".format(commitHash, branchName, stateObj))
+        if stateObj is None:
+            stateObj = self.GetStateForCommit(commitHash=commitHash, branchName=branchName)
+        if stateObj is not None:
+            trNum = stateObj["transaction_number"]
+            depot = stateObj["depot"]
+            if trNum is not None and depot is not None:
+                hist = accurev.hist(depot=depot, timeSpec=trNum)
+                return hist
+        return None
 
     def CreateCleanGitBranch(self, branchName):
         # Create the git branch.
@@ -961,12 +979,19 @@ class AccuRev2Git(object):
         return (parent, child)
 
     def StitchBranches(self):
+        self.config.logger.dbg("Getting branch revision map from git_stitch.py")
         branchRevMap = git_stitch.GetBranchRevisionMap(self.config.git.repoPath)
         
         self.config.logger.info("Stitching git branches")
-
         commitRewriteMap = OrderedDict()
         if branchRevMap is not None:
+            # Build a dictionary that will act as our "squashMap". Both the key and value are a commit hash.
+            # The commit referenced by the key will be replaced by the commit referenced by the value in this map.
+            aliasMap = {}
+            for tree_hash in branchRevMap:
+                for commit in branchRevMap[tree_hash]:
+                    aliasMap[commit[u'hash']] = commit[u'hash'] # Initially each commit maps to itself.
+
             for tree_hash in branchRevMap:
                 if len(branchRevMap[tree_hash]) > 1:
                     # We should make some decisions about how to merge these commits which reference the same tree
@@ -985,8 +1010,11 @@ class AccuRev2Git(object):
                         wereSwapped = False
                         if firstTime == secondTime:
                             # Normally both commits would have originated from the same transaction. However, if not, let's try and order them by transaciton number first.
-                            firstHist = self.GetHistForCommit(commitHash=first[u'hash'])
-                            secondHist = self.GetHistForCommit(commitHash=second[u'hash'])
+                            firstState = self.GetStateForCommit(commitHash=first[u'hash'], branchName=first[u'branch'].name)
+                            secondState = self.GetStateForCommit(commitHash=second[u'hash'], branchName=second[u'branch'].name)
+
+                            firstHist = self.GetHistForCommit(commitHash=first[u'hash'], branchName=first[u'branch'].name, stateObj=firstState)
+                            secondHist = self.GetHistForCommit(commitHash=second[u'hash'], branchName=second[u'branch'].name, stateObj=secondState)
 
                             if firstHist.transactions[0].id < secondHist.transactions[0].id:
                                 # This should really never be true given that AccuRev is centralized and synchronous and that firstTime == secondTime above...
@@ -1002,50 +1030,57 @@ class AccuRev2Git(object):
                                 # Must mean that they are substreams of eachother or sibling substreams of a third stream. Let's see which it is.
 
                                 # Get the information for the first stream
-                                firstStream = None
-                                firstBranches = self.gitRepo.branch_list(containsCommit=first[u'hash']) # This should only ever return one branch since we are processing things in order...
-                                if firstBranches is not None and len(firstBranches) == 1:
-                                    firstBranch = firstBranches[0]
-                                    firstStream = self.GetStreamNameFromBranch(branchName=firstBranch.name)
-                                else:
-                                    # ERROR: We cannot determine what branch this commit came from and we don't include any information about which stream we were processing against the commit.
-                                    #        This means that we are processing items below a merge point and we shouldn't do that...
-                                    # SKIP!
-                                    self.config.logger.error("Branch stitching error: incorrect state. Commit {0} can be reached from multiple branches.".format(first[u'hash'][:8]))
-                                    continue
+                                firstStream = firstState.get('stream')
+                                if firstStream is None:
+                                    self.config.logger.error("Could not get stream name from state {0}. Trying to reverse map from the containing branch name.".format(firstState))
+                                    firstBranches = self.gitRepo.branch_list(containsCommit=first[u'hash']) # This should only ever return one branch since we are processing things in order...
+                                    if firstBranches is not None and len(firstBranches) == 1:
+                                        firstBranch = firstBranches[0]
+                                        firstStream = self.GetStreamNameFromBranch(branchName=firstBranch.name)
+                                        if firstStream is None:
+                                            self.config.logger.error("Branch stitching error: incorrect state. Could not get stream name for branch {0}.".format(firstBranch))
+                                            continue
+                                    else:
+                                        # ERROR: We cannot determine what branch this commit came from and we don't include any information about which stream we were processing against the commit.
+                                        #        This means that we are processing items below a merge point and we shouldn't do that...
+                                        # SKIP!
+                                        self.config.logger.error("Branch stitching error: incorrect state. Commit {0} can be reached from multiple branches.".format(first[u'hash'][:8]))
+                                        continue
 
                                 # Get the information for the second stream
-                                secondStream = None
-                                secondBranches = self.gitRepo.branch_list(containsCommit=second[u'hash'])
-                                if secondBranches is not None and len(secondBranches) == 1:
-                                    secondBranch = secondBranches[0]
-                                    secondStream = self.GetStreamNameFromBranch(branchName=secondBranch.name)
-                                else:
-                                    # ERROR: We cannot determine what branch this commit came from and we don't include any information about which stream we were processing against the commit.
-                                    #        This means that we are processing items below a merge point and we shouldn't do that...
-                                    # SKIP!
-                                    self.config.logger.error("Branch stitching error: incorrect state. Commit {0} can be reached from multiple branches.".format(second[u'hash'][:8]))
-                                    continue
+                                secondStream = secondState.get('stream')
+                                if secondStream is None:
+                                    self.config.logger.error("Could not get stream name from state {0}. Trying to reverse map from the containing branch name.".format(firstState))
+                                    secondBranches = self.gitRepo.branch_list(containsCommit=second[u'hash'])
+                                    if secondBranches is not None and len(secondBranches) == 1:
+                                        secondBranch = secondBranches[0]
+                                        secondStream = self.GetStreamNameFromBranch(branchName=secondBranch.name)
+                                        if secondStream is None:
+                                            self.config.logger.error("Branch stitching error: incorrect state. Could not get stream name for branch {0}.".format(secondBranch))
+                                            continue
+                                    else:
+                                        # ERROR: We cannot determine what branch this commit came from and we don't include any information about which stream we were processing against the commit.
+                                        #        This means that we are processing items below a merge point and we shouldn't do that...
+                                        # SKIP!
+                                        self.config.logger.error("Branch stitching error: incorrect state. Commit {0} can be reached from multiple branches.".format(second[u'hash'][:8]))
+                                        continue
 
                                 # Find which one is the parent of the other. They must be inline since they were affected by the same transaction (since the times match)
                                 parentStream, childStream = self.GetParentChild(stream1=firstStream, stream2=secondStream, timeSpec=firstHist.transactions[0].id, onlyDirectChild=True)
-                                if parentStream is None and childStream is None:
-                                    # The two streams are unrelated and are probably substreams of a third stream. Hence we should not merge them!
+                                if parentStream is not None and childStream is not None:
+                                    if firstStream == childStream:
+                                        aliasMap[first[u'hash']] = second[u'hash']
+                                        self.config.logger.info(u'  squashing: {0} ({1}/{2}) as equiv. to {3} ({4}/{5}). tree {6}.'.format(first[u'hash'][:8], firstStream, firstHist.transactions[0].id, second[u'hash'][:8], secondStream, secondHist.transactions[0].id, tree_hash[:8]))
+                                    elif secondStream == childStream:
+                                        aliasMap[second[u'hash']] = first[u'hash']
+                                        self.config.logger.info(u'  squashing: {3} ({4}/{5}) as equiv. to {0} ({1}/{2}). tree {6}.'.format(first[u'hash'][:8], firstStream, firstHist.transactions[0].id, second[u'hash'][:8], secondStream, secondHist.transactions[0].id, tree_hash[:8]))
+                                    else:
+                                        Exception("Invariant violation! Either (None, None), (firstStream, secondStream) or (secondStream, firstStream) should be possible")
+                                    # Map the child commit (discarded) as an alias of the parent commit (kept)
+                                    aliasMap[childStream] = parentStream
+                                else:
                                     self.config.logger.info(u'  unrelated: {0} ({1}/{2}) is equiv. to {3} ({4}/{5}). tree {6}.'.format(first[u'hash'][:8], firstStream, firstHist.transactions[0].id, second[u'hash'][:8], secondStream, secondHist.transactions[0].id, tree_hash[:8]))
-                                    first, second = None, None
-                                    # This thrid stream should be listed as the destination stream for the transaction in our firstHist and secondHist so
-                                    # we can at least do a sanity check...
-                                    # TODO: do the sanity check!!!
-                                    pass
-                                elif parentStream == firstStream:
-                                    pass # They are already in the correct order.
-                                elif parentStream == secondStream:
-                                    # Swap them
-                                    wereSwapped = True
-                                    first, second = second, first
-                                    firstHist, secondHist = secondHist, firstHist
-                                    firstStream, secondStream = secondStream, firstStream
-
+                                    
                         elif firstTime < secondTime:
                             # Already in the correct order...
                             pass
@@ -1064,8 +1099,65 @@ class AccuRev2Git(object):
                             commitRewriteMap[second[u'hash']][first[u'hash']] = True
                             self.config.logger.info(u'  merge:     {0} as parent of {1}. tree {2}. parents {3}'.format(first[u'hash'][:8], second[u'hash'][:8], tree_hash[:8], [x[:8] for x in commitRewriteMap[second[u'hash']].iterkeys()] ))
 
-            # Write shell script
+            self.config.logger.info("Remapping aliased commits.")
+            # Remap the commitRewriteMap keys w.r.t. the aliases in the aliasMap
+            discardedRewriteCommits = []
+            for commitHash in commitRewriteMap:
+                # Find the non-aliased commit
+                if commitHash in aliasMap:
+                    if commitHash != aliasMap[commitHash]:
+                        # Aliased commit.
+                        discardedRewriteCommits.append(commitHash) # mark for deletion from map.
+    
+                        # Move its parents to the first non-aliased commit.
+                        h = commitHash
+                        while h in aliasMap:
+                            if h == aliasMap[h]:
+                                # When a commit maps to itself this commit has no alias.
+                                break
+                            h = aliasMap[h]
+                        # h is non-aliased
+                        if h not in commitRewriteMap:
+                            commitRewriteMap[h] = commitRewriteMap[commitHash]
+                        else:
+                            for parent in commitRewriteMap[commitHash]:
+                                commitRewriteMap[h][parent] = True
+                else:
+                    Exception("Invariant falacy! aliasMap should contain every commit that we have processed.")
+
+            # Delete aliased keys
+            for commitHash in discardedRewriteCommits:
+                del commitRewriteMap[commitHash]
+            
+            
+            self.config.logger.info("Remapping aliased parent commits.")
+            # Remap the commitRewriteMap values (parents) w.r.t. the aliases in the aliasMap
+            for commitHash in commitRewriteMap:
+                discardedParentCommits = []
+                for parent in commitRewriteMap[commitHash]:
+                    if parent in aliasMap:
+                        if parent != aliasMap[parent]:
+                            # Aliased parent commit.
+                            discardedParentCommits.append(parent)
+
+                            # Remap the parent
+                            p = parent
+                            while p in aliasMap:
+                                if p == aliasMap[p]:
+                                    break
+                                p = aliasMap[p]
+                            commitRewriteMap[commitHash][p] = True # Add the non-aliased parent
+                    else:
+                        Exception("Invariant falacy! aliasMap should contain every commit that we have processed.")
+
+                # Delete the aliased parents
+                for parent in discardedParentCommits:
+                    del commitRewriteMap[commitHash][parent]
+
+
+            # Write parent filter shell script
             parentFilterPath = os.path.join(self.cwd, 'parent_filter.sh')
+            self.config.logger.info("Writing parent filter {0}.".format(parentFilterPath))
             with codecs.open(parentFilterPath, 'w', 'ascii') as f:
                 # http://www.tutorialspoint.com/unix/case-esac-statement.htm
                 f.write('#!/bin/sh\n\n')
@@ -1073,20 +1165,43 @@ class AccuRev2Git(object):
                 for commitHash in commitRewriteMap:
                     parentString = ''
                     for parent in commitRewriteMap[commitHash]:
-                        parentString += '-p {0}'.format(parent)
-                    f.write('    "{0}") echo "{1}"\n'.format(commitHash, parentString))
+                        parentString += '-p $(map "{0}") '.format(parent)
+                    f.write('    "{0}") echo \'{1}\'\n'.format(commitHash, parentString))
                     f.write('    ;;\n')
-                f.write('    *) cat < /dev/stdin\n') # If we don't have the commit mapping then just print out whatever we are given on stdin...
+                f.write('    *) echo "cat < /dev/stdin"\n') # If we don't have the commit mapping then just print out whatever we are given on stdin...
                 f.write('    ;;\n')
                 f.write('esac\n\n')
 
-            self.config.logger.info("Branch stitching script generated: {0}".format(parentFilterPath))
-            self.config.logger.info("To apply execute the following commands:")
-            self.config.logger.info("  chmod +x {0}".format(parentFilterPath))
-            self.config.logger.info("  cd {0}".format(self.config.git.repoPath))
-            self.config.logger.info("  git filter-branch --parent-filter {0} --prune-empty".format(parentFilterPath))
-            self.config.logger.info("  rm {0}".format(parentFilterPath))
-            self.config.logger.info("  cd -")
+            # Write the commit filter shell script
+            commitFilterPath = os.path.join(self.cwd, 'commit_filter.sh')
+            self.config.logger.info("Writing commit filter {0}.".format(commitFilterPath))
+            with codecs.open(commitFilterPath, 'w', 'ascii') as f:
+                # http://www.tutorialspoint.com/unix/case-esac-statement.htm
+                f.write('#!/bin/sh\n\n')
+                f.write('case "$GIT_COMMIT" in\n')
+                for commitHash in aliasMap:
+                    if commitHash != aliasMap[commitHash]:
+                        # Skip this commit
+                        f.write('    "{0}") echo skip_commit \\$@\n'.format(commitHash))
+                        f.write('    ;;\n')
+                f.write('    *) echo git_commit_non_empty_tree \\$@;\n') # If we don't want to skip this commit then just commit it...
+                f.write('    ;;\n')
+                f.write('esac\n\n')
+
+            stitchScriptPath = os.path.join(self.cwd, 'stitch_branches.sh')
+            self.config.logger.info("Writing branch stitching script {0}.".format(stitchScriptPath))
+            with codecs.open(stitchScriptPath, 'w', 'ascii') as f:
+                # http://www.tutorialspoint.com/unix/case-esac-statement.htm
+                f.write('#!/bin/sh\n\n')
+                f.write('chmod +x {0}\n'.format(parentFilterPath))
+                f.write('chmod +x {0}\n'.format(commitFilterPath))
+                f.write('cd {0}\n'.format(self.config.git.repoPath))
+                f.write('git filter-branch --parent-filter="{parent_filter} $@ | eval" --commit-filter="{commit_filter} $@ | eval"\n'.format(parent_filter=parentFilterPath, commit_filter=commitFilterPath))
+                f.write('cd -\n')
+
+            self.config.logger.info("Branch stitching script generated: {0}".format(stitchScriptPath))
+            self.config.logger.info("To apply execute the following command:")
+            self.config.logger.info("  chmod +x {0}".format(stitchScriptPath))
 
     # Start
     #   Begins a new AccuRev to Git conversion process discarding the old repository (if any).
@@ -1137,8 +1252,10 @@ class AccuRev2Git(object):
             # If this script is being run on a replica then ensure that it is up-to-date before processing the streams.
             accurev.replica.sync()
 
-            self.ProcessStreams()
-            #self.StitchBranches()
+            if self.config.git.finalize is not None and self.config.git.finalize:
+                self.StitchBranches()
+            else:
+                self.ProcessStreams()
               
             if not isLoggedIn:
                 if accurev.logout():
@@ -1180,7 +1297,12 @@ def DumpExampleConfigFile(outputFilename):
             <stream>some_other_stream</stream>
         </stream-list>
     </accurev>
-    <git repo-path="/put/the/git/repo/here" /> <!-- The system path where you want the git repo to be populated. Note: this folder should already exist. -->
+    <git repo-path="/put/the/git/repo/here" finalize="false" /> <!-- The system path where you want the git repo to be populated. Note: this folder should already exist. 
+                                                                     The finalize attribute switches this script from converting accurev transactions to independent orphaned
+                                                                     git branches to the "branch stitching" mode which should be activated only once the conversion is completed.
+                                                                     Make sure to have a backup of your repo just in case. Once finalize is set to true this script will rewrite
+                                                                     the git history in an attempt to recreate merge points.
+                                                                -->
     <method>deep-hist</method> <!-- The method specifies what approach is taken to perform the conversion. Allowed values are 'deep-hist', 'diff' and 'pop'.
                                      - deep-hist: Works by using the accurev.ext.deep_hist() function to return a list of transactions that could have affected the stream.
                                                   It then performs a diff between the transactions and only populates the files that have changed like the 'diff' method.
@@ -1304,7 +1426,12 @@ def AutoConfigFile(filename, args, preserveConfig=False):
         file.write("""
         </stream-list>
     </accurev>
-    <git repo-path="{git_repo_path}" /> <!-- The system path where you want the git repo to be populated. Note: this folder should already exist. -->
+    <git repo-path="{git_repo_path}" finalize="false" /> <!-- The system path where you want the git repo to be populated. Note: this folder should already exist.
+                                                              The finalize attribute switches this script from converting accurev transactions to independent orphaned
+                                                              git branches to the "branch stitching" mode which should be activated only once the conversion is completed.
+                                                              Make sure to have a backup of your repo just in case. Once finalize is set to true this script will rewrite
+                                                              the git history in an attempt to recreate merge points.
+                                                         -->
     <method>{method}</method>
     <logfile>{log_filename}<logfile>
     <!-- The user maps are used to convert users from AccuRev into git. Please spend the time to fill them in properly. -->""".format(git_repo_path=config.git.repoPath, method=config.method, log_filename=config.logFilename))
@@ -1396,6 +1523,8 @@ def SetConfigFromArgs(config, args):
         config.accurev.depot    = args.accurevDepot
     if args.gitRepoPath is not None:
         config.git.repoPath     = args.gitRepoPath
+    if args.finalize is not None:
+        config.git.finalize     = args.finalize
     if args.conversionMethod is not None:
         config.method = args.conversionMethod
     if args.logFile is not None:
@@ -1433,6 +1562,7 @@ def PrintConfigSummary(config):
         config.logger.info('  now: {0}'.format(datetime.now()))
         config.logger.info('  git')
         config.logger.info('    repo path: {0}'.format(config.git.repoPath))
+        config.logger.info('    finalize:  {0}'.format(config.git.finalize))
         config.logger.info('  accurev:')
         config.logger.info('    depot: {0}'.format(config.accurev.depot))
         if config.accurev.streamMap is not None:
@@ -1465,6 +1595,7 @@ def AccuRev2GitMain(argv):
     parser.add_argument('-p', '--accurev-password',  dest='accurevPassword', metavar='<accurev-password>',  help="The password for the provided accurev username.")
     parser.add_argument('-t', '--accurev-depot', dest='accurevDepot',        metavar='<accurev-depot>',     help="The AccuRev depot in which the streams that are being converted are located. This script currently assumes only one depot is being converted at a time.")
     parser.add_argument('-g', '--git-repo-path', dest='gitRepoPath',         metavar='<git-repo-path>',     help="The system path to an existing folder where the git repository will be created.")
+    parser.add_argument('-f', '--finalize',      dest='finalize', action='store_const', const=True,         help="Finalize the git repository by creating branch merge points. This flag will trigger this scripts 'branch stitching' mode and should only be used once the conversion has been completed. It won't work as expected if the repo continues to be processed after this step. The script will attempt to collapse commits which are a result of a promotion into a parent stream where the diff between the parent and the child is empty. It will also try to link promotions correctly into a merge commit from the child into the parent.")
     parser.add_argument('-M', '--method',     dest='conversionMethod',       metavar='<conversion-method>', help="Specifies the method which is used to perform the conversion. Can be either 'pop', 'diff' or 'deep-hist'. 'pop' specifies that every transaction is populated in full. 'diff' specifies that only the differences are populated but transactions are iterated one at a time. 'deep-hist' specifies that only the differences are populated and that only transactions that could have affected this stream are iterated.")
     parser.add_argument('-r', '--restart',    dest='restart', action='store_const', const=True, help="Discard any existing conversion and start over.")
     parser.add_argument('-v', '--verbose',    dest='debug',   action='store_const', const=True, help="Print the script debug information. Makes the script more verbose.")
