@@ -1154,7 +1154,6 @@ class AccuRev2Git(object):
                 for parent in discardedParentCommits:
                     del commitRewriteMap[commitHash][parent]
 
-
             # Write parent filter shell script
             parentFilterPath = os.path.join(self.cwd, 'parent_filter.sh')
             self.config.logger.info("Writing parent filter {0}.".format(parentFilterPath))
@@ -1165,8 +1164,8 @@ class AccuRev2Git(object):
                 for commitHash in commitRewriteMap:
                     parentString = ''
                     for parent in commitRewriteMap[commitHash]:
-                        parentString += '-p $(map "{0}") '.format(parent)
-                    f.write('    "{0}") echo \'{1}\'\n'.format(commitHash, parentString))
+                        parentString += '"{parent}" '.format(parent=parent)
+                    f.write('    "{commit_hash}") echo "res="echo"; for x in {parent_str}; do res=\\"\\$res -p \\$(map "\\$x")\\"; done; \\$res"\n'.format(commit_hash=commitHash, parent_str=parentString))
                     f.write('    ;;\n')
                 f.write('    *) echo "cat < /dev/stdin"\n') # If we don't have the commit mapping then just print out whatever we are given on stdin...
                 f.write('    ;;\n')
@@ -1196,7 +1195,12 @@ class AccuRev2Git(object):
                 f.write('chmod +x {0}\n'.format(parentFilterPath))
                 f.write('chmod +x {0}\n'.format(commitFilterPath))
                 f.write('cd {0}\n'.format(self.config.git.repoPath))
-                f.write('git filter-branch --parent-filter="{parent_filter} $@ | eval" --commit-filter="{commit_filter} $@ | eval"\n'.format(parent_filter=parentFilterPath, commit_filter=commitFilterPath))
+
+                rewriteHeads = ""
+                branchList = repo.branch_list()
+                for branch in branchList:
+                    rewriteHeads += " {0}".format(branch.name)
+                f.write("git filter-branch --parent-filter='eval $({parent_filter})' --commit-filter='eval $({commit_filter}) -- {rewrite_heads}'\n".format(parent_filter=parentFilterPath, commit_filter=commitFilterPath, rewrite_heads=rewriteHeads))
                 f.write('cd -\n')
 
             self.config.logger.info("Branch stitching script generated: {0}".format(stitchScriptPath))
