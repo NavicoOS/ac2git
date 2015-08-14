@@ -18,7 +18,9 @@ AccuRev2Git is a tool to convert an AccuRev depot into a git repo. A specified A
 
 - Clone the **ac2git** repo.
 
-- Run `python ac2git.py --help` to see all the commands.
+- Run `python ac2git.py --help` to see all the options. _It is recommended that you at least take a look._
+
+- Run `python ac2git.py --example-config` to get an example configuration. _It is recommended that you at least take a look._
 
 - Follow the steps outlined in the **How to use** section.
 
