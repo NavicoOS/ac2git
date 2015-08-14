@@ -11,14 +11,21 @@ My work is merely in the implementation and I humbly offer it to anyone who does
 
 AccuRev2Git is a tool to convert an AccuRev depot into a git repo. A specified AccuRev stream will be the target of the conversion, and all promotes to that stream will be turned into commits within the new git repository.
 
-### Getting Started ###
+### Getting started ###
 - Install python 2.7
 
 - Make sure the paths to the `accurev` and `git` executables are correct for your machine, and that git default configuration has been set.
 
-- Tested with `AccuRev 6.1.1 (2014/05/05)`, `git version 2.1.0` and `Python 2.7.8` on a Fedora 21 host.
+- Clone the **ac2git** repo.
 
-- Tested with `AccuRev 6.1.1 (2014/05/05)`, `git version 1.9.0.msysgit.0` and `Python 2.7.6` on a Window 7 host.
+- Run `python ac2git.py --help` to see all the commands.
+
+- Follow the steps outlined in the **How to use** section.
+
+### Tested with ###
+- `AccuRev 6.1.1 (2014/05/05)`, `git version 2.1.0` and `Python 2.7.8` on a Fedora 21 host.
+
+- `AccuRev 6.1.1 (2014/05/05)`, `git version 1.9.0.msysgit.0` and `Python 2.7.6` on a Window 7 host.
 
 ### How to use ###
 
