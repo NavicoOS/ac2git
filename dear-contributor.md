@@ -6,7 +6,7 @@ You will find 4 main files in this repository:
   - `ac2git.py` - the main script that contains the pop, diff and deep-hist algorithms.
   - `accurev.py` - my python wrapper and extensions for accurev commands.
   - `git.py` - my git wrapper because I couldn't figure out how to use an existing one.
-  - `git_stitch.py` - the core of the _branch stitching_ functionality that is discussed in `branch-stitching-methodology.md`.
+  - `git_stitch.py` - the core of the _branch stitching_ functionality..
 
 ## accurev.py ##
 
