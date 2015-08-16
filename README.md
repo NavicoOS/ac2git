@@ -69,7 +69,7 @@ All methods begin by finding the `mkstream` transaction for each stream and popu
 
 The first method is the one Ryan LaNeve implemented, which I call the _pop method_, which works like this:
  - Find the `mkstream` transaction and populate it.
- - Populate it in full and commit into git.
+ - Populate it in full and commit into git as an orphaned branch.
  - Start loop:
   + Increment the transaction number by 1
   + Delete the contents of the git repository.
@@ -82,7 +82,7 @@ The second and third method were devised by *Robert Smithson* and are a lot fast
 
 I refer to the second method as the _diff method_ and it is a simple optimisation over the _pop method_. It works as follows:
  - Find the `mkstream` transaction and populate it.
- - Populate it in full and commit into git.
+ - Populate it in full and commit into git as an orphaned branch.
  - Start loop:
   + Increment the transaction number by 1
   + _Do an_ `accurev diff -a -i -v <stream> -V <stream>` _between this transaction and the last transaction that we populated._
@@ -119,13 +119,24 @@ _Note: This command currently doesn't understand accurev time locks. This means 
 
 Effectively this command does the heavy lifting for us so that the _diff method_ doesn't have to search through transactions one by one. Which finally brings us to how the _deep-hist method_ works:
  - Find the `mkstream` transaction and populate it.
- - Populate it in full and commit into git.
+ - Populate it in full and commit into git as an orphaned branch.
  - _Run the deep-hist function and get a list of transactions that affect this stream._
  - _Iterate over the transactions that deep-hist returned:_
   + Do an `accurev diff -a -i -v <stream> -V <stream>` between this transaction and the last transaction that we populated.
   + Delete only the files that `accurev diff` reported as changed from the git repository.
   + Populate the transaction and commit it into git. _(The populate here is done with the recursive option but without the overwrite option. Meaning that only the changed items are downloaded over the network.)_.
   + Repeat loop until done.
+
+### The result ###
+
+What this script will spit out is a git repository with independent orphaned branches representing your streams. Meaning, that each stream is converted separately on a branch that has no merge points with any other branch.
+This is by design as it was a simpler model to begin with.
+
+Each git branch accurately depicts the stream from which it was created w.r.t. **time**. This means that at each point in time the git branch represents the state of your stream. Not only are the transactions for this stream commited to git but so are any transactions that occurred in the parent stream which automatically flowed down to us.
+When combined with my statement from the previous paragraph, this implies that you will see a number of commits on different branches with the same time, author and commit message, most often because they represent the same _promote_ transaction.
+
+Ideally, if you have promoted all of your changes to the parent stream this should be identified as a merge commit and recorded as such. Though it would now be possible to extend this script to do so, it is not on my radar for now as it would be a reasonably large undertaking.
+However, there is hope because I've implemented an experimental feature, described below, that does just that but it operates as a post processing step. It is still a little buggy and requires iteration but it proves the concept. Patches are welcomed!
 
 ### Experimental features ###
 
@@ -158,6 +169,12 @@ Run that script and your repo will end up with merge points.
 I would like to make it possible to run this step iteratively as you convert the repo but currently it is a single massive process at the end of the conversion.
 
 *Note: This part is still being tested and may or may not work as you expect.* 
+
+### Dear contributors ###
+
+I am not a python developer which should be evident to anyone whos seen the code. A lot of it was written late at night and was meant to be just a brain dump, to be cleaned up at a later date, but it remained. Please don't be dissuaded from contributing and helping me improve it because it will get us all closer to ditching AccuRev! I will do my best to add some notes about my method and how the code works.
+
+For now it works as I need it to and that's enough.
 
 ---
 ---
