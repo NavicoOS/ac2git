@@ -232,6 +232,22 @@ class obj:
                 return cls(start=start, end=end, limit=IntOrNone(limit))
 
             return None
+
+    class Login(object):
+        def __init__(self, errorMessage):
+            self.errorMessage = errorMessage
+
+        def __repr__(self):
+            if self.errorMessage is None or len(self.errorMessage) == 0:
+                return "Login success"
+            else:
+                return self.errorMessage
+
+        def __nonzero__(self):
+            return (self.errorMessage is None or len(self.errorMessage) == 0)
+    
+        def __bool__(self):
+            return self.__nonzero__()
     
     class Workspace(object):
         def __init__(self, storage, host, targetTransaction, fileModTime, EOL, Type):
@@ -1259,13 +1275,28 @@ class raw(object):
         os.environ['AC_SYNC'] = value
 
     @staticmethod
-    def login(username = None, password = None):
+    def login(username = None, password = None, persist=False):
         if username is not None and password is not None:
-            accurevCommand = subprocess.Popen([ "accurev", "login" ], stdout=subprocess.PIPE, stdin=subprocess.PIPE, universal_newlines=True)
-            accurevCommand.communicate(username + '\n' + password + '\n')
-            accurevCommand.wait()
+            cmd = [ "accurev", "login" ]
+            if persist:
+                cmd.append("-n")
+            cmd.extend([ username, password ])
+
+            accurevCommand = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+
+            output = ''
+            error  = ''
+            accurevCommand.poll()
+            while accurevCommand.returncode is None:
+                stdoutdata, stderrdata = accurevCommand.communicate()
+                output += stdoutdata
+                if stderrdata is not None:
+                    error  += stderrdata
+                accurevCommand.poll()
             
-            return (accurevCommand.returncode == 0)
+            raw._lastCommand = accurevCommand
+            
+            return obj.Login(errorMessage=error)
         
         return False
         
@@ -1273,6 +1304,8 @@ class raw(object):
     def logout():
         accurevCommand = subprocess.Popen([ "accurev", "logout" ], universal_newlines=True)
         accurevCommand.wait()
+        
+        raw._lastCommand = accurevCommand
         
         return (accurevCommand.returncode == 0)
 

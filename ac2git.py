@@ -1253,20 +1253,31 @@ class AccuRev2Git(object):
                 self.gitRepo.clean(force=True)
             
             acInfo = accurev.info()
-            isLoggedIn = (acInfo.principal == self.config.accurev.username)
-    
-            # Login the requested user
+            isLoggedIn = False
+            if self.config.accurev.username is None:
+                # When a username isn't specified we will use any logged in user for the conversion.
+                isLoggedIn = accurev.ext.is_loggedin(infoObj=acInfo)
+            else:
+                # When a username is specified that specific user must be logged in.
+                isLoggedIn = (acInfo.principal == self.config.accurev.username)
+            
+            doLogout = False
             if not isLoggedIn:
+                # Login the requested user
                 if accurev.ext.is_loggedin(infoObj=acInfo):
                     # Different username, logout the other user first.
                     logoutSuccess = accurev.logout()
                     self.config.logger.info("Accurev logout for '{0}' {1}".format(acInfo.principal, 'succeeded' if logoutSuccess else 'failed'))
     
-                if accurev.login(self.config.accurev.username, self.config.accurev.password):
+                loginResult = accurev.login(self.config.accurev.username, self.config.accurev.password)
+                if loginResult:
                     self.config.logger.info("Accurev login for '{0}' succeeded.".format(self.config.accurev.username))
                 else:
-                    self.config.logger.error("AccuRev login for '{0}' failed.\n", self.config.accurev.username)
+                    self.config.logger.error("AccuRev login for '{0}' failed.\n".format(self.config.accurev.username))
+                    self.config.logger.error("AccuRev message:\n{0}".format(loginResult.errorMessage))
                     return 1
+                
+                doLogout = True
             else:
                 self.config.logger.info("Accurev user '{0}', already logged in.".format(acInfo.principal))
             
@@ -1278,7 +1289,7 @@ class AccuRev2Git(object):
             else:
                 self.ProcessStreams()
               
-            if not isLoggedIn:
+            if doLogout:
                 if accurev.logout():
                     self.config.logger.info( "Accurev logout successful." )
                 else:
@@ -1299,8 +1310,8 @@ def DumpExampleConfigFile(outputFilename):
     with codecs.open(outputFilename, 'w') as file:
         file.write("""<accurev2git>
     <!-- AccuRev details:
-            username:             The username that will be used to log into AccuRev and retrieve and populate the history
-            password:             The password for the given username. Note that you can pass this in as an argument which is safer and preferred!
+            username:             The username that will be used to log into AccuRev and retrieve and populate the history. This is optional and if it isn't provided you will need to login before running this script.
+            password:             The password for the given username. Note that you can pass this in as an argument which is safer and preferred! This too is optional. You can login before running this script and it will work.
             depot:                The depot in which the stream/s we are converting are located
             start-transaction:    The conversion will start at this transaction. If interrupted the next time it starts it will continue from where it stopped.
             end-transaction:      Stop at this transaction. This can be the keword "now" if you want it to convert the repo up to the latest transaction.
@@ -1554,12 +1565,6 @@ def SetConfigFromArgs(config, args):
 def ValidateConfig(config):
     # Validate the program args and configuration up to this point.
     isValid = True
-    if config.accurev.username is None:
-        config.logger.error("No AccuRev username specified.\n")
-        isValid = False
-    if config.accurev.password is None:
-        config.logger.error("No AccuRev password specified.\n")
-        isValid = False
     if config.accurev.depot is None:
         config.logger.error("No AccuRev depot specified.\n")
         isValid = False
