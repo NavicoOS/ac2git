@@ -36,7 +36,7 @@ def IntOrNone(value):
 def UTCDateTimeOrNone(value):
     if value is None:
         return None
-    if type(value) is str or type(value) is int:
+    if isinstance(value, str) or isinstance(value, int) or isinstance(value, float):
         value = float(value)
         return datetime.datetime.utcfromtimestamp(value)
     if isinstance(value, datetime.datetime):
@@ -2148,20 +2148,25 @@ class ext(object):
                 # Parent stream changed.
                 if prevTr is not None:
                     parentTs = obj.TimeSpec(start=parentTs.start, end=(tr.id - 1))
-                    # includeDeactevatedItems and includeOldDefinitons might be good to set here...
-                    parentStream = show.streams(depot=depot, stream=stream, timeSpec=parentTs.start).streams[0].basis
+                    streamInfo = show.streams(depot=depot, stream=stream, timeSpec=parentTs.start).streams[0]
+                    parentStream = streamInfo.basis
                     if parentStream is not None:
-                        parentTrList = ext.deep_hist(depot=depot, stream=parentStream, timeSpec=parentTs)
-                        trList.extend(parentTrList)
+                        timelockTs = ext.restrict_timespec_to_timelock(depot=streamInfo.depotName, timeSpec=parentTs, timelock=streamInfo.time)
+                        if timelockTs is not None: # A None value indicates that the entire timespec is after the timelock.
+                            parentTrList = ext.deep_hist(depot=depot, stream=parentStream, timeSpec=timelockTs)
+                            trList.extend(parentTrList)
                     parentTs = obj.TimeSpec(start=tr.id, end=ts.end)
 
             trList.append(tr)
             prevTr = tr
 
-        parentStream = show.streams(depot=depot, stream=stream, timeSpec=parentTs.start).streams[0].basis
+        streamInfo = show.streams(depot=depot, stream=stream, timeSpec=parentTs.start).streams[0]
+        parentStream = streamInfo.basis
         if parentStream is not None:
-            parentTrList = ext.deep_hist(depot=depot, stream=parentStream, timeSpec=parentTs)
-            trList.extend(parentTrList)
+            timelockTs = ext.restrict_timespec_to_timelock(depot=streamInfo.depotName, timeSpec=parentTs, timelock=streamInfo.time)
+            if timelockTs is not None: # A None value indicates that the entire timespec is after the timelock.
+                parentTrList = ext.deep_hist(depot=depot, stream=parentStream, timeSpec=timelockTs)
+                trList.extend(parentTrList)
 
         rv = sorted(trList, key=lambda tr: tr.id)
         if not isAsc:
