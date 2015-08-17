@@ -2088,7 +2088,7 @@ class ext(object):
     @staticmethod
     # Retrieves a list of _all transactions_ which affect the given stream, directly or indirectly (via parent promotes).
     # Returns a list of obj.Transaction(object) types.
-    def deep_hist(depot=None, stream=None, timeSpec='now'):
+    def deep_hist(depot=None, stream=None, timeSpec='now', ignoreTimelocks=True):
         # Validate arguments
         # ==================
         if stream is None:
@@ -2131,7 +2131,7 @@ class ext(object):
             else:
                 ts.start = mkstreamTr.id
 
-        print('{0}:{1}'.format(stream, ts))
+        #print('{0}:{1}'.format(stream, ts)) # debug info
 
         # Perform deep-hist algorithm
         # ===========================
@@ -2151,7 +2151,9 @@ class ext(object):
                     streamInfo = show.streams(depot=depot, stream=stream, timeSpec=parentTs.start).streams[0]
                     parentStream = streamInfo.basis
                     if parentStream is not None:
-                        timelockTs = ext.restrict_timespec_to_timelock(depot=streamInfo.depotName, timeSpec=parentTs, timelock=streamInfo.time)
+                        timelockTs = parentTs
+                        if not ignoreTimelocks:
+                            timelockTs = ext.restrict_timespec_to_timelock(depot=streamInfo.depotName, timeSpec=parentTs, timelock=streamInfo.time)
                         if timelockTs is not None: # A None value indicates that the entire timespec is after the timelock.
                             parentTrList = ext.deep_hist(depot=depot, stream=parentStream, timeSpec=timelockTs)
                             trList.extend(parentTrList)
@@ -2163,7 +2165,9 @@ class ext(object):
         streamInfo = show.streams(depot=depot, stream=stream, timeSpec=parentTs.start).streams[0]
         parentStream = streamInfo.basis
         if parentStream is not None:
-            timelockTs = ext.restrict_timespec_to_timelock(depot=streamInfo.depotName, timeSpec=parentTs, timelock=streamInfo.time)
+            timelockTs = parentTs
+            if not ignoreTimelocks:
+                timelockTs = ext.restrict_timespec_to_timelock(depot=streamInfo.depotName, timeSpec=parentTs, timelock=streamInfo.time)
             if timelockTs is not None: # A None value indicates that the entire timespec is after the timelock.
                 parentTrList = ext.deep_hist(depot=depot, stream=parentStream, timeSpec=timelockTs)
                 trList.extend(parentTrList)
@@ -2216,7 +2220,7 @@ import sys
 import argparse
 
 def clDeepHist(args):
-    transactions = ext.deep_hist(depot=args.depot, stream=args.stream, timeSpec=args.timeSpec)
+    transactions = ext.deep_hist(depot=args.depot, stream=args.stream, timeSpec=args.timeSpec, ignoreTimelocks=args.ignoreTimelocks)
     if transactions is not None and len(transactions) > 0:
         print("tr. type; destination stream; tr. number; username;")
         for tr in transactions:
@@ -2249,6 +2253,7 @@ if __name__ == "__main__":
     deepHistParser.add_argument('-p', '--depot',     dest='depot',    help='The name of the depot in which the transaction occurred')
     deepHistParser.add_argument('-s', '--stream',    dest='stream',   help='The accurev stream for which we want to know all the transactions which could have affected it.')
     deepHistParser.add_argument('-t', '--time-spec', dest='timeSpec', required=True, help='The accurev time-spec. e.g. 17-21 or 99.')
+    deepHistParser.add_argument('-i', '--ignore-timelocks', dest='ignoreTimelocks', action='store_true', default=False, help='The returned set of transactions will include transactions which occurred in the parent stream before the timelock of the child stream (if any).')
 
     deepHistParser.set_defaults(func=clDeepHist)
 
