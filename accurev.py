@@ -2058,22 +2058,30 @@ class ext(object):
             if timelock == 0:
                 return timeSpec # Timelock won't have any affect on the timeSpec
 
-            
-            if depot is None and not (isinstance(timeSpec.start, datetime.datetime) and isinstance(timeSpec.end, datetime.datetime)):
-                raise Exception("Argument error! depot is required for non-time based timelocks!")
-            elif depot is None: # Here we are dealing with simple date times that must be less than a range.
+            if depot is None:
+                if not (isinstance(timeSpec.start, datetime.datetime) and isinstance(timeSpec.end, datetime.datetime)):
+                    raise Exception("Argument error! depot is required for non-time based timelocks!")
+                # Here we are dealing with simple date times that must be less than a range.
                 if timelock < GetTimestamp(timeSpec.start):
                     return None # This timeSpec is after the timelock in its entirety.
                 elif timelock < GetTimestamp(timeSpec.end):
                     timeSpec.end = UTCDateTimeOrNone(timelock)
-            if depot is not None: # Here we must figure out what transaction range is before the timelock.
+            else:
+                # Here we must figure out what transaction range is before the timelock.
                 timeSpec = ext.normalize_timespec(depot=depot, timeSpec=timeSpec)
+                # Ensure ascending order for the timespec.
+                isAsc = timeSpec.is_asc()
+                if not isAsc:
+                    # Make descending
+                    timeSpec = timeSpec.reversed()
                 if timeSpec is not None:
                     preLockTr = hist(depot=depot, timeSpec=UTCDateTimeOrNone(timelock)).transactions[0]
                     if timeSpec.start > preLockTr.id + 1:
                         return None
                     elif timeSpec.end > preLockTr.id:
                         timeSpec.end = preLockTr.id
+                if not isAsc:
+                    timeSpec = timeSpec.reversed()
 
         return timeSpec
 
@@ -2094,34 +2102,18 @@ class ext(object):
         else:
             raise Exception("Unrecognized time-spec type {0}".format(type(timeSpec)))
 
+        streamInfo = show.streams(stream=stream).streams[0]
+
         # Normalize the timeSpec
         # ======================
-        #   1. Change the accurev keywords (e.g. highest, now) into transaction numbers:
-        #      Note: The keywords highest/now are translated w.r.t. the depot and not the stream.
-        #            Otherwise we might miss later promotes to parent streams...
-        depotName = depot # temporary variable used to avoid needlesly calling show.streams(). otherwise just use depot.
-                          # the later call to show streams is done w.r.t. these values so we can't move it above here and skip this trickery.
-        if isinstance(ts.start, str):
-            if depotName is None:
-                depotName = show.streams(stream=stream).streams[0].depotName
-            ts.start = hist(depot=depotName, timeSpec=ts.start).transactions[0].id
-        if isinstance(ts.end, str):
-            if depotName is None:
-                depotName = show.streams(stream=stream).streams[0].depotName
-            ts.end = hist(depot=depotName, timeSpec=ts.end).transactions[0].id
-        #   2. If there is a limit set on the number of transactions convert it into a start and end without a limit...
-        if ts.limit is not None:
-            if ts.end is None or ts.end - ts.start >= ts.limit:
-                ts.end = ts.start - ts.limit + 1
-            ts.limit = None
-        elif ts.end is None:
-            ts.end = ts.start
-        #   3. We must ensure that the transactions are traversed in ascending order.
+        ts = ext.normalize_timespec(depot=streamInfo.depotName, timeSpec=timeSpec)
+
+        # Additionally we must ensure that the transactions are traversed in ascending order.
         isAsc = ts.is_asc()
         if not isAsc:
             # Make descending
             ts = ts.reversed()
-        #   4. We need to ensure that we don't query things before the stream existed.
+        # Next, we need to ensure that we don't query things before the stream existed.
         mkstream = hist(stream=stream, transactionKind="mkstream", timeSpec="now")
         if len(mkstream.transactions) == 0:
             # the assumption is that the depot name matches the root stream name (for which there is no mkstream transaction)
@@ -2139,7 +2131,7 @@ class ext(object):
             else:
                 ts.start = mkstreamTr.id
 
-        #print('{0}:{1}'.format(stream, ts))
+        print('{0}:{1}'.format(stream, ts))
 
         # Perform deep-hist algorithm
         # ===========================
