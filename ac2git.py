@@ -786,8 +786,11 @@ class AccuRev2Git(object):
         
         deepHist = None
         if self.config.method == "deep-hist":
-            self.config.logger.dbg("accurev.ext.deep_hist(depot={0}, stream={1}, timeSpec='{2}-{3}'".format(depot, stream.name, startTransaction, endTransaction))
-            deepHist = accurev.ext.deep_hist(depot=depot, stream=stream.name, timeSpec="{0}-{1}".format(startTransaction, endTransaction))
+            ignoreTimelocks=True # The code for the timelocks is not tested fully yet. Once tested setting this to false should make the resulting set of transactions smaller
+                                 # at the cost of slightly larger number of upfront accurev commands called.
+            self.config.logger.dbg("accurev.ext.deep_hist(depot={0}, stream={1}, timeSpec='{2}-{3}', ignoreTimelocks={4})".format(depot, stream.name, startTransaction, endTransaction, ignoreTimelocks))
+            deepHist = accurev.ext.deep_hist(depot=depot, stream=stream.name, timeSpec="{0}-{1}".format(startTransaction, endTransaction), ignoreTimelocks=ignoreTimelocks)
+            self.config.logger.info("Deep-hist returned {count} transactions to process.".format(count=len(deepHist)))
             if deepHist is None:
                 raise Exception("accurev.ext.deep_hist() failed to return a result!")
         while True:
