@@ -2069,19 +2069,21 @@ class ext(object):
             else:
                 # Here we must figure out what transaction range is before the timelock.
                 timeSpec = ext.normalize_timespec(depot=depot, timeSpec=timeSpec)
-                # Ensure ascending order for the timespec.
-                isAsc = timeSpec.is_asc()
-                if not isAsc:
-                    # Make descending
-                    timeSpec = timeSpec.reversed()
                 if timeSpec is not None:
+                    # Ensure ascending order for the timespec.
+                    isAsc = timeSpec.is_asc()
+                    if not isAsc:
+                        # Make descending
+                        timeSpec = timeSpec.reversed()
+                    # Get the transaction number at the given time.
                     preLockTr = hist(depot=depot, timeSpec=UTCDateTimeOrNone(timelock)).transactions[0]
                     if timeSpec.start > preLockTr.id + 1:
                         return None
                     elif timeSpec.end > preLockTr.id:
                         timeSpec.end = preLockTr.id
-                if not isAsc:
-                    timeSpec = timeSpec.reversed()
+
+                    if not isAsc:
+                        timeSpec = timeSpec.reversed()
 
         return timeSpec
 
@@ -2155,7 +2157,7 @@ class ext(object):
                         if not ignoreTimelocks:
                             timelockTs = ext.restrict_timespec_to_timelock(depot=streamInfo.depotName, timeSpec=parentTs, timelock=streamInfo.time)
                         if timelockTs is not None: # A None value indicates that the entire timespec is after the timelock.
-                            parentTrList = ext.deep_hist(depot=depot, stream=parentStream, timeSpec=timelockTs)
+                            parentTrList = ext.deep_hist(depot=depot, stream=parentStream, timeSpec=timelockTs, ignoreTimelocks=ignoreTimelocks)
                             trList.extend(parentTrList)
                     parentTs = obj.TimeSpec(start=tr.id, end=ts.end)
 
@@ -2169,7 +2171,7 @@ class ext(object):
             if not ignoreTimelocks:
                 timelockTs = ext.restrict_timespec_to_timelock(depot=streamInfo.depotName, timeSpec=parentTs, timelock=streamInfo.time)
             if timelockTs is not None: # A None value indicates that the entire timespec is after the timelock.
-                parentTrList = ext.deep_hist(depot=depot, stream=parentStream, timeSpec=timelockTs)
+                parentTrList = ext.deep_hist(depot=depot, stream=parentStream, timeSpec=timelockTs, ignoreTimelocks=ignoreTimelocks)
                 trList.extend(parentTrList)
 
         rv = sorted(trList, key=lambda tr: tr.id)
