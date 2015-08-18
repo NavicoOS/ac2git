@@ -484,7 +484,7 @@ class AccuRev2Git(object):
 
             startTr = startTrHist.transactions[0]
             if tr.id < startTr.id:
-                self.config.logger.info( "The first transaction (#{0}) for strem {1} is earlier than the conversion start transaction (#{2}).".format(tr.id, streamName, startTr.id) )
+                self.config.logger.info( "The first transaction (#{0}) for stream {1} is earlier than the conversion start transaction (#{2}).".format(tr.id, streamName, startTr.id) )
                 tr = startTr
         if endTransaction is not None:
             endTrHist = self.TryHist(depot=depot, trNum=endTransaction)
@@ -493,7 +493,7 @@ class AccuRev2Git(object):
 
             endTr = endTrHist.transactions[0]
             if endTr.id < tr.id:
-                self.config.logger.info( "The first transaction (#{0}) for strem {1} is later than the conversion end transaction (#{2}).".format(tr.id, streamName, startTr.id) )
+                self.config.logger.info( "The first transaction (#{0}) for stream {1} is later than the conversion end transaction (#{2}).".format(tr.id, streamName, startTr.id) )
                 tr = None
 
         return tr
