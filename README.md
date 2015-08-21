@@ -1,6 +1,6 @@
 ### Credits ###
 
-This tool was inspired by the work done by Ryan LaNeve in his https://github.com/rlaneve/accurev2git repository and the desire to improve it. Since this script is sufficiently different I have placed it in a separate repository here. I must also thank Tom Isaacson for his contribusion to the discussions about the tool and how it could be improved. You can find his fork of the original repo here https://github.com/parsley72/accurev2git.
+This tool was inspired by the work done by Ryan LaNeve in his https://github.com/rlaneve/accurev2git repository and the desire to improve it. Since this script is sufficiently different I have placed it in a separate repository here. I must also thank Tom Isaacson for his contribusion to the discussions about the tool and how it could be improved. It was his work that prompted me to start on this implementation. You can find his fork of the original repo here https://github.com/parsley72/accurev2git.
 
 The algorithm used here was devised by Robert Smithson whose stated goal is to rid the multiverse of AccuRev since ridding just our verse is not good enough.
 
