@@ -873,7 +873,7 @@ class AccuRev2Git(object):
                         self.config.logger.dbg( "populated {0} files:".format(len(popResult.elements)) )
                         for e in popResult.elements:
                             self.config.logger.dbg( "  {0}".format(e.location) )
-                        self.config.logger.info("Transaction #{0} is a no-op. Potential but unlikely error. Continuing.".format(tr.id))
+                        self.config.logger.info("stream {0}: tr. #{1} is a no-op. Potential but unlikely error. Continuing.".format(stream.name, tr.id))
                     else:
                         break # Early return from processing this stream. Restarting should clean everything up.
                 else:
