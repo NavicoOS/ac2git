@@ -59,7 +59,7 @@ class Config(object):
 		if d > 0:
 		    outMessage += "{d: >2d}d, ".format(d=int(d))
 		
-                outMessage += "{h: >2d}:{m:0>2d}:{s:0>2.2f}# ".format(h=int(h), m=int(m), s=s)
+                outMessage += "{h: >2d}:{m:0>2d}:{s:0>5.2f}# ".format(h=int(h), m=int(m), s=s)
             else:
                 outMessage = ""
             
