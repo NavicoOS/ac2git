@@ -629,7 +629,7 @@ class AccuRev2Git(object):
                 self.config.logger.error("Failed to commit! No last hash available.")
                 return None
         elif "nothing to commit" in self.gitRepo.lastStdout:
-            self.config.logger.error( "nothing to commit after populating transaction {0}...?".format(transaction.id) )
+            self.config.logger.dbg( "nothing to commit after populating transaction {0}...?".format(transaction.id) )
         else:
             self.config.logger.error( "Failed to commit transaction {0}".format(transaction.id) )
             self.config.logger.error( "\n{0}\n{1}\n".format(self.gitRepo.lastStdout, self.gitRepo.lastStderr) )
@@ -861,19 +861,19 @@ class AccuRev2Git(object):
                 commitHash = self.Commit(depot=depot, stream=stream, transaction=tr, branchName=branchName, isFirstCommit=False)
                 if commitHash is None:
                     if"nothing to commit" in self.gitRepo.lastStdout:
-                        self.config.logger.error( "diff info ({0} elements):".format(len(diff.elements)) )
+                        self.config.logger.dbg( "diff info ({0} elements):".format(len(diff.elements)) )
                         for element in diff.elements:
                             for change in element.changes:
-                                self.config.logger.error( "  what changed: {0}".format(change.what) )
-                                self.config.logger.error( "  original: {0}".format(change.stream1) )
-                                self.config.logger.error( "  new:      {0}".format(change.stream2) )
-                        self.config.logger.error( "deleted {0} files:".format(len(deletedPathList)) )
+                                self.config.logger.dbg( "  what changed: {0}".format(change.what) )
+                                self.config.logger.dbg( "  original: {0}".format(change.stream1) )
+                                self.config.logger.dbg( "  new:      {0}".format(change.stream2) )
+                        self.config.logger.dbg( "deleted {0} files:".format(len(deletedPathList)) )
                         for p in deletedPathList:
-                            self.config.logger.error( "  {0}".format(p) )
-                        self.config.logger.error( "populated {0} files:".format(len(popResult.elements)) )
+                            self.config.logger.dbg( "  {0}".format(p) )
+                        self.config.logger.dbg( "populated {0} files:".format(len(popResult.elements)) )
                         for e in popResult.elements:
-                            self.config.logger.error( "  {0}".format(e.location) )
-                        self.config.logger.info("Non-fatal error. Continuing.")
+                            self.config.logger.dbg( "  {0}".format(e.location) )
+                        self.config.logger.info("Transaction #{0} is a no-op. Potential but unlikely error. Continuing.".format(tr.id))
                     else:
                         break # Early return from processing this stream. Restarting should clean everything up.
                 else:
