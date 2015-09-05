@@ -778,10 +778,24 @@ class AccuRev2Git(object):
             commitHash = self.GetLastCommitHash(branchName=branchName)
             hist = self.GetHistForCommit(commitHash=commitHash, branchName=branchName)
 
+            # This code should probably be controlled with some flag in the configuration/command line...
             if hist is None:
-                self.config.logger.error("Repo in invalid state. Please reset this branch to a previous commit with valid notes.")
-                self.config.logger.error("  e.g. git reset --hard {0}~1".format(branchName))
-                return (None, None)
+                self.config.logger.error("Repo in invalid state. Attempting to auto-recover.")
+                resetCmd = ['git', 'reset', '--hard', '{0}^'.format(branchName)]
+                self.config.logger.error("Deleting last commit from this branch using, {0}".format(' '.join(resetCmd)))
+                try:
+                    subprocess.check_call(resetCmd)
+                except CalledProcessError:
+                    self.config.logger.error("Failed to reset branch. Aborting!")
+                    return (None, None)
+
+                commitHash = self.GetLastCommitHash(branchName=branchName)
+                hist = self.GetHistForCommit(commitHash=commitHash, branchName=branchName)
+
+                if hist is None:
+                    self.config.logger.error("Repo in invalid state. Please reset this branch to a previous commit with valid notes.")
+                    self.config.logger.error("  e.g. git reset --hard {0}~1".format(branchName))
+                    return (None, None)
 
             tr = hist.transactions[0]
             stream = accurev.show.streams(depot=depot, stream=stream.streamNumber, timeSpec=tr.id).streams[0]
@@ -793,7 +807,7 @@ class AccuRev2Git(object):
             return (None, None)
         endTr = endTrHist.transactions[0]
         self.config.logger.info("{0}: processing transaction range #{1} - #{2}".format(stream.name, tr.id, endTr.id))
-        
+
         deepHist = None
         if self.config.method == "deep-hist":
             ignoreTimelocks=True # The code for the timelocks is not tested fully yet. Once tested setting this to false should make the resulting set of transactions smaller
