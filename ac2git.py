@@ -298,6 +298,8 @@ class AccuRev2Git(object):
     # Returns True if the path was deleted, otherwise false
     def DeletePath(self, path):
         if os.path.exists(path):
+            if os.path.islink(path):
+                os.remove(path)
             if os.path.isdir(path):
                 shutil.rmtree(path)
             elif os.path.isfile(path):
@@ -311,11 +313,11 @@ class AccuRev2Git(object):
             for name in files:
                 path = os.path.join(root, name)
                 if git.GetGitDirPrefix(path) is None:
-                    os.remove(path)
+                    self.DeletePath(path)
             for name in dirs:
                 path = os.path.join(root, name)
                 if git.GetGitDirPrefix(path) is None:
-                    os.rmdir(path)
+                    self.DeletePath(path)
 
     def PreserveEmptyDirs(self):
         preservedDirs = []
