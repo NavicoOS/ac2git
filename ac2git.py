@@ -1316,7 +1316,9 @@ class AccuRev2Git(object):
             if self.config.git.finalize is not None and self.config.git.finalize:
                 self.StitchBranches()
             else:
+                self.gitRepo.raw_cmd([u'git', u'config', u'--local', u'gc.auto', u'0'])
                 self.ProcessStreams()
+                self.gitRepo.raw_cmd([u'git', u'config', u'--local', u'--unset-all', u'gc.auto'])
               
             if doLogout:
                 if accurev.logout():
