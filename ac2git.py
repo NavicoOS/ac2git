@@ -782,7 +782,7 @@ class AccuRev2Git(object):
                 self.config.logger.error("Deleting last commit from this branch using, {0}".format(' '.join(resetCmd)))
                 try:
                     subprocess.check_call(resetCmd)
-                except CalledProcessError:
+                except subprocess.CalledProcessError:
                     self.config.logger.error("Failed to reset branch. Aborting!")
                     return (None, None)
 
