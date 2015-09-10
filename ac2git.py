@@ -298,12 +298,10 @@ class AccuRev2Git(object):
     # Returns True if the path was deleted, otherwise false
     def DeletePath(self, path):
         if os.path.exists(path):
-            if os.path.islink(path):
+            if os.path.islink(path) or os.path.isfile(path):
                 os.remove(path)
-            if os.path.isdir(path):
+            elif os.path.isdir(path):
                 shutil.rmtree(path)
-            elif os.path.isfile(path):
-                os.remove(path)
             
         return not os.path.exists(path)
    
