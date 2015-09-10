@@ -538,7 +538,7 @@ class AccuRev2Git(object):
                 break
 
         if stateJson is not None:
-            stateJson = stateJson.strip().encode('utf-8')
+            stateJson = stateJson.strip()
             stateObj = json.loads(stateJson)
         else:
             self.config.logger.error("Failed to load the last transaction for commit {0} from {1} notes.".format(commitHash, branchName))
