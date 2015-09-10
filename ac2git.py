@@ -425,7 +425,7 @@ class AccuRev2Git(object):
         stateDict = { "depot": depotName, "stream": stream.name, "stream_number": stream.streamNumber, "transaction_number": transaction.id, "transaction_kind": transaction.Type }
         notesFilePath = os.path.join(self.cwd, 'notes_message')
         with codecs.open(notesFilePath, 'w', "utf-8") as notesFile:
-            notesFile.write(json.dumps(stateDict).decode("utf-8"))
+            notesFile.write(json.dumps(stateDict))
 
         rv = self.gitRepo.notes.add(messageFile=notesFilePath, obj=commitHash, ref=ref, force=True, committer=committer, committerDate=committerDate, committerTimezone=committerTimezone, author=committer, authorDate=committerDate, authorTimezone=committerTimezone)
         
@@ -449,7 +449,7 @@ class AccuRev2Git(object):
                 self.config.logger.error('accurev hist returned an empty xml for transaction {0} (commit {1})'.format(transaction.id, commitHash))
                 return False
             else:
-                notesFile.write(arHistXml.decode("utf-8"))
+                notesFile.write(arHistXml)
 
         rv = self.gitRepo.notes.add(messageFile=notesFilePath, obj=commitHash, ref=ref, force=True, committer=committer, committerDate=committerDate, committerTimezone=committerTimezone, author=committer, authorDate=committerDate, authorTimezone=committerTimezone)
         

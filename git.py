@@ -20,14 +20,6 @@ from math import floor
 
 gitCmd = u'git'
 
-# Borrowed from https://github.com/pypa/pip/issues/1137#issuecomment-23613766
-# for subprocess.check_output(cmd) calls...
-def to_utf8(string):
-    if isinstance(string, unicode):
-        return string.encode('utf-8')
-    else:
-        return string
-
 class GitStatus(object):
     # Regular expressions used in fromgitoutput classmethod for parsing the different git lines.
     branchRe        = re.compile(r'^On branch (\w)$')
@@ -267,7 +259,7 @@ class repo(object):
         self._lastCommand = None
     
     def _docmd(self, cmd, env=None):
-        process = subprocess.Popen(args=(to_utf8(c) for c in cmd), cwd=self.path, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+        process = subprocess.Popen(args=cmd, cwd=self.path, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
 
         output = ''
         error  = ''
@@ -279,12 +271,12 @@ class repo(object):
             process.poll()
         
         self._lastCommand = process
-        self.lastStderr = error.decode('utf-8')
-        self.lastStdout = output.decode('utf-8')
+        self.lastStderr = error
+        self.lastStdout = output
         self.lastReturnCode = process.returncode
 
         if process.returncode == 0:
-            return output.decode('utf-8')
+            return output
         else:
             return None
 
@@ -349,7 +341,7 @@ class repo(object):
             if isinstance(fileList, list):
                 cmd.extend(fileList)
             else:
-                cmd.append(unicode(fileList))
+                cmd.append(fileList)
         
         output = self._docmd(cmd)
         
@@ -383,9 +375,9 @@ class repo(object):
                 cmd.append(u'--date="{0}"'.format(dateStr))
         
         if message is not None and len(message) > 0:
-            cmd.extend([ u'-m', unicode(message) ])
+            cmd.extend([ u'-m', message ])
         elif messageFile is not None:
-            cmd.extend([ u'-F', unicode(messageFile) ])
+            cmd.extend([ u'-F', messageFile ])
         elif not allow_empty_message:
             raise Exception(u'Error, tried to commit with empty message')
         
