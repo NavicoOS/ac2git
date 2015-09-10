@@ -464,7 +464,7 @@ class AccuRev2Git(object):
 
     def GetFirstTransaction(self, depot, streamName, startTransaction=None, endTransaction=None):
         # Get the stream creation transaction (mkstream). Note: The first stream in the depot doesn't have an mkstream transaction.
-        for i in xrange(0, AccuRev2Git.commandFailureRetryCount):
+        for i in range(0, AccuRev2Git.commandFailureRetryCount):
             mkstream = accurev.hist(stream=streamName, transactionKind="mkstream", timeSpec="now")
             if mkstream is not None:
                 break
@@ -507,7 +507,7 @@ class AccuRev2Git(object):
 
     def GetLastCommitHash(self, branchName=None):
         cmd = []
-        for i in xrange(0, AccuRev2Git.commandFailureRetryCount):
+        for i in range(0, AccuRev2Git.commandFailureRetryCount):
             cmd = [u'git', u'log', u'-1', u'--format=format:%H']
             if branchName is not None:
                 cmd.append(branchName)
@@ -532,7 +532,7 @@ class AccuRev2Git(object):
             branchName = AccuRev2Git.gitNotesRef_AccurevHistXml
 
         stateJson = None
-        for i in xrange(0, AccuRev2Git.commandFailureRetryCount):
+        for i in range(0, AccuRev2Git.commandFailureRetryCount):
             stateJson = self.gitRepo.notes.show(obj=commitHash, ref=branchName)
             if stateJson is not None:
                 break
@@ -603,7 +603,7 @@ class AccuRev2Git(object):
                 if lastCommitHash != commitHash:
                     self.config.logger.dbg( "Committed {0}".format(commitHash) )
                     xmlNoteWritten = False
-                    for i in xrange(0, AccuRev2Git.commandFailureRetryCount):
+                    for i in range(0, AccuRev2Git.commandFailureRetryCount):
                         ref = branchName
                         if ref is None:
                             ref = AccuRev2Git.gitNotesRef_AccurevHistXml
@@ -635,7 +635,7 @@ class AccuRev2Git(object):
         return commitHash
 
     def TryDiff(self, streamName, firstTrNumber, secondTrNumber):
-        for i in xrange(0, AccuRev2Git.commandFailureRetryCount):
+        for i in range(0, AccuRev2Git.commandFailureRetryCount):
             diff = accurev.diff(all=True, informationOnly=True, verSpec1=streamName, verSpec2=streamName, transactionRange="{0}-{1}".format(firstTrNumber, secondTrNumber))
             if diff is not None:
                 break
@@ -705,14 +705,14 @@ class AccuRev2Git(object):
         return deletedPathList
 
     def TryHist(self, depot, trNum):
-        for i in xrange(0, AccuRev2Git.commandFailureRetryCount):
+        for i in range(0, AccuRev2Git.commandFailureRetryCount):
             endTrHist = accurev.hist(depot=depot, timeSpec="{0}.1".format(trNum))
             if endTrHist is not None:
                 break
         return endTrHist
 
     def TryPop(self, streamName, transaction, overwrite=False):
-        for i in xrange(0, AccuRev2Git.commandFailureRetryCount):
+        for i in range(0, AccuRev2Git.commandFailureRetryCount):
             popResult = accurev.pop(verSpec=streamName, location=self.gitRepo.path, isRecursive=True, isOverride=overwrite, timeSpec=transaction.id, elementList='.')
             if popResult:
                 break
@@ -1043,7 +1043,7 @@ class AccuRev2Git(object):
                     inOrder = sorted(branchRevMap[tree_hash], key=lambda x: int(x[u'committer'][u'time']))
                     #print(u'tree: {0}'.format(tree_hash))
                     
-                    for i in xrange(0, len(inOrder) - 1):
+                    for i in range(0, len(inOrder) - 1):
                         first = inOrder[i]
                         second = inOrder[i + 1]
                         
