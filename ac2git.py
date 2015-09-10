@@ -48,20 +48,17 @@ class Config(object):
             self.logFileErrorEnabled = True
         
         def _FormatMessage(self, messages):
+            outMessage = ""
             if self.referenceTime is not None:
-                #outMessage = "{0: >6.2f}s: ".format((datetime.now() - self.referenceTime).total_seconds()) # Print as total seconds with 2 decimal places.
-                #outMessage = "{0}: ".format(datetime.now() - self.referenceTime) # Print as a timedelta (which has 6 decimal places)
-		# Custom formatting of the timestamp
-		m, s = divmod((datetime.now() - self.referenceTime).total_seconds(), 60)
-		h, m = divmod(m, 60)
-		d, h = divmod(h, 24)
-		outMessage = ""
-		if d > 0:
-		    outMessage += "{d: >2d}d, ".format(d=int(d))
-		
+                # Custom formatting of the timestamp
+                m, s = divmod((datetime.now() - self.referenceTime).total_seconds(), 60)
+                h, m = divmod(m, 60)
+                d, h = divmod(h, 24)
+                
+                if d > 0:
+                    outMessage += "{d: >2d}d, ".format(d=int(d))
+                
                 outMessage += "{h: >2d}:{m:0>2d}:{s:0>5.2f}# ".format(h=int(h), m=int(m), s=s)
-            else:
-                outMessage = ""
             
             outMessage += " ".join([str(x) for x in messages])
             
