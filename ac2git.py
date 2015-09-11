@@ -297,13 +297,15 @@ class AccuRev2Git(object):
 
     # Returns True if the path was deleted, otherwise false
     def DeletePath(self, path):
-        if os.path.exists(path):
-            if os.path.islink(path) or os.path.isfile(path):
+        if os.path.lexists(path):
+            if os.path.islink(path):
+                os.unlink(path)
+            elif os.path.isfile(path):
                 os.remove(path)
             elif os.path.isdir(path):
                 shutil.rmtree(path)
             
-        return not os.path.exists(path)
+        return not os.path.lexists(path)
    
     def ClearGitRepo(self):
         # Delete everything except the .git folder from the destination (git repo)
