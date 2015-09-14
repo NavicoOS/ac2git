@@ -91,7 +91,7 @@ The first method is the one Ryan LaNeve implemented, which I call the _pop metho
 
 #### Diff method ####
 
-The second and third method were devised by *Robert Smithson* and are a lot faster than the _pop method_ but rely on some features that came in the AccuRev 6.1 client.
+The second and third method were devised by [Robert Smithson](https://github.com/fatfreddie) and are a lot faster than the _pop method_ but rely on some features that came in the AccuRev 6.1 client.
 
 I refer to the second method as the _diff method_ and it is a simple optimisation over the _pop method_. It works as follows:
  - Find the `mkstream` transaction and populate it.
@@ -181,11 +181,33 @@ Run that script and your repo will end up with merge points.
 
 I would like to make it possible to run this step iteratively as you convert the repo but currently it is a single massive process at the end of the conversion.
 
-*Note: This part is still being tested and may or may not work as you expect.* 
+*Note: This part is still being tested and may or may not work as you expect.*
+
+##### How it works #####
+
+The branch merge points are identified by finding identical _trees_ in git. In git your entire directory is just another hashable item and the hash uniquely identifies its contents. This means that we can use git to figure out where our currently independent streams have identical contents. So we want to find all of the _commits_ which have the same _trees_. The `git_stitch.py` scrip is used to build up a dictionary (hash table) of all of the _tree hashes_ to the _commit hashes_ (which are kindly supplied by git itself). It uses the `git cat-file -p <hash>` command to build up the dictionary:
+
+```
+git cat-file -p efb930b495b283522be6e04673e02dfe13103f67
+tree a9ec21d1d1ddec032fba82288cfea12efa41cfde
+parent 0724e74da61cfff0c55318a7795ba18b00e09b31
+author Lazar Sumar <bugzilla@lazar.co.nz> 1442192418 +1200
+committer Lazar Sumar <bugzilla@lazar.co.nz> 1442192418 +1200
+```
+
+Once we do find two identical trees we figure out which one should be the _parent_ by comparing their respective timestamps in UTC. The earlier one will become the parent of the later one, almost always. The only time they won't is if the two streams are _siblings_. We can only perform merges on parent child relationships and can't merge siblings or any stream that is not a direct or indirect parent of the other.
+
+We could further restrict the merges to only occur in direct parent child relationships but since the script allows you to specify specific streams to track/convert it wouldn't make sense to make this restriction. This is because you wouln't get some potential merges that you would likely want because an intermediate stream was missing.
+
+This part gets pretty messy when you try to consider all the possibilities so I will leave it there.
+
+The last part, that should be considered, is the _aliased commit_ or _shadow commit_ which is a result of a promote into the parent stream that flowed down to a child stream which was empty at the time. Ideally we would want to remove one of these commits, preferably the child streams, and have it look like the child stream merged into the parent for a short period of time. An argument was made for the opposite, the parent merging into the child, but I implemented it as a merge into the parent. I would like to add a switch that controls this behavior when there is time.
+
+Finally, all of the changes are turned into 3 scripts, 2 of which are given as arguments to the `git filter-branch` command inside the 3rd script.
 
 ### Dear contributors ###
 
-I am not a python developer which should be evident to anyone whos seen the code. A lot of it was written late at night and was meant to be just a brain dump, to be cleaned up at a later date, but it remained. Please don't be dissuaded from contributing and helping me improve it because it will get us all closer to ditching AccuRev! I will do my best to add some notes about my method and how the code works.
+I am not a python developer which should be evident to anyone who's seen the code. A lot of it was written late at night and was meant to be just a brain dump, to be cleaned up at a later date, but it remained. Please don't be dissuaded from contributing and helping me improve it because it will get us all closer to ditching AccuRev! I will do my best to add some notes about my method and how the code works.
 
 For now it works as I need it to and that's enough.
 
