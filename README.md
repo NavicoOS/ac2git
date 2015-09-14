@@ -91,7 +91,7 @@ The first method is the one Ryan LaNeve implemented, which I call the _pop metho
 
 #### Diff method ####
 
-The second and third method were devised by *Robert Smithson* and are a lot faster than the _pop method_ but rely on some features that came in the AccuRev 6.1 client.
+The second and third method were devised by [Robert Smithson](https://github.com/fatfreddie) and are a lot faster than the _pop method_ but rely on some features that came in the AccuRev 6.1 client.
 
 I refer to the second method as the _diff method_ and it is a simple optimisation over the _pop method_. It works as follows:
  - Find the `mkstream` transaction and populate it.
