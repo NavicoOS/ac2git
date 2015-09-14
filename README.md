@@ -12,7 +12,7 @@ My work is merely in the implementation and I humbly offer it to anyone who does
 AccuRev2Git is a tool to convert an AccuRev depot into a git repo. A specified AccuRev stream will be the target of the conversion, and all promotes to that stream will be turned into commits within the new git repository.
 
 ### Getting started ###
-- Install python 2.7
+- Install python 3.4
 
 - Make sure the paths to the `accurev` and `git` executables are correct for your machine, and that git default configuration has been set.
 
