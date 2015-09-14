@@ -697,7 +697,7 @@ class AccuRev2Git(object):
                     if stream is not None and stream.name is not None:
                         name = stream.name.replace('\\', '/').lstrip('/')
                         path = os.path.join(self.gitRepo.path, name)
-                        if os.path.exists(path):
+                        if os.path.lexists(path): # Ensure that broken links are also deleted!
                             if not self.DeletePath(path):
                                 self.config.logger.error("Failed to delete '{0}'.".format(path))
                                 raise Exception("Failed to delete '{0}'".format(path))
