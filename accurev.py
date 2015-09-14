@@ -2190,7 +2190,8 @@ class ext(object):
         
         rv = None
 
-        destStream = transaction.affectedStream()[0]
+        destStreamNum = transaction.affectedStream()[1]
+        destStream = show.streams(depot=depot, timeSpec=transaction.id, stream=destStreamNum).streams[0].name
 
         if destStream is not None:
             streamMap = ext.stream_dict(depot=depot, transaction=transaction.id)
