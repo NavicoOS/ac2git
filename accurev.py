@@ -14,6 +14,7 @@ import subprocess
 import xml.etree.ElementTree as ElementTree
 import datetime
 import re
+import sqlite3
 
 # ################################################################################################ #
 # Script Globals                                                                                   #
@@ -1228,6 +1229,7 @@ class obj:
                        , top=itemMap.get("Top"))
 
 
+
 # ################################################################################################ #
 # AccuRev raw commands                                                                             #
 # The raw class namespaces raw accurev commands that return text output directly from the terminal #
@@ -1237,28 +1239,101 @@ class raw(object):
     # cases.
     _lastCommand = None
     _accurevCmd = "accurev"
-    
+    _commandCacheFilename = None
+
+    class CommandCache(object):
+        createTableQuery = '''
+CREATE TABLE IF NOT EXISTS command_cache (
+  command TEXT PRIMARY KEY NOT NULL,
+  result  INT NOT NULL,
+  stdout  TEXT NOT NULL,
+  stderr  TEXT
+);
+'''
+
+        def __enter__(self):
+            self.Close()
+            self.Open()
+
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            self.Close()
+            return False
+
+        def __init__(self, filepath):
+            self.filepath = filepath
+            self.connection = None
+            self.cursor = None
+
+        def Open(self):
+            self.connection = sqlite3.connect(self.filepath)
+            self.cursor = self.connection.cursor()
+            self.cursor.execute(raw.CommandCache.createTableQuery)
+            self.connection.commit()
+
+        def Close(self):
+            if self.cursor is not None:
+                self.cursor.close()
+                self.cursor = None
+            if self.connection is not None:
+                self.connection.close()
+                self.connection = None
+        
+        def Get(self, cmd):
+            self.cursor.execute('SELECT * FROM command_cache WHERE command = ?;', (str(cmd),))
+            row = self.cursor.fetchone()
+            if row is not None:
+                row2 = self.cursor.fetchone()
+                if row2 is not None:
+                    raise Exception("Invariant violation! The cache should not contain duplicate commands!")
+            return row
+
+        def Add(self, cmd, result, stdout, stderr=None):
+            self.cursor.execute('INSERT INTO command_cache (command, result, stdout, stderr) VALUES (?, ?, ?, ?);', (str(cmd), int(result), stdout, stderr))
+            self.connection.commit()
+
+        def Remove(self, cmd):
+            self.cursor.execute('DELETE FROM command_cache WHERE command = ?;', (str(cmd),))
+            self.connection.commit()
+
+        def Update(self, cmd, result, stdout, stderr=None):
+            self.Remove(cmd)
+            self.Add(cmd=cmd, result=result, stdout=stdout, stderr=stderr)
+ 
     @staticmethod
-    def _runCommand(cmd, outputFilename=None):
+    def _runCommand(cmd, outputFilename=None, useCache=False):
         outputFile = None
         if outputFilename is not None:
             outputFile = open(outputFilename, "w")
             accurevCommand = subprocess.Popen(cmd, stdout=outputFile, stdin=subprocess.PIPE, universal_newlines=True)
+        elif raw._commandCacheFilename is not None and useCache:
+            # Command cache shortcut.
+            with CommandCache(raw._commandCacheFilename) as cc:
+               cmd, returncode, output, error = cc.Get(cmd=cmd)
+            raw._lastCommand = None
+            return output
         else:
             accurevCommand = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.PIPE, universal_newlines=True)
             
-        xmlOutput = ''
+        output = ''
+        error = ''
         accurevCommand.poll()
         while accurevCommand.returncode is None:
             stdoutdata, stderrdata = accurevCommand.communicate()
+            error += stderrdata
             if outputFile is None:
-                xmlOutput += stdoutdata
+                output += stdoutdata
             accurevCommand.poll()
         
         raw._lastCommand = accurevCommand
+
+        if raw._commandCacheFilename is not None and useCache:
+            with CommandCache(raw._commandCacheFilename) as cc:
+               cc.Add(cmd=cmd, result=accurevCommand.returncode, stdout=output, stderr=error)
         
         if outputFile is None:
-            return xmlOutput
+            return output
         else:
             outputFile.close()
             return 'Written to ' + outputFilename
@@ -1954,6 +2029,14 @@ class ext(object):
         if infoObj is None:
             infoObj = info()
         return (infoObj.principal != "(not logged in)")
+
+    @staticmethod
+    def enable_command_cache(cacheFilename):
+        raw._commandCacheFilename = cacheFilename
+
+    @staticmethod
+    def disable_command_cache():
+        raw._commandCacheFilename = None
 
     # Get the last chstream transaction. If no chstream transactions have been made the mkstream
     # transaction is returned. If no mkstream transaction exists None is returned.
