@@ -201,11 +201,11 @@ class obj:
                     timeSpecPartMatch = obj.TimeSpec.timeSpecPartRe.search(timespec)
                     if timeSpecPartMatch is not None:
                         timeSpecPartDict = timeSpecPartMatch.groupdict()
-                        if 'keyword' in timeSpecPartDict:
+                        if 'keyword' in timeSpecPartDict and timeSpecPartDict['keyword'] is not None:
                             rv = timeSpecPartDict['keyword']
-                        elif 'transaction' in timeSpecPartDict:
+                        elif 'transaction' in timeSpecPartDict and timeSpecPartDict['transaction'] is not None:
                             rv = int(timeSpecPartDict['transaction'])
-                        elif 'datetime' in timeSpecPartDict:
+                        elif 'datetime' in timeSpecPartDict and timeSpecPartDict['datetime'] is not None:
                             rv = datetime.datetime(year=int(timeSpecPartDict['year']), month=int(timeSpecPartDict['month']), day=int(timeSpecPartDict['day']), hour=int(timeSpecPartDict['hour']), minute=int(timeSpecPartDict['minute']), second=int(timeSpecPartDict['second']))
                 elif isinstance(timespec, datetime.datetime):
                     rv = timespec
@@ -232,18 +232,12 @@ class obj:
 
                         start = end = limit = None
                         if 'start' in timeSpecDict:
-                            try:
-                                start = int(timeSpecDict['start'])
-                            except:
-                                start = timeSpecDict['start']
+                            start = obj.TimeSpec.parse_simple(timeSpecDict['start'])
                         if 'end' in timeSpecDict:
-                            try:
-                                end = int(timeSpecDict['end'])
-                            except:
-                                end = timeSpecDict['end']
+                            end = obj.TimeSpec.parse_simple(timeSpecDict['end'])
                         if 'limit' in timeSpecDict:
                             limit = timeSpecDict['limit']
-
+                        
                         return cls(start=start, end=end, limit=IntOrNone(limit))
                 else:
                     raise Exception("Unsupported type ({t}) of string ({s}) that was presented as a timespec.".format(t=type(string), s=str(string)))
@@ -2326,7 +2320,8 @@ class ext(object):
         
         rv = None
 
-        destStream = transaction.affectedStream()[0]
+        destStreamNum = transaction.affectedStream()[1]
+        destStream = show.streams(depot=depot, timeSpec=transaction.id, stream=destStreamNum).streams[0].name
 
         if destStream is not None:
             streamMap = ext.stream_dict(depot=depot, transaction=transaction.id)
