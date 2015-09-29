@@ -101,6 +101,7 @@ class Config(object):
                 password = xmlElement.attrib.get('password')
                 startTransaction = xmlElement.attrib.get('start-transaction')
                 endTransaction   = xmlElement.attrib.get('end-transaction')
+                commandCacheFilename = xmlElement.attrib.get('command-cache-filename')
                 
                 streamMap = None
                 streamListElement = xmlElement.find('stream-list')
@@ -115,17 +116,18 @@ class Config(object):
 
                         streamMap[streamName] = branchName
                 
-                return cls(depot, username, password, startTransaction, endTransaction, streamMap)
+                return cls(depot, username, password, startTransaction, endTransaction, streamMap, commandCacheFilename)
             else:
                 return None
             
-        def __init__(self, depot = None, username = None, password = None, startTransaction = None, endTransaction = None, streamMap = None):
+        def __init__(self, depot = None, username = None, password = None, startTransaction = None, endTransaction = None, streamMap = None, commandCacheFilename = None):
             self.depot    = depot
             self.username = username
             self.password = password
             self.startTransaction = startTransaction
             self.endTransaction   = endTransaction
             self.streamMap = streamMap
+            self.commandCacheFilename = commandCacheFilename
     
         def __repr__(self):
             str = "Config.AccuRev(depot=" + repr(self.depot)
@@ -138,6 +140,9 @@ class Config(object):
             str += ")"
             
             return str
+
+        def UseCommandCache(self):
+            return self.commandCacheFilename is not None
             
     class Git(object):
         @classmethod
@@ -559,7 +564,7 @@ class AccuRev2Git(object):
             trNum = stateObj["transaction_number"]
             depot = stateObj["depot"]
             if trNum is not None and depot is not None:
-                hist = accurev.hist(depot=depot, timeSpec=trNum)
+                hist = accurev.hist(depot=depot, timeSpec=trNum, useCache=self.config.accurev.UseCommandCache())
                 return hist
         return None
 
@@ -641,7 +646,7 @@ class AccuRev2Git(object):
 
     def TryDiff(self, streamName, firstTrNumber, secondTrNumber):
         for i in xrange(0, AccuRev2Git.commandFailureRetryCount):
-            diff = accurev.diff(all=True, informationOnly=True, verSpec1=streamName, verSpec2=streamName, transactionRange="{0}-{1}".format(firstTrNumber, secondTrNumber))
+            diff = accurev.diff(all=True, informationOnly=True, verSpec1=streamName, verSpec2=streamName, transactionRange="{0}-{1}".format(firstTrNumber, secondTrNumber), useCache=self.config.accurev.UseCommandCache())
             if diff is not None:
                 break
         if diff is None:
@@ -711,7 +716,7 @@ class AccuRev2Git(object):
 
     def TryHist(self, depot, trNum):
         for i in xrange(0, AccuRev2Git.commandFailureRetryCount):
-            endTrHist = accurev.hist(depot=depot, timeSpec="{0}.1".format(trNum))
+            endTrHist = accurev.hist(depot=depot, timeSpec="{0}.1".format(trNum), useCache=self.config.accurev.UseCommandCache())
             if endTrHist is not None:
                 break
         return endTrHist
@@ -901,6 +906,9 @@ class AccuRev2Git(object):
         return (tr, commitHash)
 
     def ProcessStreams(self):
+        if self.config.accurev.commandCacheFilename is not None:
+            accurev.ext.enable_command_cache(self.config.accurev.commandCacheFilename)
+        
         for stream in self.config.accurev.streamMap:
             branch = self.config.accurev.streamMap[stream]
             depot  = self.config.accurev.depot
@@ -919,6 +927,9 @@ class AccuRev2Git(object):
             tr, commitHash = self.ProcessStream(depot=depot, stream=streamInfo, branchName=branch, startTransaction=self.config.accurev.startTransaction, endTransaction=self.config.accurev.endTransaction)
             if tr is None or commitHash is None:
                 self.config.logger.error( "Error while processing stream {0}, branch {1}".format(stream, branch) )
+        
+        if self.config.accurev.commandCacheFilename is not None:
+            accurev.ext.disable_command_cache()
 
     def InitGitRepo(self, gitRepoPath):
         gitRootDir, gitRepoDir = os.path.split(gitRepoPath)
@@ -1269,6 +1280,8 @@ class AccuRev2Git(object):
             git.delete(self.config.git.repoPath)
             
         # From here on we will operate from the git repository.
+        if self.config.accurev.commandCacheFilename is not None:
+            self.config.accurev.commandCacheFilename = os.path.abspath(self.config.accurev.commandCacheFilename)
         self.cwd = os.getcwd()
         os.chdir(self.config.git.repoPath)
         
@@ -1346,13 +1359,15 @@ def DumpExampleConfigFile(outputFilename):
             depot:                The depot in which the stream/s we are converting are located
             start-transaction:    The conversion will start at this transaction. If interrupted the next time it starts it will continue from where it stopped.
             end-transaction:      Stop at this transaction. This can be the keword "now" if you want it to convert the repo up to the latest transaction.
+            command-cache-filename: The filename which will be given to the accurev.py script to use as a local command result cache for the accurev hist, accurev diff and accurev show streams commands.
     -->
     <accurev 
         username="joe_bloggs" 
         password="joanna" 
         depot="Trunk" 
         start-transaction="1" 
-        end-transaction="now" >
+        end-transaction="now" 
+        command-cache-filename="command_cache.sqlite3" >
         <!-- The stream-list is optional. If not given all streams are processed -->
         <!-- The branch-name attribute is also optional for each stream element. If provided it specifies the git branch name to which the stream will be mapped. -->
         <stream-list>
@@ -1462,13 +1477,15 @@ def AutoConfigFile(filename, args, preserveConfig=False):
             depot:                The depot in which the stream/s we are converting are located
             start-transaction:    The conversion will start at this transaction. If interrupted the next time it starts it will continue from where it stopped.
             end-transaction:      Stop at this transaction. This can be the keword "now" if you want it to convert the repo up to the latest transaction.
+            command-cache-filename: The filename which will be given to the accurev.py script to use as a local command result cache for the accurev hist, accurev diff and accurev show streams commands.
     -->
     <accurev 
         username="{accurev_username}" 
         password="{accurev_password}" 
         depot="{accurev_depot}" 
         start-transaction="{start_transaction}" 
-        end-transaction="{end_transaction}" >
+        end-transaction="{end_transaction}" 
+        command-cache-filename="command_cache.sqlite3" >
         <!-- The stream-list is optional. If not given all streams are processed -->
         <!-- The branch-name attribute is also optional for each stream element. If provided it specifies the git branch name to which the stream will be mapped. -->
         <stream-list>""".format(accurev_username=config.accurev.username, accurev_password=config.accurev.password, accurev_depot=config.accurev.depot, start_transaction=1, end_transaction="now"))
@@ -1631,6 +1648,7 @@ def PrintConfigSummary(config):
         config.logger.info('    start tran.: #{0}'.format(config.accurev.startTransaction))
         config.logger.info('    end tran.:   #{0}'.format(config.accurev.endTransaction))
         config.logger.info('    username: {0}'.format(config.accurev.username))
+        config.logger.info('    command cache: {0}'.format(config.accurev.commandCacheFilename))
         config.logger.info('  method: {0}'.format(config.method))
         config.logger.info('  usermaps: {0}'.format(len(config.usermaps)))
         config.logger.info('  log file: {0}'.format(config.logFilename))
