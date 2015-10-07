@@ -24,6 +24,7 @@ import copy
 import codecs
 import json
 import pytz
+import tempfile
 
 from collections import OrderedDict
 
@@ -433,44 +434,57 @@ class AccuRev2Git(object):
     # Adds a JSON string respresentation of `stateDict` to the given commit using `git notes add`.
     def AddScriptStateNote(self, depotName, stream, transaction, commitHash, ref, committer=None, committerDate=None, committerTimezone=None):
         stateDict = { "depot": depotName, "stream": stream.name, "stream_number": stream.streamNumber, "transaction_number": transaction.id, "transaction_kind": transaction.Type }
-        notesFilePath = os.path.join(self.cwd, 'notes_message')
-        with codecs.open(notesFilePath, 'w', "utf-8") as notesFile:
+        notesFilePath = None
+        with tempfile.NamedTemporaryFile(mode='w+', prefix='ac2git_note_', delete=False) as notesFile:
+            notesFilePath = notesFile.name
             notesFile.write(json.dumps(stateDict).decode("utf-8"))
 
-        rv = self.gitRepo.notes.add(messageFile=notesFilePath, obj=commitHash, ref=ref, force=True, committer=committer, committerDate=committerDate, committerTimezone=committerTimezone, author=committer, authorDate=committerDate, authorTimezone=committerTimezone)
-        
-        if rv is not None:
-            os.remove(notesFilePath)
-            self.config.logger.dbg( "Added script state note for {0}.".format(commitHash) )
-        else:
-            self.config.logger.error( "Failed to add script state note for {0}, tr. {1}".format(commitHash, transaction.id) )
-            self.config.logger.error(self.gitRepo.lastStderr)
 
-        return rv
+        if notesFilePath is not None:        
+            rv = self.gitRepo.notes.add(messageFile=notesFilePath, obj=commitHash, ref=ref, force=True, committer=committer, committerDate=committerDate, committerTimezone=committerTimezone, author=committer, authorDate=committerDate, authorTimezone=committerTimezone)
+            os.remove(notesFilePath)
+
+            if rv is not None:
+                self.config.logger.dbg( "Added script state note for {0}.".format(commitHash) )
+            else:
+                self.config.logger.error( "Failed to add script state note for {0}, tr. {1}".format(commitHash, transaction.id) )
+                self.config.logger.error(self.gitRepo.lastStderr)
+            
+            return rv
+        else:
+            self.config.logger.error( "Failed to create temporary file for script state note for {0}, tr. {1}".format(commitHash, transaction.id) )
+        
+        return None
 
     def AddAccurevHistNote(self, commitHash, ref, depot, transaction, committer=None, committerDate=None, committerTimezone=None, isXml=False):
         # Write the commit notes consisting of the accurev hist xml output for the given transaction.
         # Note: It is important to use the depot instead of the stream option for the accurev hist command since if the transaction
         #       did not occur on that stream we will get the closest transaction that was a promote into the specified stream instead of an error!
         arHistXml = accurev.raw.hist(depot=depot, timeSpec="{0}.1".format(transaction.id), isXmlOutput=isXml)
-        notesFilePath = os.path.join(self.cwd, 'notes_message')
-        with codecs.open(notesFilePath, 'w', "utf-8") as notesFile:
+        notesFilePath = None
+        with tempfile.NamedTemporaryFile(mode='w+', prefix='ac2git_note_', delete=False) as notesFile:
+            notesFilePath = notesFile.name
             if arHistXml is None or len(arHistXml) == 0:
                 self.config.logger.error('accurev hist returned an empty xml for transaction {0} (commit {1})'.format(transaction.id, commitHash))
                 return False
             else:
                 notesFile.write(arHistXml.decode("utf-8"))
-
-        rv = self.gitRepo.notes.add(messageFile=notesFilePath, obj=commitHash, ref=ref, force=True, committer=committer, committerDate=committerDate, committerTimezone=committerTimezone, author=committer, authorDate=committerDate, authorTimezone=committerTimezone)
         
-        if rv is not None:
+        if notesFilePath is not None:        
+            rv = self.gitRepo.notes.add(messageFile=notesFilePath, obj=commitHash, ref=ref, force=True, committer=committer, committerDate=committerDate, committerTimezone=committerTimezone, author=committer, authorDate=committerDate, authorTimezone=committerTimezone)
             os.remove(notesFilePath)
-            self.config.logger.dbg( "Added accurev hist{0} note for {1}.".format(' xml' if isXml else '', commitHash) )
+        
+            if rv is not None:
+                self.config.logger.dbg( "Added accurev hist{0} note for {1}.".format(' xml' if isXml else '', commitHash) )
+            else:
+                self.config.logger.error( "Failed to add accurev hist{0} note for {1}".format(' xml' if isXml else '', commitHash) )
+                self.config.logger.error(self.gitRepo.lastStderr)
+            
+            return rv
         else:
-            self.config.logger.error( "Failed to add accurev hist{0} note for {1}".format(' xml' if isXml else '', commitHash) )
-            self.config.logger.error(self.gitRepo.lastStderr)
+            self.config.logger.error( "Failed to create temporary file for accurev hist{0} note for {1}".format(' xml' if isXml else '', commitHash) )
 
-        return rv
+        return None
 
     def GetFirstTransaction(self, depot, streamName, startTransaction=None, endTransaction=None):
         # Get the stream creation transaction (mkstream). Note: The first stream in the depot doesn't have an mkstream transaction.
@@ -584,8 +598,9 @@ class AccuRev2Git(object):
         self.gitRepo.add(force=True, all=True, gitOpts=[u'-c', u'core.autocrlf=false'])
 
         # Make the first commit
-        messageFilePath = os.path.join(self.cwd, 'commit_message')
-        with codecs.open(messageFilePath, 'w', "utf-8") as messageFile:
+        messageFilePath = None
+        with tempfile.NamedTemporaryFile(mode='w+', prefix='ac2git_commit_', delete=False) as messageFile:
+            messageFilePath = messageFile.name
             if transaction.comment is None or len(transaction.comment) == 0:
                 messageFile.write(' ') # White-space is always stripped from commit messages. See the git commit --cleanup option for details.
             else:
@@ -593,6 +608,10 @@ class AccuRev2Git(object):
                 # So we will just add a space to the start of all the lines starting with a # in order to preserve them.
                 messageFile.write(transaction.comment)
         
+        if messageFilePath is None:
+            self.config.logger.error("Failed to create temporary file for commit message for transaction {0}, stream {1}, branch {2}".format(transaction.id, stream, branchName))
+            return None
+
         committer = self.GetGitUserFromAccuRevUser(transaction.user)
         committerDate, committerTimezone = self.GetGitDatetime(accurevUsername=transaction.user, accurevDatetime=transaction.time)
         if not isFirstCommit:
