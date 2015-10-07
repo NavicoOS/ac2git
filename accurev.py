@@ -14,6 +14,7 @@ import subprocess
 import xml.etree.ElementTree as ElementTree
 import datetime
 import re
+import sqlite3
 
 # ################################################################################################ #
 # Script Globals                                                                                   #
@@ -192,41 +193,54 @@ class obj:
         @staticmethod
         def parse_simple(timespec):
             rv = None
-
-            if obj.TimeSpec.timeSpecPartRe is None:
-                obj.TimeSpec.timeSpecPartRe = re.compile(r'^ *(?:(?P<transaction>\d+)|(?P<keyword>now|highest)|(?P<datetime>(?P<year>\d{4})/(?P<month>\d{2})/(?P<day>\d{2}) +(?P<hour>\d{2}):(?P<minute>\d{2}):(?P<second>\d{2}))) *$')
-            
-            timeSpecPartMatch = obj.TimeSpec.timeSpecPartRe.search(timespec)
-            if timeSpecPartMatch is not None:
-                timeSpecPartDict = timeSpecPartMatch.groupdict()
-                if 'keyword' in timeSpecPartDict and timeSpecPartDict['keyword'] is not None:
-                    rv = timeSpecPartDict['keyword']
-                elif 'transaction' in timeSpecPartDict and timeSpecPartDict['transaction'] is not None:
-                    rv = int(timeSpecPartDict['transaction'])
-                elif 'datetime' in timeSpecPartDict and timeSpecPartDict['datetime'] is not None:
-                    rv = datetime.datetime(year=int(timeSpecPartDict['year']), month=int(timeSpecPartDict['month']), day=int(timeSpecPartDict['day']), hour=int(timeSpecPartDict['hour']), minute=int(timeSpecPartDict['minute']), second=int(timeSpecPartDict['second']))
-
+            if timespec is not None:
+                if isinstance(timespec, str):
+                    if obj.TimeSpec.timeSpecPartRe is None:
+                        obj.TimeSpec.timeSpecPartRe = re.compile(r'^ *(?:(?P<transaction>\d+)|(?P<keyword>now|highest)|(?P<datetime>(?P<year>\d{4})/(?P<month>\d{2})/(?P<day>\d{2}) +(?P<hour>\d{2}):(?P<minute>\d{2}):(?P<second>\d{2}))) *$')
+                    
+                    timeSpecPartMatch = obj.TimeSpec.timeSpecPartRe.search(timespec)
+                    if timeSpecPartMatch is not None:
+                        timeSpecPartDict = timeSpecPartMatch.groupdict()
+                        if 'keyword' in timeSpecPartDict and timeSpecPartDict['keyword'] is not None:
+                            rv = timeSpecPartDict['keyword']
+                        elif 'transaction' in timeSpecPartDict and timeSpecPartDict['transaction'] is not None:
+                            rv = int(timeSpecPartDict['transaction'])
+                        elif 'datetime' in timeSpecPartDict and timeSpecPartDict['datetime'] is not None:
+                            rv = datetime.datetime(year=int(timeSpecPartDict['year']), month=int(timeSpecPartDict['month']), day=int(timeSpecPartDict['day']), hour=int(timeSpecPartDict['hour']), minute=int(timeSpecPartDict['minute']), second=int(timeSpecPartDict['second']))
+                elif isinstance(timespec, datetime.datetime):
+                    rv = timespec
+                elif isinstance(timespec, int):
+                    rv = timespec
+                else:
+                    raise Exception("Unsupported type ({t}) of timespec ({ts}) part!".format(t=type(timespec), ts=str(timespec)))
             return rv
 
         @classmethod
         def fromstring(cls, string):
-            if obj.TimeSpec.timeSpecRe is None:
-                obj.TimeSpec.timeSpecRe = re.compile(r'^(?P<start>.*?) *(?:- *(?P<end>.*?))?(?:\.(?P<limit>\d+))?$')
+            if string is not None:
+                if isinstance(string, int):
+                    return cls(start=string)
+                elif isinstance(string, datetime.datetime):
+                    return cls(start=string)
+                elif isinstance(string, str):
+                    if obj.TimeSpec.timeSpecRe is None:
+                        obj.TimeSpec.timeSpecRe = re.compile(r'^(?P<start>.*?) *(?:- *(?P<end>.*?))?(?:\.(?P<limit>\d+))?$')
+                    timeSpecMatch = obj.TimeSpec.timeSpecRe.search(string)
+                    
+                    if timeSpecMatch is not None:
+                        timeSpecDict = timeSpecMatch.groupdict()
 
-            timeSpecMatch = obj.TimeSpec.timeSpecRe.search(string)
-            
-            if timeSpecMatch is not None:
-                timeSpecDict = timeSpecMatch.groupdict()
-
-                start = end = limit = None
-                if 'start' in timeSpecDict:
-                    start = obj.TimeSpec.parse_simple(timeSpecDict['start'])
-                if 'end' in timeSpecDict:
-                    end = obj.TimeSpec.parse_simple(timeSpecDict['end'])
-                if 'limit' in timeSpecDict:
-                    limit = timeSpecDict['limit']
-                
-                return cls(start=start, end=end, limit=IntOrNone(limit))
+                        start = end = limit = None
+                        if 'start' in timeSpecDict:
+                            start = obj.TimeSpec.parse_simple(timeSpecDict['start'])
+                        if 'end' in timeSpecDict:
+                            end = obj.TimeSpec.parse_simple(timeSpecDict['end'])
+                        if 'limit' in timeSpecDict:
+                            limit = timeSpecDict['limit']
+                        
+                        return cls(start=start, end=end, limit=IntOrNone(limit))
+                else:
+                    raise Exception("Unsupported type ({t}) of string ({s}) that was presented as a timespec.".format(t=type(string), s=str(string)))
 
             return None
 
@@ -1222,6 +1236,7 @@ class obj:
                        , top=itemMap.get("Top"))
 
 
+
 # ################################################################################################ #
 # AccuRev raw commands                                                                             #
 # The raw class namespaces raw accurev commands that return text output directly from the terminal #
@@ -1231,28 +1246,106 @@ class raw(object):
     # cases.
     _lastCommand = None
     _accurevCmd = "accurev"
-    
+    _commandCacheFilename = None
+
+    class CommandCache(object):
+        createTableQuery = '''
+CREATE TABLE IF NOT EXISTS command_cache (
+  command TEXT PRIMARY KEY NOT NULL,
+  result  INT NOT NULL,
+  stdout  TEXT NOT NULL,
+  stderr  TEXT
+);
+'''
+
+        def __enter__(self):
+            self.Close()
+            self.Open()
+
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            self.Close()
+            return False
+
+        def __init__(self, filepath):
+            self.filepath = filepath
+            self.connection = None
+            self.cursor = None
+
+        def Open(self):
+            self.connection = sqlite3.connect(self.filepath)
+            self.cursor = self.connection.cursor()
+            self.cursor.execute(raw.CommandCache.createTableQuery)
+            self.connection.commit()
+
+        def Close(self):
+            if self.cursor is not None:
+                self.cursor.close()
+                self.cursor = None
+            if self.connection is not None:
+                self.connection.close()
+                self.connection = None
+        
+        def Get(self, cmd):
+            self.cursor.execute('SELECT * FROM command_cache WHERE command = ?;', (str(cmd),))
+            row = self.cursor.fetchone()
+            if row is not None:
+                row2 = self.cursor.fetchone()
+                if row2 is not None:
+                    raise Exception("Invariant violation! The cache should not contain duplicate commands!")
+            return row
+
+        def Add(self, cmd, result, stdout, stderr=None):
+            self.cursor.execute('INSERT INTO command_cache (command, result, stdout, stderr) VALUES (?, ?, ?, ?);', (str(cmd), int(result), stdout, stderr))
+            self.connection.commit()
+
+        def Remove(self, cmd):
+            self.cursor.execute('DELETE FROM command_cache WHERE command = ?;', (str(cmd),))
+            self.connection.commit()
+
+        def Update(self, cmd, result, stdout, stderr=None):
+            self.Remove(cmd)
+            self.Add(cmd=cmd, result=result, stdout=stdout, stderr=stderr)
+ 
     @staticmethod
-    def _runCommand(cmd, outputFilename=None):
+    def _runCommand(cmd, outputFilename=None, useCache=False):
         outputFile = None
+        
+        # Try and see if we are able to use the command cache.
+        if outputFilename is None and raw._commandCacheFilename is not None and useCache:
+            with raw.CommandCache(raw._commandCacheFilename) as cc:
+                row = cc.Get(cmd=cmd)
+                if row is not None:
+                    # Cache hit!
+                    cmd, returncode, output, error = row
+                    raw._lastCommand = None
+                    return output
+
         if outputFilename is not None:
             outputFile = open(outputFilename, "w")
             accurevCommand = subprocess.Popen(cmd, stdout=outputFile, stdin=subprocess.PIPE, universal_newlines=True)
         else:
             accurevCommand = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.PIPE, universal_newlines=True)
             
-        xmlOutput = ''
+        output = ''
+        error = ''
         accurevCommand.poll()
         while accurevCommand.returncode is None:
             stdoutdata, stderrdata = accurevCommand.communicate()
+            error += stderrdata
             if outputFile is None:
-                xmlOutput += stdoutdata
+                output += stdoutdata
             accurevCommand.poll()
         
         raw._lastCommand = accurevCommand
+
+        if raw._commandCacheFilename is not None and useCache:
+            with raw.CommandCache(raw._commandCacheFilename) as cc:
+               cc.Add(cmd=cmd, result=accurevCommand.returncode, stdout=output, stderr=error)
         
         if outputFile is None:
-            return xmlOutput
+            return output
         else:
             outputFile.close()
             return 'Written to ' + outputFilename
@@ -1404,7 +1497,7 @@ class raw(object):
     def hist( depot=None, stream=None, timeSpec=None, listFile=None, isListFileXml=False, elementList=None
             , allElementsFlag=False, elementId=None, transactionKind=None, commentString=None, username=None
             , expandedMode=False, showIssues=False, verboseMode=False, listMode=False, showStatus=False, transactionMode=False
-            , isXmlOutput=False, outputFilename=None):
+            , isXmlOutput=False, outputFilename=None, useCache=False):
         cmd = [ raw._accurevCmd, "hist" ]
 
         # Interpret options
@@ -1457,13 +1550,13 @@ class raw(object):
         if len(formatFlags) > 0:
             cmd.append("-f{0}".format(formatFlags))
         
-        return raw._runCommand(cmd, outputFilename)
+        return raw._runCommand(cmd, outputFilename, useCache=useCache)
 
     @staticmethod
     def diff( verSpec1=None, verSpec2=None, transactionRange=None, toBacking=False, toOtherBasisVersion=False, toPrevious=False
             , all=False, onlyDefaultGroup=False, onlyKept=False, onlyModified=False, onlyExtModified=False, onlyOverlapped=False, onlyPending=False
             , ignoreBlankLines=False, isContextDiff=False, informationOnly=False, ignoreCase=False, ignoreWhitespace=False, ignoreAmountOfWhitespace=False, useGUI=False
-            , extraParams=None, isXmlOutput=False):
+            , extraParams=None, isXmlOutput=False, useCache=False):
         cmd = [ raw._accurevCmd, "diff" ]
         
         if all:
@@ -1517,7 +1610,7 @@ class raw(object):
         if extraParams is not None:
             cmd.extend([ '--', extraParams ])
         
-        return raw._runCommand(cmd)
+        return raw._runCommand(cmd=cmd, useCache=useCache)
         
     # AccuRev populate command
     @staticmethod
@@ -1586,7 +1679,7 @@ class raw(object):
         return raw._runCommand(cmd)
         
     @staticmethod
-    def cat(elementId=None, element=None, depotName=None, verSpec=None, outputFilename=None):
+    def cat(elementId=None, element=None, depotName=None, verSpec=None, outputFilename=None, useCache=False):
         cmd = [ raw._accurevCmd, "cat" ]
         
         if verSpec is not None:
@@ -1601,7 +1694,7 @@ class raw(object):
         else:
             raise Exception('accurev cat command needs either an <element> or an <eid> to be specified')
             
-        return raw._runCommand(cmd, outputFilename)
+        return raw._runCommand(cmd=cmd, outputFilename=outputFilename, useCache=useCache)
         
     @staticmethod
     def purge(comment=None, stream=None, issueNumber=None, elementList=None, listFile=None, elementId=None):
@@ -1772,7 +1865,7 @@ class raw(object):
             return raw.show._runSimpleShowSubcommand(subcommand="depots", isXmlOutput=isXmlOutput, includeDeactivatedItems=includeDeactivatedItems)
 
         @staticmethod
-        def streams(depot=None, timeSpec=None, stream=None, matchType=None, listFile=None, listPathAndChildren=False, listChildren=False, listImmediateChildren=False, nonEmptyDefaultGroupsOnly=False, isXmlOutput=False, includeDeactivatedItems=False, includeOldDefinitions=False, includeHasDefaultGroupAttribute=False):
+        def streams(depot=None, timeSpec=None, stream=None, matchType=None, listFile=None, listPathAndChildren=False, listChildren=False, listImmediateChildren=False, nonEmptyDefaultGroupsOnly=False, isXmlOutput=False, includeDeactivatedItems=False, includeOldDefinitions=False, includeHasDefaultGroupAttribute=False, useCache=False):
             cmd = raw.show._getShowBaseCommand(isXmlOutput=isXmlOutput, includeDeactivatedItems=includeDeactivatedItems, includeOldDefinitions=includeOldDefinitions, includeHasDefaultGroupAttribute=includeHasDefaultGroupAttribute)
 
             if depot is not None:
@@ -1799,7 +1892,7 @@ class raw(object):
                 
             cmd.append("streams")
             
-            return raw._runCommand(cmd)
+            return raw._runCommand(cmd=cmd, useCache=useCache)
     
     class replica(object):
         @staticmethod
@@ -1848,22 +1941,44 @@ def stat(all=False, inBackingStream=False, dispBackingChain=False, defaultGroupO
 def hist( depot=None, stream=None, timeSpec=None, listFile=None, isListFileXml=False, elementList=None
         , allElementsFlag=False, elementId=None, transactionKind=None, commentString=None, username=None
         , expandedMode=False, showIssues=False, verboseMode=False, listMode=False, showStatus=False, transactionMode=False
-        , outputFilename=None):
+        , outputFilename=None, useCache=False):
+    if useCache:
+        if timeSpec is None:
+            ts = None
+        elif not isinstance(timeSpec, obj.TimeSpec):
+            ts = obj.TimeSpec.fromstring(timeSpec)
+        else:
+            ts = timeSpec
+            
+        useCache = ts is not None and not (isinstance(ts.start, str) or isinstance(ts.end, str)) # If both values are non-keywords, we can cache them.
+        useCache = useCache and listFile is None and outputFilename is None   # Ensure that we don't have any file operations...
+        
     xmlOutput = raw.hist(depot=depot, stream=stream, timeSpec=timeSpec, listFile=listFile, isListFileXml=isListFileXml, elementList=elementList
         , allElementsFlag=allElementsFlag, elementId=elementId, transactionKind=transactionKind, commentString=commentString, username=username
         , expandedMode=expandedMode, showIssues=showIssues, verboseMode=verboseMode, listMode=listMode, showStatus=showStatus, transactionMode=transactionMode
-        , isXmlOutput=True, outputFilename=outputFilename)
+        , isXmlOutput=True, outputFilename=outputFilename, useCache=useCache)
     return obj.History.fromxmlstring(xmlOutput)
 
 # AccuRev diff command
 def diff(verSpec1=None, verSpec2=None, transactionRange=None, toBacking=False, toOtherBasisVersion=False, toPrevious=False
         , all=False, onlyDefaultGroup=False, onlyKept=False, onlyModified=False, onlyExtModified=False, onlyOverlapped=False, onlyPending=False
         , ignoreBlankLines=False, isContextDiff=False, informationOnly=False, ignoreCase=False, ignoreWhitespace=False, ignoreAmountOfWhitespace=False, useGUI=False
-        , extraParams=None):
+        , extraParams=None, useCache=False):
+    if useCache:
+        if transactionRange is None:
+            ts = None
+        elif not isinstance(transactionRange, obj.TimeSpec):
+            ts = obj.TimeSpec.fromstring(transactionRange)
+        else:
+            ts = transactionRange
+            
+        useCache = ts is not None and not (isinstance(ts.start, str) or isinstance(ts.end, str)) # If both values are non-keywords, we can cache them.
+        useCache = useCache and extraParams is None # I'm not sure what the purpose of extraParams is atm so disable the cache for the unknown.
+
     xmlOutput = raw.diff(verSpec1=verSpec1, verSpec2=verSpec2, transactionRange=transactionRange, toBacking=toBacking, toOtherBasisVersion=toOtherBasisVersion, toPrevious=toPrevious
         , all=all, onlyDefaultGroup=onlyDefaultGroup, onlyKept=onlyKept, onlyModified=onlyModified, onlyExtModified=onlyExtModified, onlyOverlapped=onlyOverlapped, onlyPending=onlyPending
         , ignoreBlankLines=ignoreBlankLines, isContextDiff=isContextDiff, informationOnly=informationOnly, ignoreCase=ignoreCase, ignoreWhitespace=ignoreWhitespace, ignoreAmountOfWhitespace=ignoreAmountOfWhitespace, useGUI=useGUI
-        , extraParams=extraParams, isXmlOutput=True)
+        , extraParams=extraParams, isXmlOutput=True, useCache=useCache)
     return obj.Diff.fromxmlstring(xmlOutput)
 
 # AccuRev Populate command
@@ -1878,8 +1993,10 @@ def co(comment=None, selectAllModified=False, verSpec=None, isRecursive=False, t
         return (raw._lastCommand.returncode == 0)
     return None
 
-def cat(elementId=None, element=None, depotName=None, verSpec=None, outputFilename=None):
-    output = raw.cat(elementId=elementId, element=element, depotName=depotName, verSpec=verSpec, outputFilename=outputFilename)
+def cat(elementId=None, element=None, depotName=None, verSpec=None, outputFilename=None, useCache=False):
+    if useCache:
+        useCache = useCache and outputFilename is None
+    output = raw.cat(elementId=elementId, element=element, depotName=depotName, verSpec=verSpec, outputFilename=outputFilename, useCache=useCache)
     if raw._lastCommand is not None:
         return output
     return None
@@ -1927,8 +2044,19 @@ class show(object):
         return obj.Show.Depots.fromxmlstring(xmlOutput)
 
     @staticmethod
-    def streams(depot=None, timeSpec=None, stream=None, matchType=None, listFile=None, listPathAndChildren=False, listChildren=False, listImmediateChildren=False, nonEmptyDefaultGroupsOnly=False, includeDeactivatedItems=False, includeOldDefinitions=False, includeHasDefaultGroupAttribute=False):
-        xmlOutput = raw.show.streams(depot=depot, timeSpec=timeSpec, stream=stream, matchType=matchType, listFile=listFile, listPathAndChildren=listPathAndChildren, listChildren=listChildren, listImmediateChildren=listImmediateChildren, nonEmptyDefaultGroupsOnly=nonEmptyDefaultGroupsOnly, isXmlOutput=True, includeDeactivatedItems=includeDeactivatedItems, includeOldDefinitions=includeOldDefinitions, includeHasDefaultGroupAttribute=includeHasDefaultGroupAttribute)
+    def streams(depot=None, timeSpec=None, stream=None, matchType=None, listFile=None, listPathAndChildren=False, listChildren=False, listImmediateChildren=False, nonEmptyDefaultGroupsOnly=False, includeDeactivatedItems=False, includeOldDefinitions=False, includeHasDefaultGroupAttribute=False, useCache=False):
+        if useCache:
+            if timeSpec is None:
+                ts = None
+            elif not isinstance(timeSpec, obj.TimeSpec):
+                ts = obj.TimeSpec.fromstring(timeSpec)
+            else:
+                ts = timeSpec
+                
+            useCache = ts is not None and not (isinstance(ts.start, str) or isinstance(ts.end, str)) # If both values are non-keywords, we can cache them.
+            useCache = useCache and listFile is None # Ensure that we don't have any file operations...
+            
+        xmlOutput = raw.show.streams(depot=depot, timeSpec=timeSpec, stream=stream, matchType=matchType, listFile=listFile, listPathAndChildren=listPathAndChildren, listChildren=listChildren, listImmediateChildren=listImmediateChildren, nonEmptyDefaultGroupsOnly=nonEmptyDefaultGroupsOnly, isXmlOutput=True, includeDeactivatedItems=includeDeactivatedItems, includeOldDefinitions=includeOldDefinitions, includeHasDefaultGroupAttribute=includeHasDefaultGroupAttribute, useCache=useCache)
         return obj.Show.Streams.fromxmlstring(xmlOutput)
 
 class replica(object):
@@ -1948,6 +2076,14 @@ class ext(object):
         if infoObj is None:
             infoObj = info()
         return (infoObj.principal != "(not logged in)")
+
+    @staticmethod
+    def enable_command_cache(cacheFilename):
+        raw._commandCacheFilename = cacheFilename
+
+    @staticmethod
+    def disable_command_cache():
+        raw._commandCacheFilename = None
 
     # Get the last chstream transaction. If no chstream transactions have been made the mkstream
     # transaction is returned. If no mkstream transaction exists None is returned.

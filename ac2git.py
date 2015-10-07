@@ -24,6 +24,7 @@ import copy
 import codecs
 import json
 import pytz
+import tempfile
 
 from collections import OrderedDict
 
@@ -98,6 +99,7 @@ class Config(object):
                 password = xmlElement.attrib.get('password')
                 startTransaction = xmlElement.attrib.get('start-transaction')
                 endTransaction   = xmlElement.attrib.get('end-transaction')
+                commandCacheFilename = xmlElement.attrib.get('command-cache-filename')
                 
                 streamMap = None
                 streamListElement = xmlElement.find('stream-list')
@@ -112,17 +114,18 @@ class Config(object):
 
                         streamMap[streamName] = branchName
                 
-                return cls(depot, username, password, startTransaction, endTransaction, streamMap)
+                return cls(depot, username, password, startTransaction, endTransaction, streamMap, commandCacheFilename)
             else:
                 return None
             
-        def __init__(self, depot = None, username = None, password = None, startTransaction = None, endTransaction = None, streamMap = None):
+        def __init__(self, depot = None, username = None, password = None, startTransaction = None, endTransaction = None, streamMap = None, commandCacheFilename = None):
             self.depot    = depot
             self.username = username
             self.password = password
             self.startTransaction = startTransaction
             self.endTransaction   = endTransaction
             self.streamMap = streamMap
+            self.commandCacheFilename = commandCacheFilename
     
         def __repr__(self):
             str = "Config.AccuRev(depot=" + repr(self.depot)
@@ -135,6 +138,9 @@ class Config(object):
             str += ")"
             
             return str
+
+        def UseCommandCache(self):
+            return self.commandCacheFilename is not None
             
     class Git(object):
         @classmethod
@@ -425,44 +431,57 @@ class AccuRev2Git(object):
     # Adds a JSON string respresentation of `stateDict` to the given commit using `git notes add`.
     def AddScriptStateNote(self, depotName, stream, transaction, commitHash, ref, committer=None, committerDate=None, committerTimezone=None):
         stateDict = { "depot": depotName, "stream": stream.name, "stream_number": stream.streamNumber, "transaction_number": transaction.id, "transaction_kind": transaction.Type }
-        notesFilePath = os.path.join(self.cwd, 'notes_message')
-        with codecs.open(notesFilePath, 'w', "utf-8") as notesFile:
+        notesFilePath = None
+        with tempfile.NamedTemporaryFile(mode='w+', prefix='ac2git_note_', delete=False) as notesFile:
+            notesFilePath = notesFile.name
             notesFile.write(json.dumps(stateDict))
 
-        rv = self.gitRepo.notes.add(messageFile=notesFilePath, obj=commitHash, ref=ref, force=True, committer=committer, committerDate=committerDate, committerTimezone=committerTimezone, author=committer, authorDate=committerDate, authorTimezone=committerTimezone)
-        
-        if rv is not None:
-            os.remove(notesFilePath)
-            self.config.logger.dbg( "Added script state note for {0}.".format(commitHash) )
-        else:
-            self.config.logger.error( "Failed to add script state note for {0}, tr. {1}".format(commitHash, transaction.id) )
-            self.config.logger.error(self.gitRepo.lastStderr)
 
-        return rv
+        if notesFilePath is not None:
+            rv = self.gitRepo.notes.add(messageFile=notesFilePath, obj=commitHash, ref=ref, force=True, committer=committer, committerDate=committerDate, committerTimezone=committerTimezone, author=committer, authorDate=committerDate, authorTimezone=committerTimezone)
+            os.remove(notesFilePath)
+
+            if rv is not None:
+                self.config.logger.dbg( "Added script state note for {0}.".format(commitHash) )
+            else:
+                self.config.logger.error( "Failed to add script state note for {0}, tr. {1}".format(commitHash, transaction.id) )
+                self.config.logger.error(self.gitRepo.lastStderr)
+            
+            return rv
+        else:
+            self.config.logger.error( "Failed to create temporary file for script state note for {0}, tr. {1}".format(commitHash, transaction.id) )
+        
+        return None
 
     def AddAccurevHistNote(self, commitHash, ref, depot, transaction, committer=None, committerDate=None, committerTimezone=None, isXml=False):
         # Write the commit notes consisting of the accurev hist xml output for the given transaction.
         # Note: It is important to use the depot instead of the stream option for the accurev hist command since if the transaction
         #       did not occur on that stream we will get the closest transaction that was a promote into the specified stream instead of an error!
         arHistXml = accurev.raw.hist(depot=depot, timeSpec="{0}.1".format(transaction.id), isXmlOutput=isXml)
-        notesFilePath = os.path.join(self.cwd, 'notes_message')
-        with codecs.open(notesFilePath, 'w', "utf-8") as notesFile:
+        notesFilePath = None
+        with tempfile.NamedTemporaryFile(mode='w+', prefix='ac2git_note_', delete=False) as notesFile:
+            notesFilePath = notesFile.name
             if arHistXml is None or len(arHistXml) == 0:
                 self.config.logger.error('accurev hist returned an empty xml for transaction {0} (commit {1})'.format(transaction.id, commitHash))
                 return False
             else:
                 notesFile.write(arHistXml)
-
-        rv = self.gitRepo.notes.add(messageFile=notesFilePath, obj=commitHash, ref=ref, force=True, committer=committer, committerDate=committerDate, committerTimezone=committerTimezone, author=committer, authorDate=committerDate, authorTimezone=committerTimezone)
         
-        if rv is not None:
+        if notesFilePath is not None:        
+            rv = self.gitRepo.notes.add(messageFile=notesFilePath, obj=commitHash, ref=ref, force=True, committer=committer, committerDate=committerDate, committerTimezone=committerTimezone, author=committer, authorDate=committerDate, authorTimezone=committerTimezone)
             os.remove(notesFilePath)
-            self.config.logger.dbg( "Added accurev hist{0} note for {1}.".format(' xml' if isXml else '', commitHash) )
+        
+            if rv is not None:
+                self.config.logger.dbg( "Added accurev hist{0} note for {1}.".format(' xml' if isXml else '', commitHash) )
+            else:
+                self.config.logger.error( "Failed to add accurev hist{0} note for {1}".format(' xml' if isXml else '', commitHash) )
+                self.config.logger.error(self.gitRepo.lastStderr)
+            
+            return rv
         else:
-            self.config.logger.error( "Failed to add accurev hist{0} note for {1}".format(' xml' if isXml else '', commitHash) )
-            self.config.logger.error(self.gitRepo.lastStderr)
+            self.config.logger.error( "Failed to create temporary file for accurev hist{0} note for {1}".format(' xml' if isXml else '', commitHash) )
 
-        return rv
+        return None
 
     def GetFirstTransaction(self, depot, streamName, startTransaction=None, endTransaction=None):
         # Get the stream creation transaction (mkstream). Note: The first stream in the depot doesn't have an mkstream transaction.
@@ -556,7 +575,7 @@ class AccuRev2Git(object):
             trNum = stateObj["transaction_number"]
             depot = stateObj["depot"]
             if trNum is not None and depot is not None:
-                hist = accurev.hist(depot=depot, timeSpec=trNum)
+                hist = accurev.hist(depot=depot, timeSpec=trNum, useCache=self.config.accurev.UseCommandCache())
                 return hist
         return None
 
@@ -576,8 +595,9 @@ class AccuRev2Git(object):
         self.gitRepo.add(force=True, all=True, gitOpts=[u'-c', u'core.autocrlf=false'])
 
         # Make the first commit
-        messageFilePath = os.path.join(self.cwd, 'commit_message')
-        with codecs.open(messageFilePath, 'w', "utf-8") as messageFile:
+        messageFilePath = None
+        with tempfile.NamedTemporaryFile(mode='w+', prefix='ac2git_commit_', delete=False) as messageFile:
+            messageFilePath = messageFile.name
             if transaction.comment is None or len(transaction.comment) == 0:
                 messageFile.write(' ') # White-space is always stripped from commit messages. See the git commit --cleanup option for details.
             else:
@@ -585,6 +605,10 @@ class AccuRev2Git(object):
                 # So we will just add a space to the start of all the lines starting with a # in order to preserve them.
                 messageFile.write(transaction.comment)
         
+        if messageFilePath is None:
+            self.config.logger.error("Failed to create temporary file for commit message for transaction {0}, stream {1}, branch {2}".format(transaction.id, stream, branchName))
+            return None
+
         committer = self.GetGitUserFromAccuRevUser(transaction.user)
         committerDate, committerTimezone = self.GetGitDatetime(accurevUsername=transaction.user, accurevDatetime=transaction.time)
         if not isFirstCommit:
@@ -638,7 +662,7 @@ class AccuRev2Git(object):
 
     def TryDiff(self, streamName, firstTrNumber, secondTrNumber):
         for i in range(0, AccuRev2Git.commandFailureRetryCount):
-            diff = accurev.diff(all=True, informationOnly=True, verSpec1=streamName, verSpec2=streamName, transactionRange="{0}-{1}".format(firstTrNumber, secondTrNumber))
+            diff = accurev.diff(all=True, informationOnly=True, verSpec1=streamName, verSpec2=streamName, transactionRange="{0}-{1}".format(firstTrNumber, secondTrNumber), useCache=self.config.accurev.UseCommandCache())
             if diff is not None:
                 break
         if diff is None:
@@ -708,7 +732,7 @@ class AccuRev2Git(object):
 
     def TryHist(self, depot, trNum):
         for i in range(0, AccuRev2Git.commandFailureRetryCount):
-            endTrHist = accurev.hist(depot=depot, timeSpec="{0}.1".format(trNum))
+            endTrHist = accurev.hist(depot=depot, timeSpec="{0}.1".format(trNum), useCache=self.config.accurev.UseCommandCache())
             if endTrHist is not None:
                 break
         return endTrHist
@@ -898,6 +922,9 @@ class AccuRev2Git(object):
         return (tr, commitHash)
 
     def ProcessStreams(self):
+        if self.config.accurev.commandCacheFilename is not None:
+            accurev.ext.enable_command_cache(self.config.accurev.commandCacheFilename)
+        
         for stream in self.config.accurev.streamMap:
             branch = self.config.accurev.streamMap[stream]
             depot  = self.config.accurev.depot
@@ -916,6 +943,9 @@ class AccuRev2Git(object):
             tr, commitHash = self.ProcessStream(depot=depot, stream=streamInfo, branchName=branch, startTransaction=self.config.accurev.startTransaction, endTransaction=self.config.accurev.endTransaction)
             if tr is None or commitHash is None:
                 self.config.logger.error( "Error while processing stream {0}, branch {1}".format(stream, branch) )
+        
+        if self.config.accurev.commandCacheFilename is not None:
+            accurev.ext.disable_command_cache()
 
     def InitGitRepo(self, gitRepoPath):
         gitRootDir, gitRepoDir = os.path.split(gitRepoPath)
@@ -1266,6 +1296,8 @@ class AccuRev2Git(object):
             git.delete(self.config.git.repoPath)
             
         # From here on we will operate from the git repository.
+        if self.config.accurev.commandCacheFilename is not None:
+            self.config.accurev.commandCacheFilename = os.path.abspath(self.config.accurev.commandCacheFilename)
         self.cwd = os.getcwd()
         os.chdir(self.config.git.repoPath)
         
@@ -1343,13 +1375,15 @@ def DumpExampleConfigFile(outputFilename):
             depot:                The depot in which the stream/s we are converting are located
             start-transaction:    The conversion will start at this transaction. If interrupted the next time it starts it will continue from where it stopped.
             end-transaction:      Stop at this transaction. This can be the keword "now" if you want it to convert the repo up to the latest transaction.
+            command-cache-filename: The filename which will be given to the accurev.py script to use as a local command result cache for the accurev hist, accurev diff and accurev show streams commands.
     -->
     <accurev 
         username="joe_bloggs" 
         password="joanna" 
         depot="Trunk" 
         start-transaction="1" 
-        end-transaction="now" >
+        end-transaction="now" 
+        command-cache-filename="command_cache.sqlite3" >
         <!-- The stream-list is optional. If not given all streams are processed -->
         <!-- The branch-name attribute is also optional for each stream element. If provided it specifies the git branch name to which the stream will be mapped. -->
         <stream-list>
@@ -1459,13 +1493,15 @@ def AutoConfigFile(filename, args, preserveConfig=False):
             depot:                The depot in which the stream/s we are converting are located
             start-transaction:    The conversion will start at this transaction. If interrupted the next time it starts it will continue from where it stopped.
             end-transaction:      Stop at this transaction. This can be the keword "now" if you want it to convert the repo up to the latest transaction.
+            command-cache-filename: The filename which will be given to the accurev.py script to use as a local command result cache for the accurev hist, accurev diff and accurev show streams commands.
     -->
     <accurev 
         username="{accurev_username}" 
         password="{accurev_password}" 
         depot="{accurev_depot}" 
         start-transaction="{start_transaction}" 
-        end-transaction="{end_transaction}" >
+        end-transaction="{end_transaction}" 
+        command-cache-filename="command_cache.sqlite3" >
         <!-- The stream-list is optional. If not given all streams are processed -->
         <!-- The branch-name attribute is also optional for each stream element. If provided it specifies the git branch name to which the stream will be mapped. -->
         <stream-list>""".format(accurev_username=config.accurev.username, accurev_password=config.accurev.password, accurev_depot=config.accurev.depot, start_transaction=1, end_transaction="now"))
@@ -1628,6 +1664,7 @@ def PrintConfigSummary(config):
         config.logger.info('    start tran.: #{0}'.format(config.accurev.startTransaction))
         config.logger.info('    end tran.:   #{0}'.format(config.accurev.endTransaction))
         config.logger.info('    username: {0}'.format(config.accurev.username))
+        config.logger.info('    command cache: {0}'.format(config.accurev.commandCacheFilename))
         config.logger.info('  method: {0}'.format(config.method))
         config.logger.info('  usermaps: {0}'.format(len(config.usermaps)))
         config.logger.info('  log file: {0}'.format(config.logFilename))
