@@ -437,6 +437,8 @@ class AccuRev2Git(object):
         notesFilePath = None
         with tempfile.NamedTemporaryFile(mode='w+', prefix='ac2git_note_', delete=False) as notesFile:
             notesFilePath = notesFile.name
+        
+        with codecs.open(notesFilePath, mode='w+', encoding='utf-8') as notesFile: # Python 2.7 tempfiles can't handle unicode... sigh...
             notesFile.write(json.dumps(stateDict).decode("utf-8"))
 
 
@@ -464,6 +466,8 @@ class AccuRev2Git(object):
         notesFilePath = None
         with tempfile.NamedTemporaryFile(mode='w+', prefix='ac2git_note_', delete=False) as notesFile:
             notesFilePath = notesFile.name
+        
+        with codecs.open(notesFilePath, mode='w+', encoding='utf-8') as notesFile: # Python 2.7 tempfiles can't handle unicode... sigh...
             if arHistXml is None or len(arHistXml) == 0:
                 self.config.logger.error('accurev hist returned an empty xml for transaction {0} (commit {1})'.format(transaction.id, commitHash))
                 return False
@@ -601,6 +605,8 @@ class AccuRev2Git(object):
         messageFilePath = None
         with tempfile.NamedTemporaryFile(mode='w+', prefix='ac2git_commit_', delete=False) as messageFile:
             messageFilePath = messageFile.name
+        
+        with codecs.open(messageFilePath, mode='w+', encoding='utf-8') as messageFile: # Python 2.7 tempfiles can't handle unicode... sigh...
             if transaction.comment is None or len(transaction.comment) == 0:
                 messageFile.write(' ') # White-space is always stripped from commit messages. See the git commit --cleanup option for details.
             else:
