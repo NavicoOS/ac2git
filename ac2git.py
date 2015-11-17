@@ -1411,7 +1411,7 @@ def DumpExampleConfigFile(outputFilename):
                                             `accurev pop` command. It is a lot slower than the other methods for streams with a lot of files but should work even with older
                                             accurev releases. This is the method originally implemented by Ryan LaNeve in his https://github.com/rlaneve/accurev2git repo.
                                -->
-    <logfile>accurev2git.log<logfile>
+    <logfile>accurev2git.log</logfile>
     <!-- The user maps are used to convert users from AccuRev into git. Please spend the time to fill them in properly. -->
     <usermaps>
          <!-- The timezone attribute is optional. All times are retrieved in UTC from AccuRev and will converted to the local timezone by default.
