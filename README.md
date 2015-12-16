@@ -56,7 +56,7 @@ AccuRev2Git is a tool to convert an AccuRev depot into a git repo. A specified A
 
  - The path to the git repository that the script is to create. The folder must exist and should preferably be empty, although it is ok for it to be an existing git repository.
 
- - A user mapping from AccuRev usernames to git. _Hint: Run `accurev show users` to see a list of all the users which you might need to add._
+ - A user mapping from AccuRev usernames to git. _Hint: Run `accurev show -fi users` to see a list of all the users which you might need to add._
 
 - Run the script
 
