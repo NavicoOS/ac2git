@@ -1324,18 +1324,18 @@ CREATE TABLE IF NOT EXISTS command_cache (
 
         if outputFilename is not None:
             outputFile = open(outputFilename, "w")
-            accurevCommand = subprocess.Popen(cmd, stdout=outputFile, stdin=subprocess.PIPE, universal_newlines=True)
+            accurevCommand = subprocess.Popen(cmd, stdout=outputFile, stdin=subprocess.PIPE, universal_newlines=False)
         else:
-            accurevCommand = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.PIPE, universal_newlines=True)
+            accurevCommand = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.PIPE, universal_newlines=False)
             
         output = ''
         error = ''
         accurevCommand.poll()
         while accurevCommand.returncode is None:
             stdoutdata, stderrdata = accurevCommand.communicate()
-            error += stderrdata
+            error += stderrdata.decode('utf8', 'strict')
             if outputFile is None:
-                output += stdoutdata
+                output += stdoutdata.decode('utf8', 'strict')
             accurevCommand.poll()
         
         raw._lastCommand = accurevCommand
