@@ -841,7 +841,7 @@ class AccuRev2Git(object):
                 raise Exception("accurev.ext.deep_hist() failed to return a result!")
         while True:
             nextTr, diff = self.FindNextChangeTransaction(streamName=stream.name, startTrNumber=tr.id, endTrNumber=endTr.id, deepHist=deepHist)
-            if nextTr is None or diff is None:
+            if nextTr is None:
                 self.config.logger.dbg( "FindNextChangeTransaction(streamName='{0}', startTrNumber={1}, endTrNumber={2}, deepHist={3}) failed!".format(stream.name, tr.id, endTr.id, deepHist) )
                 return (None, None)
 
