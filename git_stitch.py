@@ -52,14 +52,14 @@ def CatFileCommit(commit_hash):
     git_cmd = u'git cat-file -p {0}'.format(commit_hash)
     cmd = git_cmd.split()
     try:
-        cat_file_output = subprocess.check_output(git.to_utf8(c) for c in cmd)
+        cat_file_output = subprocess.check_output(cmd).decode('utf8', 'strict')
     except subprocess.CalledProcessError as e:
         print(u'Failed to execute command: {0}'.format(git_cmd))
         raise e
 
     commit_info = {}
     commit_info[u'hash'] = commit_hash
-    cat_file_lines = cat_file_output.split(git.to_utf8(u'\n'))
+    cat_file_lines = cat_file_output.split(u'\n')
 
     # The first line is the object to which the commit points, parse it.
     nextIndex = 0
@@ -74,7 +74,7 @@ def CatFileCommit(commit_hash):
     # The next few lines are the parent/s. Consume them all.
     nextIndex += 1
     parents = []
-    for i in xrange(nextIndex, len(cat_file_lines)):
+    for i in range(nextIndex, len(cat_file_lines)):
         m = parentRe.match(cat_file_lines[i])
         if m:
             parents.append(m.group(u'hash'))
@@ -110,7 +110,7 @@ def CatFileCommit(commit_hash):
     nextIndex += 1
     if len(cat_file_lines[nextIndex]) == 0:
         nextIndex += 1
-    comment = git.to_utf8(u'\n').join(cat_file_lines[nextIndex:])
+    comment = u'\n'.join(cat_file_lines[nextIndex:])
     commit_info[u'comment'] = comment
 
     return commit_info
@@ -150,7 +150,7 @@ def GetBranchRevisionMap(gitRepoPath):
             
             cmd = git_cmd.split()
             try:
-              revlist = subprocess.check_output(git.to_utf8(c) for c in cmd)
+              revlist = subprocess.check_output(cmd).decode('utf8', 'strict')
             except subprocess.CalledProcessError as e:
               print(u'Failed to execute command: {0}'.format(git_cmd))
               raise e
@@ -168,7 +168,7 @@ def GetBranchRevisionMap(gitRepoPath):
                 
                 #print(u'commit: {0}, tree: {1}, branch: {2}'.format(rev, tree_hash, current_branch.name))
                 
-                if not branchRevMap.has_key(tree_hash):
+                if not tree_hash in branchRevMap:
                     branchRevMap[tree_hash] = []
                 branchRevMap[tree_hash].append(commit_info)
 
@@ -186,7 +186,7 @@ def Main(argv):
                 inOrder = sorted(branchRevMap[tree_hash], key=lambda x: int(x[u'committer'][u'time']))
                 #print(u'tree: {0}'.format(tree_hash))
                 
-                for i in xrange(0, len(inOrder) - 1):
+                for i in range(0, len(inOrder) - 1):
                     first = inOrder[i]
                     second = inOrder[i + 1]
                     

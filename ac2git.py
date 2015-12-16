@@ -1149,7 +1149,7 @@ class AccuRev2Git(object):
                                         commitRewriteMap[second[u'hash']][parent] = True
                             # Add the new parent
                             commitRewriteMap[second[u'hash']][first[u'hash']] = True
-                            self.config.logger.info(u'  merge:     {0} as parent of {1}. tree {2}. parents {3}'.format(first[u'hash'][:8], second[u'hash'][:8], tree_hash[:8], [x[:8] for x in commitRewriteMap[second[u'hash']].iterkeys()] ))
+                            self.config.logger.info(u'  merge:     {0} as parent of {1}. tree {2}. parents {3}'.format(first[u'hash'][:8], second[u'hash'][:8], tree_hash[:8], [x[:8] for x in commitRewriteMap[second[u'hash']].keys()] ))
 
             # Reduce the aliasMap to only the items that are actually aliased and remove indirect links to the non-aliased commit (aliases of aliases).
             reducedAliasMap = {}
