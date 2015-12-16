@@ -778,8 +778,7 @@ class AccuRev2Git(object):
                 if branch is None:
                     self.CreateCleanGitBranch(branchName=branchName)
                 try:
-                    #destStream = self.GetDestinationStreamName(history=hist, depot=depot) # Slower: This performes an extra accurev.show.streams() command for correct stream names.
-                    destStream = self.GetDestinationStreamName(history=hist, depot=None) # Quicker: This does not perform an extra accurev.show.streams() command for correct stream names.
+                    destStream = self.GetDestinationStreamName(history=hist, depot=None)
                 except:
                     destStream = None
                 self.config.logger.dbg( "{0} pop (init): {1} {2}{3}".format(stream.name, tr.Type, tr.id, " to {0}".format(destStream) if destStream is not None else "") )
@@ -854,6 +853,9 @@ class AccuRev2Git(object):
                 if self.config.method == "pop":
                     self.ClearGitRepo()
                 else:
+                    if diff is None:
+                        return (None, None)
+                    
                     try:
                         deletedPathList = self.DeleteDiffItemsFromRepo(diff=diff)
                     except:
@@ -898,12 +900,13 @@ class AccuRev2Git(object):
                 commitHash = self.Commit(depot=depot, stream=stream, transaction=tr, branchName=branchName, isFirstCommit=False)
                 if commitHash is None:
                     if"nothing to commit" in self.gitRepo.lastStdout:
-                        self.config.logger.dbg( "diff info ({0} elements):".format(len(diff.elements)) )
-                        for element in diff.elements:
-                            for change in element.changes:
-                                self.config.logger.dbg( "  what changed: {0}".format(change.what) )
-                                self.config.logger.dbg( "  original: {0}".format(change.stream1) )
-                                self.config.logger.dbg( "  new:      {0}".format(change.stream2) )
+                        if diff is not None:
+                            self.config.logger.dbg( "diff info ({0} elements):".format(len(diff.elements)) )
+                            for element in diff.elements:
+                                for change in element.changes:
+                                    self.config.logger.dbg( "  what changed: {0}".format(change.what) )
+                                    self.config.logger.dbg( "  original: {0}".format(change.stream1) )
+                                    self.config.logger.dbg( "  new:      {0}".format(change.stream2) )
                         self.config.logger.dbg( "deleted {0} files:".format(len(deletedPathList)) )
                         for p in deletedPathList:
                             self.config.logger.dbg( "  {0}".format(p) )
