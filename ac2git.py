@@ -312,6 +312,7 @@ class AccuRev2Git(object):
    
     def ClearGitRepo(self):
         # Delete everything except the .git folder from the destination (git repo)
+        self.config.logger.dbg( "Clear git repo." )
         for root, dirs, files in os.walk(self.gitRepo.path, topdown=False):
             for name in files:
                 path = os.path.join(root, name)
@@ -766,7 +767,10 @@ class AccuRev2Git(object):
         if branch is not None:
             # Get the last processed transaction
             self.ClearGitRepo()
+            self.config.logger.dbg( "Checkout existing git branch {branchName}".format(branchName=branchName) )
             self.gitRepo.checkout(branchName=branchName)
+            self.config.logger.dbg( "Reset existing git branch {branchName} contents".format(branchName=branchName) )
+            self.gitRepo.reset(isHard=True)
             status = self.gitRepo.status()
 
         tr = None
