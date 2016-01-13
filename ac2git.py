@@ -766,12 +766,22 @@ class AccuRev2Git(object):
         status = None
         if branch is not None:
             # Get the last processed transaction
-            self.ClearGitRepo()
+            #self.ClearGitRepo()
+            self.config.logger.dbg( "Clean current branch" )
+            self.gitRepo.clean(directories=True, force=True, forceSubmodules=True, includeIgnored=True)
+            self.config.logger.dbg( "Reset current branch" )
+            self.gitRepo.reset(isHard=True)
             self.config.logger.dbg( "Checkout existing git branch {branchName}".format(branchName=branchName) )
             self.gitRepo.checkout(branchName=branchName)
-            self.config.logger.dbg( "Reset existing git branch {branchName} contents".format(branchName=branchName) )
-            self.gitRepo.reset(isHard=True)
             status = self.gitRepo.status()
+            self.config.logger.dbg( "Status of {branch} - {staged} staged, {changed} changed, {untracked} untracked files. Is initial commit {initial_commit}".format(branch=status.branch, staged=len(status.staged), changed=len(status.changed), untracked=len(status.untracked), initial_commit=status.initial_commit) )
+            if status is None:
+                raise Exception("Invalid initial state! The status command return is invalid.")
+            if status.branch is None:
+                raise Exception("Invalid initial state! The status command returned an invalid name for current branch.")
+            if len(status.staged) != 0 or len(status.changed) != 0 or len(status.untracked) != 0:
+                raise Exception("Invalid initial state! There are changes in the tracking repository.")
+            
 
         tr = None
         commitHash = None

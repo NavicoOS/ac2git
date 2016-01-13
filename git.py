@@ -22,7 +22,7 @@ gitCmd = u'git'
 
 class GitStatus(object):
     # Regular expressions used in fromgitoutput classmethod for parsing the different git lines.
-    branchRe        = re.compile(r'^On branch (\w)$')
+    branchRe        = re.compile(r'^On branch (.*)$')
     blankRe         = re.compile(r'^\s*$')
     commentRe       = re.compile(r'^\s+\(.*\)$')
     # The fileRe - Has a clause at the end for possible submodule modifications where git prints 
@@ -111,6 +111,9 @@ class GitStatus(object):
         branchReMatch = GitStatus.branchRe.match(branchSpec)
         if branchReMatch:
             branchName = branchReMatch.group(1)
+        else:
+            raise Exception(u'Line [{0}] did not match [{1}]'.format(branchSpec, GitStatus.branchRe.pattern))
+            
         
         isInitialCommit = False
         stagedFiles = []
@@ -444,11 +447,26 @@ class repo(object):
         
         return self._docmd(cmd)
     
-    def clean(self, force=False):
+    def clean(self, directories=False, force=False, forceSubmodules=False, dryRun=False, quiet=False, includeIgnored=False, onlyIgnored=False):
         cmd = [ gitCmd, u'clean' ]
     
-        if force:
+        if directories:
+            cmd.append(u'-d')
+
+        if forceSubmodules:
             cmd.append(u'-f')
+            cmd.append(u'-f')
+        elif force:
+            cmd.append(u'-f')
+            
+        if dryRun:
+            cmd.append(u'-n')
+        if quiet:
+            cmd.append(u'-q')
+        if includeIgnored:
+            cmd.append(u'-x')
+        if onlyIgnored:
+            cmd.append(u'-X')
         
         return self._docmd(cmd)
 
