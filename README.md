@@ -140,6 +140,10 @@ Effectively this command does the heavy lifting for us so that the _diff method_
   + Populate the transaction and commit it into git. _(The populate here is done with the recursive option but without the overwrite option. Meaning that only the changed items are downloaded over the network.)_.
   + Repeat loop until done.
 
+#### Transactions method (work in progress) ####
+
+This method attempts to iterate over the depot transaction by transaction and generate the most correct git conversion possible. It is not compatible with other methods mentioned above and is currently planned to only be capable of converting the entire depot. If this method is used the finalize step doesn't need to be performed as the repository should already have the correct merge points. It is work in progress and is not ready for use just yet. Watch this space.
+
 ### The result ###
 
 What this script will spit out is a git repository with independent orphaned branches representing your streams. Meaning, that each stream is converted separately on a branch that has no merge points with any other branch.

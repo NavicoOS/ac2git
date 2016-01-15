@@ -963,6 +963,10 @@ class AccuRev2Git(object):
         if self.config.accurev.commandCacheFilename is not None:
             accurev.ext.disable_command_cache()
 
+    def ProcessTransactions(self):
+        self.config.logger.info("Not yet fully implemented!")
+        raise Exception("Not yet fully implemented!")
+
     def InitGitRepo(self, gitRepoPath):
         gitRootDir, gitRepoDir = os.path.split(gitRepoPath)
         if os.path.isdir(gitRootDir):
@@ -1364,7 +1368,10 @@ class AccuRev2Git(object):
                 self.StitchBranches()
             else:
                 self.gitRepo.raw_cmd([u'git', u'config', u'--local', u'gc.auto', u'0'])
-                self.ProcessStreams()
+                if self.config.method == 'transactions':
+                    self.ProcessTransactions()
+                else:
+                    self.ProcessStreams()
                 self.gitRepo.raw_cmd([u'git', u'config', u'--local', u'--unset-all', u'gc.auto'])
               
             if doLogout:
@@ -1428,6 +1435,8 @@ def DumpExampleConfigFile(outputFilename):
                                      - pop: This is the naive method which doesn't care about changes and always performs a full deletion of the whole tree and a complete
                                             `accurev pop` command. It is a lot slower than the other methods for streams with a lot of files but should work even with older
                                             accurev releases. This is the method originally implemented by Ryan LaNeve in his https://github.com/rlaneve/accurev2git repo.
+                                     - transactions: Works transaction by transaction and is intended to generate an accurate representation of the complete accurev history
+                                                     in git.
                                -->
     <logfile>accurev2git.log</logfile>
     <!-- The user maps are used to convert users from AccuRev into git. Please spend the time to fill them in properly. -->
@@ -1705,7 +1714,7 @@ def AccuRev2GitMain(argv):
     parser.add_argument('-t', '--accurev-depot', dest='accurevDepot',        metavar='<accurev-depot>',     help="The AccuRev depot in which the streams that are being converted are located. This script currently assumes only one depot is being converted at a time.")
     parser.add_argument('-g', '--git-repo-path', dest='gitRepoPath',         metavar='<git-repo-path>',     help="The system path to an existing folder where the git repository will be created.")
     parser.add_argument('-f', '--finalize',      dest='finalize', action='store_const', const=True,         help="Finalize the git repository by creating branch merge points. This flag will trigger this scripts 'branch stitching' mode and should only be used once the conversion has been completed. It won't work as expected if the repo continues to be processed after this step. The script will attempt to collapse commits which are a result of a promotion into a parent stream where the diff between the parent and the child is empty. It will also try to link promotions correctly into a merge commit from the child into the parent.")
-    parser.add_argument('-M', '--method', dest='conversionMethod', choices=['pop', 'diff', 'deep-hist'], metavar='<conversion-method>', help="Specifies the method which is used to perform the conversion. Can be either 'pop', 'diff' or 'deep-hist'. 'pop' specifies that every transaction is populated in full. 'diff' specifies that only the differences are populated but transactions are iterated one at a time. 'deep-hist' specifies that only the differences are populated and that only transactions that could have affected this stream are iterated.")
+    parser.add_argument('-M', '--method', dest='conversionMethod', choices=['pop', 'diff', 'deep-hist', 'transactions'], metavar='<conversion-method>', help="Specifies the method which is used to perform the conversion. Can be either 'pop', 'diff' or 'deep-hist'. 'pop' specifies that every transaction is populated in full. 'diff' specifies that only the differences are populated but transactions are iterated one at a time. 'deep-hist' specifies that only the differences are populated and that only transactions that could have affected this stream are iterated. 'transactions' is a completely different type of conversion that iterates over transactions and strives to generate the most accurate representation of the accurev streams in git.")
     parser.add_argument('-r', '--restart',    dest='restart', action='store_const', const=True, help="Discard any existing conversion and start over.")
     parser.add_argument('-v', '--verbose',    dest='debug',   action='store_const', const=True, help="Print the script debug information. Makes the script more verbose.")
     parser.add_argument('-L', '--log-file',   dest='logFile', metavar='<log-filename>',         help="Sets the filename to which all console output will be logged (console output is still printed).")
