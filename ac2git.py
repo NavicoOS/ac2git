@@ -589,7 +589,7 @@ class AccuRev2Git(object):
         self.gitRepo.rm(fileList=['.'], force=True, recursive=True)
         self.ClearGitRepo()
 
-    def Commit(self, depot, stream, transaction, branchName=None, isFirstCommit=False):
+    def Commit(self, depot, stream, transaction, branchName=None, isFirstCommit=False, allowEmptyCommit=False, noNotes=False):
         self.PreserveEmptyDirs()
 
         # Add all of the files to the index
@@ -624,28 +624,29 @@ class AccuRev2Git(object):
         # For now just force the time to be UTC centric but preferrably we would have this set-up to either use the local timezone
         # or allow each user to be given a timezone for geographically distributed teams...
         # The PyTz library should be considered for the timezone conversions. Do not roll your own...
-        if self.gitRepo.commit(messageFile=messageFilePath, committer=committer, committer_date=committerDate, committer_tz=committerTimezone, author=committer, date=committerDate, tz=committerTimezone, allow_empty_message=True, gitOpts=[u'-c', u'core.autocrlf=false']):
+        if self.gitRepo.commit(messageFile=messageFilePath, committer=committer, committer_date=committerDate, committer_tz=committerTimezone, author=committer, date=committerDate, tz=committerTimezone, allow_empty_message=True, allow_empty=allowEmptyCommit, gitOpts=[u'-c', u'core.autocrlf=false']):
             commitHash = self.GetLastCommitHash()
             if commitHash is not None:
                 if lastCommitHash != commitHash:
                     self.config.logger.dbg( "Committed {0}".format(commitHash) )
-                    xmlNoteWritten = False
-                    for i in range(0, AccuRev2Git.commandFailureRetryCount):
-                        ref = branchName
-                        if ref is None:
-                            ref = AccuRev2Git.gitNotesRef_AccurevHistXml
-                            self.config.logger.error("Commit to an unspecified branch. Using default `git notes` ref for the script [{0}] at current time.".format(ref))
-                        stateNoteWritten = ( self.AddScriptStateNote(depotName=depot, stream=stream, transaction=transaction, commitHash=commitHash, ref=ref, committer=committer, committerDate=committerDate, committerTimezone=committerTimezone) is not None )
-                        if stateNoteWritten:
-                            break
-                    if not stateNoteWritten:
-                        # The XML output in the notes is how we track our conversion progress. It is not acceptable for it to fail.
-                        # Undo the commit and print an error.
-                        branchName = 'HEAD'
-                        self.config.logger.error("Couldn't record last transaction state. Undoing the last commit {0} with `git reset --hard {1}^`".format(commitHash, branchName))
-                        self.gitRepo.raw_cmd([u'git', u'reset', u'--hard', u'{0}^'.format(branchName)])
-
-                        return None
+                    if not noNotes:
+                        xmlNoteWritten = False
+                        for i in range(0, AccuRev2Git.commandFailureRetryCount):
+                            ref = branchName
+                            if ref is None:
+                                ref = AccuRev2Git.gitNotesRef_AccurevHistXml
+                                self.config.logger.error("Commit to an unspecified branch. Using default `git notes` ref for the script [{0}] at current time.".format(ref))
+                            stateNoteWritten = ( self.AddScriptStateNote(depotName=depot, stream=stream, transaction=transaction, commitHash=commitHash, ref=ref, committer=committer, committerDate=committerDate, committerTimezone=committerTimezone) is not None )
+                            if stateNoteWritten:
+                                break
+                        if not stateNoteWritten:
+                            # The XML output in the notes is how we track our conversion progress. It is not acceptable for it to fail.
+                            # Undo the commit and print an error.
+                            branchName = 'HEAD'
+                            self.config.logger.error("Couldn't record last transaction state. Undoing the last commit {0} with `git reset --hard {1}^`".format(commitHash, branchName))
+                            self.gitRepo.raw_cmd([u'git', u'reset', u'--hard', u'{0}^'.format(branchName)])
+    
+                            return None
                 else:
                     self.config.logger.error("Commit command returned True when nothing was committed...? Last commit hash {0} didn't change after the commit command executed.".format(lastCommitHash))
                     return None
@@ -963,10 +964,186 @@ class AccuRev2Git(object):
         if self.config.accurev.commandCacheFilename is not None:
             accurev.ext.disable_command_cache()
 
-    def ProcessTransactions(self):
-        self.config.logger.info("Not yet fully implemented!")
-        raise Exception("Not yet fully implemented!")
+    def ProcessTransaction(self, depot, transaction):
+        trHist = self.TryHist(depot=depot, trNum=transaction)
+        if trHist is None or len(trHist.transactions) == 0 is None:
+            raise Exception("Couldn't get history for transaction {tr}. Aborting!".format(tr=transaction))
+        
+        tr = trHist.transactions[0]
+        
+        if tr.Type == "mkstream":
+            # Old versions of accurev don't tell you the name of the stream that was created in the mkstream transaction.
+            # The only way to find out what stream was created is to diff the output of the `accurev show streams` command
+            # between the mkstream transaction and the one that preceedes it.
+            streams = accurev.show.streams(depot=depot, timeSpec=transaction)
+            newStream = None
+            if transaction == 1:
+                newStream = streams.streams[0]
+            else:
+                streamSet = set()
+                oldStreams = accurev.show.streams(depot=depot, timeSpec=(transaction - 1))
+                for stream in oldStreams.streams:
+                    streamSet.add(stream.name)
+                for stream in streams.streams:
+                    if stream.name not in streamSet:
+                        newStream = stream
+                        break
+                if self.gitRepo.checkout(branchName=newStream.basis) is None:
+                    raise Exception("Failed to checkout basis stream {bs} for stream {s}".format(bs=newStream.basis, s=newStream.name))
+            
+            if self.gitRepo.checkout(branchName=newStream.name, isNewBranch=True) is None:
+                raise Exception("Failed to create new branch {br}".format(newStream.name))
+            self.config.logger.info("mkstream name={name}, number={num}".format(name=newStream.name, num=newStream.streamNumber))
+            # Modify the commit message
+            if tr.comment is not None:
+                tr.comment = tr.comment.strip()
+            else:
+                tr.comment = ''
+            if len(tr.comment) > 0:
+                tr.comment += '\n'
+            tr.comment += 'Accurev-transaction-id: {trId}\nAccurev-transaction-type: {trType}\nAccurev-stream-id: {streamNumber}\nAccurev-stream-name: {streamName}\nAccurev-stream-basis-id: {basisNumber}\nAccurev-stream-basis-name: {basisName}'.format(trId=tr.id, trType=tr.Type, streamNumber=newStream.streamNumber, streamName=newStream.name, basisNumber=newStream.basisStreamNumber, basisName=newStream.basis)
+            commitHash = self.Commit(depot=depot, stream=newStream, transaction=tr, branchName=newStream.name, isFirstCommit=True, allowEmptyCommit=True, noNotes=True)
+            if commitHash is None:
+                raise Exception("Failed to add empty mkstream commit")
+        
+        elif tr.Type == "chstream":
+            streamName, streamNumber = tr.affectedStream()
+            stream = accurev.show.stream(depot=depot, stream=streamNumber, timeSpec=tr.id).streams[0]
+            
+            commentSuffix = 'Accurev-stream-id: {streamNumber}\nAccurev-stream-name: {streamName}\nAccurev-transaction-id: {trId}\nAccurev-transaction-type: {trType}'.format(streamNumber=streamNumber, streamName=streamName, trId=tr.id, trType=tr.Type)
 
+            if stream.prevName is not None and len(stream.prevName.strip()) > 0:
+                # if the stream has been renamed, use its new name from now on.
+                if self.gitRepo.raw_cmd(u'git', u'branch', u'-m', stream.prevName, stream.name) is None:
+                    raise Exception("Failed to rename branch {old} to {new}".format(old=stream.prevName, new=stream.name))
+                commentSuffix += '\nAccurev-stream-prev-name: {name}'.format(name=stream.prevName)
+                
+            if self.gitRepo.checkout(branchName=stream.name) is None:
+                raise Exception("Failed to checkout branch {br}".format(stream.name))
+
+            if stream.prevBasis is not None and len(stream.prevBasis) > 0:
+                # We need to change where our stream is parented, i.e. rebase it...
+                newBasisCommitHash = self.GetLastCommitHash(branchName=stream.basis)
+                if newBasisCommitHash is None:
+                    raise Exception("Failed to retrieve the last commit hash for new basis stream {bs}".format(bs=stream.basis))
+                if self.gitRepo.raw_cmd(u'git', u'reset', u'--hard', newBasisCommitHash) is None:
+                    raise Exception("Failed to rebase branch {br} from {old} to {new}".format(br=stream.name, old=stream.prevBasis, new=stream.newBasis))
+                commentSuffix += '\nAccurev-stream-prev-basis-number: {number}\nAccurev-stream-prev-basis-name: {name}'.format(number=stream.prevBasisStreamNumber, name=stream.prevBasis)
+                
+            diff == self.TryDiff(streamName=stream.name, firstTrNumber=(tr.id - 1), secondTrNumber=tr.id)
+            deletedPathList = self.DeleteDiffItemsFromRepo(diff=diff)
+            popResult = self.TryPop(streamName=stream.name, transaction=tr)
+
+            tr.comment += commentSuffix
+            commitHash = self.Commit(depot=depot, stream=newStream, transaction=tr, branchName=newStream.name, allowEmptyCommit=True, noNotes=True)
+            if commitHash is None:
+                raise Exception("Failed to add chstream commit")
+
+        #    pass
+        elif tr.Type == "add":
+            streamName, streamNumber = tr.affectedStream()
+            stream = accurev.show.streams(depot=depot, stream=streamNumber, timeSpec=tr.id).streams[0]
+            if self.gitRepo.checkout(branchName=streamName) is None:
+                raise Exception("Failed to checkout branch {br}!".format(br=streamName))
+            # The add command only introduces new files so we can safely use only `accurev pop` to get the changes.
+            self.TryPop(streamName=streamName, transaction=tr)
+            
+            if tr.comment is not None:
+                tr.comment = tr.comment.strip()
+            else:
+                tr.comment = ''
+            if len(tr.comment) > 0:
+                tr.comment += '\n'
+            tr.comment += 'Accurev-stream-id: {streamNumber}\nAccurev-stream-name: {streamName}\nAccurev-transaction-id: {trId}\nAccurev-transaction-type: {trType}'.format(streamNumber=streamNumber, streamName=streamName, trId=tr.id, trType=tr.Type)
+            
+            self.Commit(depot=depot, stream=stream, transaction=tr, branchName=streamName, noNotes=True)
+            
+        elif tr.Type == "keep":
+            pass
+        elif tr.Type == "promote":
+            pass
+        else:
+            message = "Not yet implemented! Unrecognized transaction type {type}".format(type=tr.Type)
+            self.config.logger.info(message)
+            raise Exception(message)
+
+    def ProcessTransactions(self):
+        # Determine the last processed transaction, if any.
+        trStr = self.gitRepo.raw_cmd([u'git', u'config', u'--local', u'--int', u'ac2git.transaction'])
+        lastTransaction = 0
+        branchStr = None
+        commitStr = None
+        if trStr is not None:
+            trStr = trStr.strip()
+            if len(trStr) > 0:
+                lastTransaction = int(trStr)
+            
+            # Determine the last processed transaction's associated branch, if any (for first transaction there is none).
+            branchStr = self.gitRepo.raw_cmd([u'git', u'config', u'--local', u'ac2git.branch'])
+            commitStr = self.gitRepo.raw_cmd([u'git', u'config', u'--local', u'ac2git.commit'])
+            if branchStr is not None and commitStr is not None:
+                branchStr = branchStr.strip()
+                commitStr = commitStr.strip()
+                if len(branchStr) == 0 or len(commitStr) == 0:
+                    raise Exception("Invalid state! Found last transaction but no last branch/commit information.")
+            
+                # Reset the repo to the last branch's tip (which should be equivalent to our last transaction).
+                self.config.logger.dbg( "Clean current branch" )
+                self.gitRepo.clean(directories=True, force=True, forceSubmodules=True, includeIgnored=True)
+                self.config.logger.dbg( "Reset current branch" )
+                self.gitRepo.reset(isHard=True)
+                self.config.logger.dbg( "Checkout last processed git branch {branchName}".format(branchName=branchStr) )
+                #self.gitRepo.checkout(branchName=branchStr)
+                result = self.gitRepo.raw_cmd([u'git', u'checkout', u'-B', branchStr, commitStr])
+                if result is None:
+                    raise Exception("Failed to restore last state. git checkout -B {br} {c}; failed.".format(br=branchStr, c=commitStr))
+                status = self.gitRepo.status()
+                self.config.logger.dbg( "Status of {branch} - {staged} staged, {changed} changed, {untracked} untracked files. Is initial commit {initial_commit}".format(branch=status.branch, staged=len(status.staged), changed=len(status.changed), untracked=len(status.untracked), initial_commit=status.initial_commit) )
+                if status is None:
+                    raise Exception("Invalid initial state! The status command return is invalid.")
+                if status.branch is None or status.branch != branchStr:
+                    raise Exception("Invalid initial state! The status command returned an invalid name for current branch. Expected {branchName} but got {statusBranch}.".format(branchName=branchStr, statusBranch=status.branch))
+                if len(status.staged) != 0 or len(status.changed) != 0 or len(status.untracked) != 0:
+                    raise Exception("Invalid initial state! There are changes in the tracking repository. Staged {staged}, changed {changed}, untracked {untracked}.".format(staged=status.staged, changed=status.changed, untracked=status.untracked))
+            elif branchStr is None or commitStr is None:
+                raise Exception("Invalid state! Found last transaction but no last branch/commit information.")
+        
+        # Get the configured end transaction and convert it into a number by calling accurev hist.
+        endTrHist = self.TryHist(depot=self.config.accurev.depot, trNum=self.config.accurev.endTransaction)
+        if endTrHist is None or len(endTrHist.transactions) == 0 is None:
+            raise Exception("Couldn't determine the end transaction for the conversion. Aborting!")
+        endTr = endTrHist.transactions[0]
+
+        # Begin processing of the transactions
+        startTransaction = lastTransaction + 1
+        self.config.logger.info( "Processing transaction range #{tr_start}-{tr_end}".format(tr_start=startTransaction, tr_end=endTr.id) )
+
+        while lastTransaction < endTr.id:
+            self.config.logger.info( "Started processing transaction #{tr}".format(tr=startTransaction) )
+            self.ProcessTransaction(depot=self.config.accurev.depot, transaction=startTransaction)
+            
+            # Validate that there are no pending changes (i.e. everything has been committed)
+            status = self.gitRepo.status()
+            self.config.logger.dbg( "Status of {branch} - {staged} staged, {changed} changed, {untracked} untracked files. Is initial commit {initial_commit}".format(branch=status.branch, staged=len(status.staged), changed=len(status.changed), untracked=len(status.untracked), initial_commit=status.initial_commit) )
+            if status is None:
+                raise Exception("Invalid initial state! The status command return is invalid.")
+            if status.branch is None:
+                raise Exception("Invalid initial state! The status command returned an invalid name for current branch.")
+            if len(status.staged) != 0 or len(status.changed) != 0 or len(status.untracked) != 0:
+                raise Exception("Invalid initial state! There are changes in the tracking repository. Staged {staged}, changed {changed}, untracked {untracked}.".format(staged=status.staged, changed=status.changed, untracked=status.untracked))
+
+            # Save our current state
+            lastCommitHash = self.GetLastCommitHash(branchName=status.branch)
+            if lastCommitHash is None or len(lastCommitHash) == 0:
+                raise Exception("Failed to retrieve last commit hash!")
+            
+            self.gitRepo.raw_cmd([u'git', u'config', u'--local', u'--int', u'ac2git.transaction', u'{0}'.format(startTransaction)])
+            self.gitRepo.raw_cmd([u'git', u'config', u'--local', u'ac2git.branch', u'{0}'.format(status.branch)])
+            self.gitRepo.raw_cmd([u'git', u'config', u'--local', u'ac2git.commit', u'{0}'.format(lastCommitHash)])
+            
+            self.config.logger.info( "Finished processing transaction #{tr}".format(tr=startTransaction) )
+            startTransaction += 1
+            
     def InitGitRepo(self, gitRepoPath):
         gitRootDir, gitRepoDir = os.path.split(gitRepoPath)
         if os.path.isdir(gitRootDir):
@@ -1327,7 +1504,9 @@ class AccuRev2Git(object):
             self.gitRepo = git.open(self.config.git.repoPath)
             self.gitBranchList = self.gitRepo.branch_list()
             if self.gitBranchList is None or len(self.gitBranchList) < 1:
-                raise Exception("Invalid state! git branch returned {branchList} (an empty list of branches). Aborting!".format(branchList=self.gitBranchList))
+                status = self.gitRepo.status()
+                if status is None or not status.initial_commit:
+                    raise Exception("Invalid state! git branch returned {branchList} (an empty list of branches). Aborting!".format(branchList=self.gitBranchList))
             if not isRestart:
                 #self.gitRepo.reset(isHard=True)
                 self.gitRepo.clean(force=True)
