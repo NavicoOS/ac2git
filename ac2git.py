@@ -734,10 +734,10 @@ class AccuRev2Git(object):
 
     def TryHist(self, depot, trNum):
         for i in range(0, AccuRev2Git.commandFailureRetryCount):
-            endTrHist = accurev.hist(depot=depot, timeSpec="{0}.1".format(trNum), useCache=self.config.accurev.UseCommandCache())
-            if endTrHist is not None:
+            trHist = accurev.hist(depot=depot, timeSpec="{0}.1".format(trNum), useCache=self.config.accurev.UseCommandCache(), expandedMode=True, verboseMode=True)
+            if trHist is not None:
                 break
-        return endTrHist
+        return trHist
 
     def TryPop(self, streamName, transaction, overwrite=False):
         for i in range(0, AccuRev2Git.commandFailureRetryCount):
@@ -1039,7 +1039,6 @@ class AccuRev2Git(object):
             if commitHash is None:
                 raise Exception("Failed to add chstream commit")
 
-        #    pass
         elif tr.Type == "add":
             streamName, streamNumber = tr.affectedStream()
             stream = accurev.show.streams(depot=depot, stream=streamNumber, timeSpec=tr.id).streams[0]
@@ -1059,9 +1058,118 @@ class AccuRev2Git(object):
             self.Commit(depot=depot, stream=stream, transaction=tr, branchName=streamName, noNotes=True)
             
         elif tr.Type == "keep":
-            pass
+            streamName, streamNumber = tr.affectedStream()
+            stream = accurev.show.streams(depot=depot, stream=streamNumber, timeSpec=tr.id).streams[0]
+            if self.gitRepo.checkout(branchName=streamName) is None:
+                raise Exception("Failed to checkout branch {br}!".format(br=streamName))
+            
+            diff == self.TryDiff(streamName=stream.name, firstTrNumber=(tr.id - 1), secondTrNumber=tr.id)
+            deletedPathList = self.DeleteDiffItemsFromRepo(diff=diff)
+            popResult = self.TryPop(streamName=stream.name, transaction=tr)
+
+            tr.comment += 'Accurev-stream-id: {streamNumber}\nAccurev-stream-name: {streamName}\nAccurev-transaction-id: {trId}\nAccurev-transaction-type: {trType}'.format(streamNumber=streamNumber, streamName=streamName, trId=tr.id, trType=tr.Type)
+            
+            commitHash = self.Commit(depot=depot, stream=newStream, transaction=tr, branchName=newStream.name, allowEmptyCommit=True, noNotes=True)
+            if commitHash is None:
+                raise Exception("Failed to commit a `keep`! tr={tr}".format(tr=tr.id))
+            
         elif tr.Type == "promote":
-            pass
+            # Promotes can be thought of as merges or cherry-picks in git and deciding which one we are dealing with
+            # is the key to having a good conversion.
+            # There are 4 situations that we should consider:
+            #   1. A promote from a child stream to a parent stream that promotes everything from that stream.
+            #      This trivial case is the easiest to reason about and is obviously a merge.
+            #   2. A promote from a child stream to a parent stream that promotes only some of the things from that
+            #      stream. (i.e. one of 2 transactions is promoted up, or a subset of files).
+            #      This is slightly trickier to reason about since the transactions could have been promoted in order
+            #      (from earliest to latest) in which case it is a sequence of merges or in any other case it should be
+            #      a cherry-pick.
+            #   3. A promote from either an indirect descendant stream to this stream (a.k.a. cross-promote).
+            #      This case can be considered as either a merge or a cherry-pick, but we will endevour to make it a merge.
+            #   4. A promote from either a non-descendant stream to this stream (a.k.a. cross-promote).
+            #      This case is most obviously a cherry-pick.
+
+            # Determine the stream to which the files in this this transaction were promoted.
+            dstStreamName, dstStreamNumber = tr.toStream()
+            if dstStreamName is None:
+                raise Exception("Error! Could not determine the destination stream for promote {tr}.".format(tr=tr.id))
+            dstStream = accurev.show.streams(depot=depot, stream=dstStreamName, timeSpec=tr.id)
+            if dstStream is None or dstStream.streams is None or len(dstStream.streams) == 0:
+                raise Exception("Error! accurev show streams -p {d} -s {s} -t {t} failed!".format(d=depot, s=dstStreamName, t=tr.id))
+            dstStream = dstStream.streams[0]
+
+            # Determine the stream from which the files in this this transaction were promoted.
+            srcStreamName, srcStreamNumber = tr.fromStream()
+            srcStream = None
+            if srcStreamName is None:
+                if dstStream is not None and trHist.streams is not None and len(trHist.streams) == 2:
+                    if trHist.streams[0].streamNumber == dstStream.streamNumber:
+                        srcStream = trHist.streams[1]
+                    elif trHist.streams[1].streamNumber == dstStream.streamNumber:
+                        srcStream = trHist.streams[0]
+                    else:
+                        raise Exception("Error! Failed to match destination stream {s} (id {n}) to either of the two affected streams {s1} (id {s1num}) and {s2} (id {s2num}).".format(s=dstStream.name, n=dstStream.streamNumber, s1=trHist.streams[0].name, s1num=trHist.streams[0].streamNumber, s2=trHist.streams[1].name, s2num=trHist.streams[1].streamNumber))
+                else:
+                    raise Exception("Error! Could not determine the source stream for promote {tr}.".format(tr=tr.id))
+            else:
+                srcStream = accurev.show.streams(depot=depot, stream=srcStreamName, timeSpec=tr.id)
+
+                if srcStream is None or srcStream.streams is None or len(srcStream.streams) == 0:
+                    raise Exception("Error! accurev show streams -p {d} -s {s} -t {t} failed!".format(d=depot, s=srcStreamName, t=tr.id))
+                srcStream = srcStream.streams[0]
+
+            # Perform the git merge of the 'from stream' into the 'to stream' but only if they have the same contents.
+            self.gitRepo.checkout(branchName=dstStream.name)
+            
+            diff = self.TryDiff(streamName=dstStream.name, firstTrNumber=(tr.id - 1), secondTrNumber=tr.id)
+            deletedPathList = self.DeleteDiffItemsFromRepo(diff=diff)
+            popResult = self.TryPop(streamName=dstStream.name, transaction=tr)
+
+            commentPrefix = "Merged {src} into {dst}".format(src=srcStream.name, dst=dstStream.name)
+            commentSuffix = 'Accurev-stream-id: {streamNumber}\nAccurev-stream-name: {streamName}\nAccurev-transaction-id: {trId}\nAccurev-transaction-type: {trType}\nAccurev-from-stream-id: {fromStreamId}\nAccurev-from-stream-name: {fromStreamName}'.format(streamNumber=dstStream.streamNumber, streamName=dstStream.name, trId=tr.id, trType=tr.Type, fromStreamId=srcStream.streamNumber, fromStreamName=srcStream.name)
+            if tr.comment is None:
+                tr.comment = '{0}\n\n{1}'.format(commentPrefix, commentSuffix)
+            else:
+                tr.comment = '{0}\n\n{1}\n\n'.format(commentPrefix, commentSuffix)
+
+            commitHash = self.Commit(depot=depot, stream=dstStream, transaction=tr, branchName=dstStream.name, allowEmptyCommit=True, noNotes=True)
+            if commitHash is None:
+                raise Exception("Failed to commit promote {tr}!".format(tr=tr.id))
+            diff = self.gitRepo.raw_cmd([u'git', u'diff', u'--stat', dstStream.name, srcStream.name])
+            if diff is None:
+                raise Exception("Failed to get tree for new branch {br}!".format(br=dstStream.name))
+            
+            if len(diff.strip()) == 0:
+                # Merge
+                self.config.logger.info("Merge, branch {src} into {dst}".format(src=srcStream.name, dst=dstStream.name))
+                if self.gitRepo.reset(branch="HEAD^") is None:
+                    raise Exception("Failed to undo commit! git reset HEAD^, failed with: {err}".format(err=self.gitRepo.lastStderr))
+                if self.gitRepo.raw_cmd([u'git', u'stash', u'--all']) is None:
+                    raise Exception("Failed to stash existing changes! Failed with: {err}".format(err=self.gitRepo.lastStderr))
+                if self.gitRepo.raw_cmd([u'git', u'merge', u'--no-ff', u'--no-commit', srcStream.name]) is None:
+                    raise Exception("Failed to merge! Failed with: {err}".format(err=self.gitRepo.lastStderr))
+                if self.gitRepo.raw_cmd([u'git', u'rm', u'--cached', u'-r', u'.']) is None:
+                    raise Exception("Failed to remove stashed changes after the merge! Failed with: {err}".format(err=self.gitRepo.lastStderr))
+                if self.gitRepo.clean(directories=True, force=True, forceSubmodules=True) is None:
+                    raise Exception("Failed to clean working directory! Failed with: {err}".format(err=self.gitRepo.lastStderr))
+                if self.gitRepo.raw_cmd([u'git', u'stash', u'pop']) is None:
+                    raise Exception("Failed to reapply stashed changes! Failed with: {err}".format(err=self.gitRepo.lastStderr))
+
+                commitHash = self.Commit(depot=depot, stream=dstStream, transaction=tr, branchName=dstStream.name, allowEmptyCommit=True, noNotes=True)
+                if commitHash is None:
+                    raise Exception("Failed to re-commit merged promote {tr}!".format(tr=tr.id))
+            else:
+                # This too could be a merge. What we should check is if it is possible to find a commit on the srcStream "branch" 
+                # whose diff against the merge base of this branch introduces "the same" changes as this promote...
+                # Since it is too hard for now, just ignore this potential case and continue...
+                # Cherry-pick
+                self.config.logger.info("Cherry-pick! Nothing to do. Continuing.")
+            
+            raise Exception("Incomplete! For each direct child, merge this commit into it if it has inheritted all the changes...")
+            
+        elif tr.Type == "merge":
+            raise Exception("Merge not yet implemented! Required for this to work!")
+
         else:
             message = "Not yet implemented! Unrecognized transaction type {type}".format(type=tr.Type)
             self.config.logger.info(message)
@@ -1069,22 +1177,15 @@ class AccuRev2Git(object):
 
     def ProcessTransactions(self):
         # Determine the last processed transaction, if any.
-        trStr = self.gitRepo.raw_cmd([u'git', u'config', u'--local', u'--int', u'ac2git.transaction'])
-        lastTransaction = 0
-        branchStr = None
-        commitStr = None
-        if trStr is not None:
-            trStr = trStr.strip()
-            if len(trStr) > 0:
-                lastTransaction = int(trStr)
+        stateStr = self.gitRepo.raw_cmd([u'git', u'config', u'--local', u'ac2git.state'])
+        state = { "transaction": 0, "branch": None, "commit": None }
+        if stateStr is not None and len(stateStr) > 0:
+            state = json.loads(stateStr.strip())
+            self.config.logger.dbg( "Loaded state {state}".format(state=state) )
             
             # Determine the last processed transaction's associated branch, if any (for first transaction there is none).
-            branchStr = self.gitRepo.raw_cmd([u'git', u'config', u'--local', u'ac2git.branch'])
-            commitStr = self.gitRepo.raw_cmd([u'git', u'config', u'--local', u'ac2git.commit'])
-            if branchStr is not None and commitStr is not None:
-                branchStr = branchStr.strip()
-                commitStr = commitStr.strip()
-                if len(branchStr) == 0 or len(commitStr) == 0:
+            if state["branch"] is not None and state["commit"] is not None:
+                if len(state["branch"]) == 0 or len(state["commit"]) == 0:
                     raise Exception("Invalid state! Found last transaction but no last branch/commit information.")
             
                 # Reset the repo to the last branch's tip (which should be equivalent to our last transaction).
@@ -1092,22 +1193,23 @@ class AccuRev2Git(object):
                 self.gitRepo.clean(directories=True, force=True, forceSubmodules=True, includeIgnored=True)
                 self.config.logger.dbg( "Reset current branch" )
                 self.gitRepo.reset(isHard=True)
-                self.config.logger.dbg( "Checkout last processed git branch {branchName}".format(branchName=branchStr) )
-                #self.gitRepo.checkout(branchName=branchStr)
-                result = self.gitRepo.raw_cmd([u'git', u'checkout', u'-B', branchStr, commitStr])
+                self.config.logger.dbg( "Checkout last processed transaction #{tr} on branch {branchName} at commit {commit}".format(tr=state["transaction"], branchName=state["branch"], commit=state["commit"]) )
+                result = self.gitRepo.raw_cmd([u'git', u'checkout', u'-B', state["branch"], state["commit"]])
                 if result is None:
-                    raise Exception("Failed to restore last state. git checkout -B {br} {c}; failed.".format(br=branchStr, c=commitStr))
+                    raise Exception("Failed to restore last state. git checkout -B {br} {c}; failed.".format(br=state["branch"], c=state["commit"]))
                 status = self.gitRepo.status()
                 self.config.logger.dbg( "Status of {branch} - {staged} staged, {changed} changed, {untracked} untracked files. Is initial commit {initial_commit}".format(branch=status.branch, staged=len(status.staged), changed=len(status.changed), untracked=len(status.untracked), initial_commit=status.initial_commit) )
                 if status is None:
                     raise Exception("Invalid initial state! The status command return is invalid.")
-                if status.branch is None or status.branch != branchStr:
-                    raise Exception("Invalid initial state! The status command returned an invalid name for current branch. Expected {branchName} but got {statusBranch}.".format(branchName=branchStr, statusBranch=status.branch))
+                if status.branch is None or status.branch != state["branch"]:
+                    raise Exception("Invalid initial state! The status command returned an invalid name for current branch. Expected {branchName} but got {statusBranch}.".format(branchName=state["branch"], statusBranch=status.branch))
                 if len(status.staged) != 0 or len(status.changed) != 0 or len(status.untracked) != 0:
                     raise Exception("Invalid initial state! There are changes in the tracking repository. Staged {staged}, changed {changed}, untracked {untracked}.".format(staged=status.staged, changed=status.changed, untracked=status.untracked))
-            elif branchStr is None or commitStr is None:
+            elif state["branch"] is None or state["commit"] is None:
                 raise Exception("Invalid state! Found last transaction but no last branch/commit information.")
-        
+        else:
+            self.config.logger.dbg( "No last state!" )
+
         # Get the configured end transaction and convert it into a number by calling accurev hist.
         endTrHist = self.TryHist(depot=self.config.accurev.depot, trNum=self.config.accurev.endTransaction)
         if endTrHist is None or len(endTrHist.transactions) == 0 is None:
@@ -1115,10 +1217,10 @@ class AccuRev2Git(object):
         endTr = endTrHist.transactions[0]
 
         # Begin processing of the transactions
-        startTransaction = lastTransaction + 1
+        startTransaction = state["transaction"] + 1
         self.config.logger.info( "Processing transaction range #{tr_start}-{tr_end}".format(tr_start=startTransaction, tr_end=endTr.id) )
 
-        while lastTransaction < endTr.id:
+        while startTransaction < endTr.id:
             self.config.logger.info( "Started processing transaction #{tr}".format(tr=startTransaction) )
             self.ProcessTransaction(depot=self.config.accurev.depot, transaction=startTransaction)
             
@@ -1137,9 +1239,15 @@ class AccuRev2Git(object):
             if lastCommitHash is None or len(lastCommitHash) == 0:
                 raise Exception("Failed to retrieve last commit hash!")
             
-            self.gitRepo.raw_cmd([u'git', u'config', u'--local', u'--int', u'ac2git.transaction', u'{0}'.format(startTransaction)])
-            self.gitRepo.raw_cmd([u'git', u'config', u'--local', u'ac2git.branch', u'{0}'.format(status.branch)])
-            self.gitRepo.raw_cmd([u'git', u'config', u'--local', u'ac2git.commit', u'{0}'.format(lastCommitHash)])
+            state["transaction"] = startTransaction
+            state["branch"] = status.branch.strip()
+            state["commit"] = lastCommitHash.strip()
+            cmd = [u'git', u'config', u'--local', u'ac2git.state', u'{0}'.format(json.dumps(state))]
+            if self.gitRepo.raw_cmd(cmd) is None:
+                self.config.logger.error("Error! Command {cmd}".format(cmd=' '.join(str(x) for x in cmd)))
+                self.config.logger.error("  Failed with: {err}".format(err=self.gitRepo.lastStderr))
+                self.config.logger.error("Failed to record current state, aborting!")
+                raise Exception("Error! Failed to record current state, aborting!")
             
             self.config.logger.info( "Finished processing transaction #{tr}".format(tr=startTransaction) )
             startTransaction += 1

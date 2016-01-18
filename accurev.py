@@ -337,6 +337,8 @@ class obj:
             if xmlElement is not None and xmlElement.tag == 'stream':
                 name                      = xmlElement.attrib.get('name')
                 streamNumber              = xmlElement.attrib.get('streamNumber')
+                if streamNumber is None:
+                    streamNumber          = xmlElement.attrib.get('id')
                 depotName                 = xmlElement.attrib.get('depotName')
                 Type                      = xmlElement.attrib.get('type')
                 basis                     = xmlElement.attrib.get('basis')
@@ -403,7 +405,7 @@ class obj:
         
     class Transaction(object):
         class Version(object):
-            def __init__(self, path, eid, virtual, real, virtualNamedVersion, realNamedVersion, ancestor=None, ancestorNamedVersion=None, mergedAgainst=None, mergedAgainstNamedVersion=None, elemType=None, dir=None):
+            def __init__(self, path, eid, virtual, real, virtualNamedVersion, realNamedVersion, ancestor=None, ancestorNamedVersion=None, mergedAgainst=None, mergedAgainstNamedVersion=None, elemType=None, dir=None, mtime=None, checksum=None, size=None):
                 self.path                      = path
                 self.eid                       = IntOrNone(eid)
                 self.virtual                   = obj.Version.fromstring(virtual)
@@ -416,6 +418,9 @@ class obj:
                 self.mergedAgainstNamedVersion = obj.Version.fromstring(mergedAgainstNamedVersion)
                 self.elemType                  = elemType
                 self.dir                       = obj.Bool.fromstring(dir)
+                self.mtime                     = UTCDateTimeOrNone(mtime)
+                self.checksum                  = checksum
+                self.size                      = size
         
             def __repr__(self):
                 str = "Transaction.Version(path="    + repr(self.path)
@@ -432,6 +437,12 @@ class obj:
                     str += ", mergedAgainstNamedVersion="    + repr(self.mergedAgainstNamedVersion)
                 str += ", elemType="            + repr(self.elemType)
                 str += ", dir="                 + repr(self.dir)
+                if self.mtime is not None:
+                    str += ", mtime="           + repr(self.mtime)
+                if self.checksum is not None:
+                    str += ", cksum="           + repr(self.checksum)
+                if self.size is not None:
+                    str += ", size="            + repr(self.size)
                 str += ")"
                 
                 return str
@@ -451,33 +462,49 @@ class obj:
                     mergedAgainstNamedVersion = xmlElement.attrib.get('mergedAgainstNamedVersion')
                     elemType                  = xmlElement.attrib.get('elem_type')
                     dir                       = xmlElement.attrib.get('dir')
+                    mtime                     = xmlElement.attrib.get('mtime')
+                    cksum                     = xmlElement.attrib.get('cksum')
+                    sz                        = xmlElement.attrib.get('sz')
                     
-                    return cls(path, eid, virtual, real, virtualNamedVersion, realNamedVersion, ancestor, ancestorNamedVersion, mergedAgainst, mergedAgainstNamedVersion, elemType, dir)
+                    return cls(path, eid, virtual, real, virtualNamedVersion, realNamedVersion, ancestor, ancestorNamedVersion, mergedAgainst, mergedAgainstNamedVersion, elemType, dir, mtime, cksum, sz)
+
                 
                 return None
             
-        def __init__(self, id, Type, time, user, comment, versions = [], moves = [], stream = None):
-            self.id       = IntOrNone(id)
-            self.Type     = Type
-            self.time     = UTCDateTimeOrNone(time)
-            self.user     = user
-            self.comment  = comment
-            self.versions = versions
-            self.moves    = moves
-            self.stream   = stream
+        def __init__(self, id, Type, time, user, comment, streamName=None, streamNumber=None, fromStreamName=None, fromStreamNumber=None, versions = [], moves = [], stream = None):
+            self.id               = IntOrNone(id)
+            self.Type             = Type
+            self.time             = UTCDateTimeOrNone(time)
+            self.user             = user
+            self.streamName       = streamName
+            self.streamNumber     = IntOrNone(streamNumber)
+            self.fromStreamName   = fromStreamName
+            self.fromStreamNumber = fromStreamNumber
+            self.comment          = comment
+            self.versions         = versions
+            self.moves            = moves
+            self.stream           = stream
             
         def __repr__(self):
-            str = "Transaction(id="        + repr(self.id)
-            str += ", Type="               + repr(self.Type)
-            str += ", time="               + repr(self.time)
-            str += ", user="               + repr(self.user)
-            str += ", comment="            + repr(self.comment)
+            str = "Transaction(id="          + repr(self.id)
+            str += ", Type="                 + repr(self.Type)
+            str += ", time="                 + repr(self.time)
+            str += ", user="                 + repr(self.user)
+            if self.streamName is not None:
+                str += ", streamName="       + repr(self.streamName)
+            if self.streamNumber is not None:
+                str += ", streamNumber="     + repr(self.streamNumber)
+            if self.fromStreamName is not None:
+                str += ", fromStreamName="   + repr(self.fromStreamName)
+            if self.fromStreamNumber is not None:
+                str += ", fromStreamNumber=" + repr(self.fromStreamNumber)
+            str += ", comment="              + repr(self.comment)
             if len(self.versions) > 0:
-                str += ", versions="       + repr(self.versions)
+                str += ", versions="         + repr(self.versions)
             if len(self.moves) > 0:
-                str += ", moves="          + repr(self.moves)
+                str += ", moves="            + repr(self.moves)
             if self.stream is not None:
-                str += ", stream="         + repr(self.stream)
+                str += ", stream="           + repr(self.stream)
             str += ")"
             
             return str
@@ -487,28 +514,41 @@ class obj:
         # transaction was performed). i.e. A promote to a stream called
         # Stream1 whose id is 1734 would return ("Stream1", 1734).
         def affectedStream(self):
-            streamName   = None
-            streamNumber = None
-            if self.versions is not None and len(self.versions) > 0:
-                version = self.versions[0]
-                if version.virtualNamedVersion is not None:
-                    streamName   = version.virtualNamedVersion.stream
-                if version.virtual is not None:
-                    streamNumber = int(version.virtual.stream)
-            elif self.stream is not None:
-                streamName   = self.stream.name
-                streamNumber = self.stream.streamNumber
+            streamName   = self.streamName
+            streamNumber = self.streamNumber
+            if streamName is None and streamNumber is None:
+                if self.versions is not None and len(self.versions) > 0:
+                    version = self.versions[0]
+                    if version.virtualNamedVersion is not None:
+                        streamName   = version.virtualNamedVersion.stream
+                    if version.virtual is not None:
+                        streamNumber = int(version.virtual.stream)
+                elif self.stream is not None:
+                    streamName   = self.stream.name
+                    streamNumber = self.stream.streamNumber
 
             return (streamName, streamNumber)
         
+        def toStream(self):
+            return self.affectedStream()
+        
+        def fromStream(self):
+            fromStreamName   = self.fromStreamName
+            fromStreamNumber = self.fromStreamNumber
+            return (fromStreamName, fromStreamNumber)
+
         @classmethod
         def fromxmlelement(cls, xmlElement):
             if xmlElement is not None and xmlElement.tag == 'transaction':
-                id   = xmlElement.attrib.get('id')
-                Type = xmlElement.attrib.get('type')
-                time = xmlElement.attrib.get('time')
-                user = xmlElement.attrib.get('user')
-                comment = GetXmlContents(xmlElement.find('comment'))
+                id               = xmlElement.attrib.get('id')
+                Type             = xmlElement.attrib.get('type')
+                time             = xmlElement.attrib.get('time')
+                user             = xmlElement.attrib.get('user')
+                streamName       = xmlElement.attrib.get('streamName')
+                streamNumber     = xmlElement.attrib.get('streamNumber')
+                fromStreamName   = xmlElement.attrib.get('fromStreamName')
+                fromStreamNumber = xmlElement.attrib.get('fromstreamNumber')
+                comment          = GetXmlContents(xmlElement.find('comment'))
     
                 versions = []
                 for versionElement in xmlElement.findall('version'):
@@ -521,7 +561,7 @@ class obj:
                 streamElement = xmlElement.find('stream')
                 stream = obj.Stream.fromxmlelement(streamElement)
     
-                return cls(id, Type, time, user, comment, versions, moves, stream)
+                return cls(id=id, Type=Type, time=time, user=user, comment=comment, streamName=streamName, streamNumber=streamNumber, fromStreamName=fromStreamName, fromStreamNumber=fromStreamNumber, versions=versions, moves=moves, stream=stream)
     
             return None
     
