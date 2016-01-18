@@ -764,28 +764,33 @@ class AccuRev2Git(object):
                 branch = b
                 break
 
-        status = None
+        status = self.gitRepo.status()
+        if status is None:
+            raise Exception("Failed to get status of git repository!")
+
+        self.config.logger.dbg( "On branch {branch} - {staged} staged, {changed} changed, {untracked} untracked files{initial_commit}.".format(branch=status.branch, staged=len(status.staged), changed=len(status.changed), untracked=len(status.untracked), initial_commit=', initial commit' if status.initial_commit else '') )
         if branch is not None:
             # Get the last processed transaction
-            self.config.logger.dbg( "Clean current branch" )
+            self.config.logger.dbg( "Clean current branch - '{br}'".format(br=status.branch) )
             self.gitRepo.clean(directories=True, force=True, forceSubmodules=True, includeIgnored=True)
-            self.config.logger.dbg( "Reset current branch" )
+            self.config.logger.dbg( "Reset current branch - '{br}'".format(br=status.branch) )
             self.gitRepo.reset(isHard=True)
-            self.config.logger.dbg( "Checkout existing git branch {branchName}".format(branchName=branchName) )
+            self.config.logger.dbg( "Checkout branch {branchName}".format(branchName=branchName) )
             self.gitRepo.checkout(branchName=branchName)
             status = self.gitRepo.status()
-            self.config.logger.dbg( "Status of {branch} - {staged} staged, {changed} changed, {untracked} untracked files. Is initial commit {initial_commit}".format(branch=status.branch, staged=len(status.staged), changed=len(status.changed), untracked=len(status.untracked), initial_commit=status.initial_commit) )
+            self.config.logger.dbg( "On branch {branch} - {staged} staged, {changed} changed, {untracked} untracked files{initial_commit}.".format(branch=status.branch, staged=len(status.staged), changed=len(status.changed), untracked=len(status.untracked), initial_commit=', initial commit' if status.initial_commit else '') )
             if status is None:
                 raise Exception("Invalid initial state! The status command return is invalid.")
             if status.branch is None or status.branch != branchName:
                 raise Exception("Invalid initial state! The status command returned an invalid name for current branch. Expected {branchName} but got {statusBranch}.".format(branchName=branchName, statusBranch=status.branch))
             if len(status.staged) != 0 or len(status.changed) != 0 or len(status.untracked) != 0:
                 raise Exception("Invalid initial state! There are changes in the tracking repository. Staged {staged}, changed {changed}, untracked {untracked}.".format(staged=status.staged, changed=status.changed, untracked=status.untracked))
-            
+        else:
+            self.config.logger.dbg( "The branch list doesn't contain the branch '{br}'.".format(br=branchName) )
 
         tr = None
         commitHash = None
-        if status is None or status.initial_commit:
+        if status.branch != branchName or status.initial_commit:
             # We are tracking a new stream:
             tr = self.GetFirstTransaction(depot=depot, streamName=stream.name, startTransaction=startTransaction, endTransaction=endTransaction)
             if tr is not None:
@@ -1611,10 +1616,15 @@ class AccuRev2Git(object):
         if self.InitGitRepo(self.config.git.repoPath):
             self.gitRepo = git.open(self.config.git.repoPath)
             self.gitBranchList = self.gitRepo.branch_list()
-            if self.gitBranchList is None or len(self.gitBranchList) < 1:
+            if self.gitBranchList is None:
+                raise Exception("Failed to get branch list!")
+            elif len(self.gitBranchList) == 0:
                 status = self.gitRepo.status()
                 if status is None or not status.initial_commit:
-                    raise Exception("Invalid state! git branch returned {branchList} (an empty list of branches). Aborting!".format(branchList=self.gitBranchList))
+                    raise Exception("Invalid state! git branch returned {branchList} (an empty list of branches) and we are not on an initial commit? Aborting!".format(branchList=self.gitBranchList))
+                else:
+                    self.config.logger.dbg( "New git repository. Initial commit on branch {br}".format(br=status.branch) )
+
             if not isRestart:
                 #self.gitRepo.reset(isHard=True)
                 self.gitRepo.clean(force=True)
