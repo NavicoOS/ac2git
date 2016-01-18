@@ -1130,7 +1130,7 @@ class AccuRev2Git(object):
             if tr.comment is None:
                 tr.comment = '{0}\n\n{1}'.format(commentPrefix, commentSuffix)
             else:
-                tr.comment = '{0}\n\n{1}\n\n'.format(commentPrefix, commentSuffix)
+                tr.comment = '{0}\n\n{1}\n\n{2}'.format(commentPrefix, tr.comment, commentSuffix)
 
             commitHash = self.Commit(depot=depot, stream=dstStream, transaction=tr, branchName=dstStream.name, allowEmptyCommit=True, noNotes=True)
             if commitHash is None:
@@ -1198,7 +1198,7 @@ class AccuRev2Git(object):
                 if result is None:
                     raise Exception("Failed to restore last state. git checkout -B {br} {c}; failed.".format(br=state["branch"], c=state["commit"]))
                 status = self.gitRepo.status()
-                self.config.logger.dbg( "Status of {branch} - {staged} staged, {changed} changed, {untracked} untracked files. Is initial commit {initial_commit}".format(branch=status.branch, staged=len(status.staged), changed=len(status.changed), untracked=len(status.untracked), initial_commit=status.initial_commit) )
+                self.config.logger.dbg( "Status of {branch} - {staged} staged, {changed} changed, {untracked} untracked files{initial_commit}.".format(branch=status.branch, staged=len(status.staged), changed=len(status.changed), untracked=len(status.untracked), initial_commit=', initial commit' if status.initial_commit else '') )
                 if status is None:
                     raise Exception("Invalid initial state! The status command return is invalid.")
                 if status.branch is None or status.branch != state["branch"]:
@@ -1226,7 +1226,7 @@ class AccuRev2Git(object):
             
             # Validate that there are no pending changes (i.e. everything has been committed)
             status = self.gitRepo.status()
-            self.config.logger.dbg( "Status of {branch} - {staged} staged, {changed} changed, {untracked} untracked files. Is initial commit {initial_commit}".format(branch=status.branch, staged=len(status.staged), changed=len(status.changed), untracked=len(status.untracked), initial_commit=status.initial_commit) )
+            self.config.logger.dbg( "Status of {branch} - {staged} staged, {changed} changed, {untracked} untracked files{initial_commit}.".format(branch=status.branch, staged=len(status.staged), changed=len(status.changed), untracked=len(status.untracked), initial_commit=', initial commit' if status.initial_commit else '') )
             if status is None:
                 raise Exception("Invalid initial state! The status command return is invalid.")
             if status.branch is None:
