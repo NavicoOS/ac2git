@@ -1668,11 +1668,17 @@ class AccuRev2Git(object):
                         if r.url != remote.url or pushUrl1 != pushUrl2:
                             raise Exception("Configured remote {r}'s urls don't match.\nExpected:\n{r1}\nGot:\n{r2}".format(r=remote.name, r1=r, r2=remote))
                         remoteAddList.remove(remote.name)
+                    else:
+                        self.config.logger.dbg( "Unspecified remote {remote} ({url}) found. Ignoring...".format(remote=remote.name, url=remote.url) )
                 for remote in remoteAddList:
                     r = self.config.git.remoteMap[remote]
-                    self.gitRepo.remote_add(name=r.name, url=r.url)
+                    if self.gitRepo.remote_add(name=r.name, url=r.url) is None:
+                        raise Exception("Failed to add remote {remote} ({url})!".format(remote=r.name, url=r.url))
+                    self.config.logger.info( "Added remote: {remote} ({url}).".format(remote=r.name, url=r.url) )
                     if r.pushUrl is not None and r.url != r.pushUrl:
-                        self.gitRepo.remote_set_url(name=r.name, url=r.pushUrl, isPushUrl=True)
+                        if self.gitRepo.remote_set_url(name=r.name, url=r.pushUrl, isPushUrl=True) is None:
+                            raise Exception("Failed to set push url {url} for {remote}!".format(url=r.pushUrl, remote=r.name))
+                        self.config.logger.info( "Added push url: {remote} ({url}).".format(remote=r.name, url=r.pushUrl) )
 
             if not isRestart:
                 #self.gitRepo.reset(isHard=True)
@@ -2035,6 +2041,11 @@ def PrintConfigSummary(config):
         config.logger.info('  now: {0}'.format(datetime.now()))
         config.logger.info('  git')
         config.logger.info('    repo path: {0}'.format(config.git.repoPath))
+        if config.git.remoteMap is not None:
+            for remoteName in config.git.remoteMap:
+                remote = config.git.remoteMap[remoteName]
+                config.logger.info('    remote: {name} {url}{push_url}'.format(name=remote.name, url=remote.url, push_url = '' if remote.pushUrl is None or remote.url == remote.pushUrl else ' (push:{push_url})'.format(push_url=remote.pushUrl)))
+                
         config.logger.info('    finalize:  {0}'.format(config.git.finalize))
         config.logger.info('  accurev:')
         config.logger.info('    depot: {0}'.format(config.accurev.depot))
