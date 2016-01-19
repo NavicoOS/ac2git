@@ -156,17 +156,28 @@ class Config(object):
                     else:
                         Exception("Error, could not parse finalize attribute '{0}'. Valid values are 'true' and 'false'.".format(finalize))
                 
-                return cls(repoPath=repoPath, finalize=finalize)
+                remoteMap = OrderedDict()
+                remoteElementList = xmlElement.findall('remote')
+                for remoteElement in remoteElementList:
+                    remoteName     = remoteElement.attrib.get("name")
+                    remoteUrl      = remoteElement.attrib.get("url")
+                    remotePushUrl  = remoteElement.attrib.get("push-url")
+                    
+                    remoteMap[remoteName] = git.GitRemoteListItem(name=remoteName, url=remoteUrl, pushUrl=remotePushUrl)
+
+                return cls(repoPath=repoPath, finalize=finalize, remoteMap=remoteMap)
             else:
                 return None
             
-        def __init__(self, repoPath, finalize=None):
-            self.repoPath = repoPath
-            self.finalize = finalize
+        def __init__(self, repoPath, finalize=None, remoteMap=None):
+            self.repoPath  = repoPath
+            self.finalize  = finalize
+            self.remoteMap = remoteMap
 
         def __repr__(self):
             str = "Config.Git(repoPath=" + repr(self.repoPath)
             str += ", finalize="         + repr(self.finalize)
+            str += ", remoteMap="        + repr(self.remoteMap)
             str += ")"
             
             return str
@@ -967,6 +978,24 @@ class AccuRev2Git(object):
             tr, commitHash = self.ProcessStream(depot=depot, stream=streamInfo, branchName=branch, startTransaction=self.config.accurev.startTransaction, endTransaction=self.config.accurev.endTransaction)
             if tr is None or commitHash is None:
                 self.config.logger.error( "Error while processing stream {0}, branch {1}".format(stream, branch) )
+
+            if self.config.git.remoteMap is not None:
+                refspec = "refs/heads/{branch}:refs/heads/{branch} refs/notes/{branch}:refs/notes/{branch}".format(branch=branch)
+                for remoteName in self.config.git.remoteMap:
+                    pushOutput = None
+                    success = True
+                    try:
+                        pushCmd = "git push {remote} {refspec}".format(remote=remoteName, refspec=refspec)
+                        pushOutput = subprocess.check_output(pushCmd.split(), stderr=subprocess.STDOUT).decode('utf-8')
+                        self.config.logger.info("Push to '{remote}' succeeded:".format(remote=remoteName))
+                        self.config.logger.info(pushOutput)
+                    except subprocess.CalledProcessError as e:
+                        self.config.logger.error("Push to '{remote}' failed!".format(remote=remoteName))
+                        self.config.logger.dbg("'{cmd}', returned {returncode} and failed with:".format(cmd="' '".join(e.cmd), returncode=e.returncode))
+                        self.config.logger.dbg("{output}".format(output=e.output.decode('utf-8')))
+                        success = False
+                    if not success:
+                        raise Exception("Failed to push to {remote}, aborting!".format(remote=remoteName))
         
         if self.config.accurev.commandCacheFilename is not None:
             accurev.ext.disable_command_cache()
@@ -1626,6 +1655,24 @@ class AccuRev2Git(object):
                     raise Exception("Invalid state! git branch returned {branchList} (an empty list of branches) and we are not on an initial commit? Aborting!".format(branchList=self.gitBranchList))
                 else:
                     self.config.logger.dbg( "New git repository. Initial commit on branch {br}".format(br=status.branch) )
+ 
+            # Configure the remotes
+            if self.config.git.remoteMap is not None and len(self.config.git.remoteMap) > 0:
+                remoteList = self.gitRepo.remote_list()
+                remoteAddList = [x for x in self.config.git.remoteMap.keys()]
+                for remote in remoteList:
+                    if remote.name in self.config.git.remoteMap:
+                        r = self.config.git.remoteMap[remote.name]
+                        pushUrl1 = r.url if r.pushUrl is None else r.pushUrl
+                        pushUrl2 = remote.url if remote.pushUrl is None else remote.pushUrl
+                        if r.url != remote.url or pushUrl1 != pushUrl2:
+                            raise Exception("Configured remote {r}'s urls don't match.\nExpected:\n{r1}\nGot:\n{r2}".format(r=remote.name, r1=r, r2=remote))
+                        remoteAddList.remove(remote.name)
+                for remote in remoteAddList:
+                    r = self.config.git.remoteMap[remote]
+                    self.gitRepo.remote_add(name=r.name, url=r.url)
+                    if r.pushUrl is not None and r.url != r.pushUrl:
+                        self.gitRepo.remote_set_url(name=r.name, url=r.pushUrl, isPushUrl=True)
 
             if not isRestart:
                 #self.gitRepo.reset(isHard=True)
@@ -1715,12 +1762,16 @@ def DumpExampleConfigFile(outputFilename):
             <stream>some_other_stream</stream>
         </stream-list>
     </accurev>
-    <git repo-path="/put/the/git/repo/here" finalize="false" /> <!-- The system path where you want the git repo to be populated. Note: this folder should already exist. 
+    <git repo-path="/put/the/git/repo/here" finalize="false" >  <!-- The system path where you want the git repo to be populated. Note: this folder should already exist. 
                                                                      The finalize attribute switches this script from converting accurev transactions to independent orphaned
                                                                      git branches to the "branch stitching" mode which should be activated only once the conversion is completed.
                                                                      Make sure to have a backup of your repo just in case. Once finalize is set to true this script will rewrite
                                                                      the git history in an attempt to recreate merge points.
                                                                 -->
+        <remote name="origin" url="https://github.com/orao/ac2git.git" push-url="https://github.com/orao/ac2git.git" /> <!-- Optional: Specifies the remote to which the converted
+                                                                                                                             branches will be pushed. The push-url attribute is optional. -->
+        <remote name="backup" url="https://github.com/orao/ac2git.git" />
+    </git>
     <method>deep-hist</method> <!-- The method specifies what approach is taken to perform the conversion. Allowed values are 'deep-hist', 'diff' and 'pop'.
                                      - deep-hist: Works by using the accurev.ext.deep_hist() function to return a list of transactions that could have affected the stream.
                                                   It then performs a diff between the transactions and only populates the files that have changed like the 'diff' method.
@@ -1848,15 +1899,21 @@ def AutoConfigFile(filename, args, preserveConfig=False):
         file.write("""
         </stream-list>
     </accurev>
-    <git repo-path="{git_repo_path}" finalize="false" /> <!-- The system path where you want the git repo to be populated. Note: this folder should already exist.
+    <git repo-path="{git_repo_path}" finalize="false" >  <!-- The system path where you want the git repo to be populated. Note: this folder should already exist.
                                                               The finalize attribute switches this script from converting accurev transactions to independent orphaned
                                                               git branches to the "branch stitching" mode which should be activated only once the conversion is completed.
                                                               Make sure to have a backup of your repo just in case. Once finalize is set to true this script will rewrite
                                                               the git history in an attempt to recreate merge points.
-                                                         -->
+                                                         -->""".format(git_repo_path=config.git.repoPath))
+        if config.git.remoteMap is not None:
+            for remoteName in remoteMap:
+                remote = remoteMap[remoteName]
+                file.write("""        <remote name="{name}" url="{url}"{push_url_string} />""".format(name=remote.name, url=name.url, push_url_string='' if name.pushUrl is None else ' push-url="{url}"'.format(url=name.pushUrl)))
+        
+        file.write("""    </git>
     <method>{method}</method>
     <logfile>{log_filename}<logfile>
-    <!-- The user maps are used to convert users from AccuRev into git. Please spend the time to fill them in properly. -->""".format(git_repo_path=config.git.repoPath, method=config.method, log_filename=config.logFilename))
+    <!-- The user maps are used to convert users from AccuRev into git. Please spend the time to fill them in properly. -->""".format(method=config.method, log_filename=config.logFilename))
         file.write("""
     <usermaps>
          <!-- The timezone attribute is optional. All times are retrieved in UTC from AccuRev and will converted to the local timezone by default.

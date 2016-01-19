@@ -471,6 +471,45 @@ class repo(object):
         output = self._docmd(cmd)
         return GitRemoteListItem.fromgitremoteoutput(output)
 
+    def remote_add(self, name, url, branch=None, master=None, fetch=False, importTags=None):
+        cmd = [ gitCmd, u'remote', u'add' ]
+        
+        if branch is not None:
+            cmd.extend([ u'-t', branch ])
+        if master is not None:
+            cmd.extend([ u'-m', master ])
+        if fetch:
+            cmd.append(u'-f')
+        if importTags is not None:
+            if importTags == True:
+                cmd.append(u'--tags')
+            elif importTags == False:
+                cmd.append(u'--no-tags')
+            else:
+                raise Exception("Invalid value for import tags! Expected True or False but got {v}".format(v=str(importTags)))
+
+        cmd.extend([ name, url ])
+
+        return self._docmd(cmd)
+
+    def remote_set_url(self, name, url, oldUrlRegex=None, isPushUrl=False, add=False, delete=False):
+        cmd = [ gitCmd, u'remote', u'add', u'set-url' ]
+
+        if add and delete:
+            raise Exception("Can't add and delete the url {u} for remote {r}".format(u=url, r=name))
+        elif add:
+            cmd.append(u'--add')
+        elif delete:
+            cmd.append(u'--delete')
+        elif oldUrlRegex is not None:
+            raise Exception("Can't specify an oldUrlRegex when using isAdd or isDelete!")
+
+        if isPushUrl:
+            cmd.append(u'--push')
+        
+        cmd.extend([ name, url ])
+        return self._docmd(cmd)
+
     def status(self):
         cmd = [ gitCmd, u'status' ]
             
