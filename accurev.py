@@ -2447,7 +2447,7 @@ def clDeepHist(args):
         return 1
 
 def clAffectedStreams(args):
-    streams = ext.affected_streams(depot=args.depot, transaction=args.transaction, includeWorkspaces=args.includeWorkspaces, ignoreTimelocks=args.ignoreTimelocks)
+    streams = ext.affected_streams(depot=args.depot, transaction=args.transaction, includeWorkspaces=args.includeWorkspaces, ignoreTimelocks=args.ignoreTimelocks, doDiffs=args.diffCheck, useCache=args.useCache)
     if streams is not None and len(streams) > 0:
         print("stream name; stream id; stream type;")
         for s in streams:
@@ -2481,6 +2481,8 @@ if __name__ == "__main__":
     affectedStreamsParser.add_argument('-t', '--transaction', dest='transaction', required=True, help='The accurev transaction number for which we want to know the affected streams.')
     affectedStreamsParser.add_argument('-w', '--include-workspaces', dest='includeWorkspaces', action='store_true', default=False, help='The returned set of streams will include workspaces if this option is specified.')
     affectedStreamsParser.add_argument('-i', '--ignore-timelocks', dest='ignoreTimelocks', action='store_true', default=False, help='The returned set of streams will include streams whose timelocks would have otherwise prevented this stream from affecting them.')
+	affectedStreamsParser.add_argument('-d', '--diff-check', dest='diffCheck', action='store_true', default=False, help='The returned set of streams will not include streams whose diffs to previous transaction return empty.')
+	affectedStreamsParser.add_argument('-c', '--cache', dest='useCache', action='store_true', default=False, help='Use the command cache for the needed operations (mainly diffs).')
 
     affectedStreamsParser.set_defaults(func=clAffectedStreams)
 
