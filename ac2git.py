@@ -1126,7 +1126,7 @@ class AccuRev2Git(object):
             #      This case is most obviously a cherry-pick.
 
             # Determine the stream to which the files in this this transaction were promoted.
-            dstStreamName, dstStreamNumber = tr.toStream()
+            dstStreamName, dstStreamNumber = trHist.toStream()
             if dstStreamName is None:
                 raise Exception("Error! Could not determine the destination stream for promote {tr}.".format(tr=tr.id))
             dstStream = accurev.show.streams(depot=depot, stream=dstStreamName, timeSpec=tr.id)
@@ -1135,24 +1135,11 @@ class AccuRev2Git(object):
             dstStream = dstStream.streams[0]
 
             # Determine the stream from which the files in this this transaction were promoted.
-            srcStreamName, srcStreamNumber = tr.fromStream()
-            srcStream = None
-            if srcStreamName is None:
-                if dstStream is not None and trHist.streams is not None and len(trHist.streams) == 2:
-                    if trHist.streams[0].streamNumber == dstStream.streamNumber:
-                        srcStream = trHist.streams[1]
-                    elif trHist.streams[1].streamNumber == dstStream.streamNumber:
-                        srcStream = trHist.streams[0]
-                    else:
-                        raise Exception("Error! Failed to match destination stream {s} (id {n}) to either of the two affected streams {s1} (id {s1num}) and {s2} (id {s2num}).".format(s=dstStream.name, n=dstStream.streamNumber, s1=trHist.streams[0].name, s1num=trHist.streams[0].streamNumber, s2=trHist.streams[1].name, s2num=trHist.streams[1].streamNumber))
-                else:
-                    raise Exception("Error! Could not determine the source stream for promote {tr}.".format(tr=tr.id))
-            else:
-                srcStream = accurev.show.streams(depot=depot, stream=srcStreamName, timeSpec=tr.id)
-
-                if srcStream is None or srcStream.streams is None or len(srcStream.streams) == 0:
-                    raise Exception("Error! accurev show streams -p {d} -s {s} -t {t} failed!".format(d=depot, s=srcStreamName, t=tr.id))
-                srcStream = srcStream.streams[0]
+            srcStreamName, srcStreamNumber = trHist.fromStream()
+            srcStream = accurev.show.streams(depot=depot, stream=srcStreamName, timeSpec=tr.id)
+            if srcStream is None or srcStream.streams is None or len(srcStream.streams) == 0:
+                raise Exception("Error! accurev show streams -p {d} -s {s} -t {t} failed!".format(d=depot, s=srcStreamName, t=tr.id))
+            srcStream = srcStream.streams[0]
 
             # Perform the git merge of the 'from stream' into the 'to stream' but only if they have the same contents.
             self.gitRepo.checkout(branchName=dstStream.name)

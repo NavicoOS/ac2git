@@ -607,6 +607,44 @@ class obj:
             else:
                 # Invalid XML for an AccuRev hist command response.
                 return None
+
+        def toStream(self):
+            if self.transactions is None:
+                raise Exception("Can't workout the source stream for a None transaction.")
+            elif len(self.transactions) != 1:
+                raise Exception("Can't work out the source stream for multiple transactions.")
+            
+            return self.transactions[0].toStream()
+        
+        # Pre accurev 6.1 determining the from stream was difficult since the fromStreamName attribute of the transaction
+        # was missing. However, if you only queried a single transaction (i.e. `accurev hist -p Depot -t 71 -fex`) then
+        # there would be one transaction but two streams listed. From this we can work out which stream things were promoted
+        # to and infer that the other stream that is included is the stream from which the promote came from.
+        # Hence, since both the transactions and streams are required to do this, the History object should do it for this one
+        # very specific case.
+        def fromStream(self):
+            if self.transactions is None:
+                raise Exception("Can't workout the source stream for a None transaction.")
+            elif len(self.transactions) != 1:
+                raise Exception("Can't work out the source stream for multiple transactions.")
+            
+            fromStreamName, fromStreamNumber = self.transactions[0].fromStream()
+            if fromStreamName is None:
+                toStreamName, toStreamNumber = self.toStream()
+                if toStreamName is not None and toStreamNumber is not None and self.streams is not None and len(self.streams) == 2:
+                    fromStream = None
+                    if self.streams[0].streamNumber == toStreamNumber:
+                        fromStream = self.streams[1]
+                    elif self.streams[1].streamNumber == toStreamNumber:
+                        fromStream = self.streams[0]
+                    else:
+                        raise Exception("Error! Failed to match destination stream {s} (id {n}) to either of the two affected streams {s1} (id {s1num}) and {s2} (id {s2num}).".format(s=toStreamName, n=toStreamNumber, s1=self.streams[0].name, s1num=self.streams[0].streamNumber, s2=self.streams[1].name, s2num=self.streams[1].streamNumber))
+                    
+                    fromStreamName, fromStreamNumber = fromStream.name, fromStream.streamNumber
+                else:
+                    raise Exception("Error! Could not determine the source stream for promote {tr}.".format(tr=self.transactions[0].id))
+            
+            return (fromStreamName, fromStreamNumber)
     
     class Stat(object):
         class Element(object):
