@@ -1000,6 +1000,48 @@ class AccuRev2Git(object):
         if self.config.accurev.commandCacheFilename is not None:
             accurev.ext.disable_command_cache()
 
+    def GitCommitOrMerge(self, depot, dstStream, srcStream, tr, commentPrefix, commentSuffix):
+        # Perform the git merge of the 'from stream' into the 'to stream' but only if they have the same contents.
+        if self.gitRepo.checkout(branchName=dstStream.name) is None:
+            raise Exception("git checkout branch {br}, failed!".format(br=dstStream.name))
+        
+        diff = self.TryDiff(streamName=dstStream.name, firstTrNumber=(tr.id - 1), secondTrNumber=tr.id)
+        deletedPathList = self.DeleteDiffItemsFromRepo(diff=diff)
+        popResult = self.TryPop(streamName=dstStream.name, transaction=tr)
+
+        commitHash = self.Commit(depot=depot, stream=dstStream, transaction=tr, branchName=dstStream.name, allowEmptyCommit=True, noNotes=True)
+        if commitHash is None:
+            raise Exception("Failed to commit promote {tr}!".format(tr=tr.id))
+        diff = self.gitRepo.raw_cmd([u'git', u'diff', u'--stat', dstStream.name, srcStream.name])
+        if diff is None:
+            raise Exception("Failed to get tree for new branch {br}!".format(br=dstStream.name))
+        
+        if len(diff.strip()) == 0:
+            # Merge
+            self.config.logger.info("Merge, branch {src} into {dst}".format(src=srcStream.name, dst=dstStream.name))
+            if self.gitRepo.reset(branch="HEAD^") is None:
+                raise Exception("Failed to undo commit! git reset HEAD^, failed with: {err}".format(err=self.gitRepo.lastStderr))
+            if self.gitRepo.raw_cmd([u'git', u'stash', u'--all']) is None:
+                raise Exception("Failed to stash existing changes! Failed with: {err}".format(err=self.gitRepo.lastStderr))
+            if self.gitRepo.raw_cmd([u'git', u'merge', u'--no-ff', u'--no-commit', srcStream.name]) is None:
+                raise Exception("Failed to merge! Failed with: {err}".format(err=self.gitRepo.lastStderr))
+            if self.gitRepo.raw_cmd([u'git', u'rm', u'--cached', u'-r', u'.']) is None:
+                raise Exception("Failed to remove stashed changes after the merge! Failed with: {err}".format(err=self.gitRepo.lastStderr))
+            if self.gitRepo.clean(directories=True, force=True, forceSubmodules=True) is None:
+                raise Exception("Failed to clean working directory! Failed with: {err}".format(err=self.gitRepo.lastStderr))
+            if self.gitRepo.raw_cmd([u'git', u'stash', u'pop']) is None:
+                raise Exception("Failed to reapply stashed changes! Failed with: {err}".format(err=self.gitRepo.lastStderr))
+
+            commitHash = self.Commit(depot=depot, stream=dstStream, transaction=tr, branchName=dstStream.name, allowEmptyCommit=True, noNotes=True)
+            if commitHash is None:
+                raise Exception("Failed to re-commit merged promote {tr}!".format(tr=tr.id))
+        else:
+            # This too could be a merge. What we should check is if it is possible to find a commit on the srcStream "branch" 
+            # whose diff against the merge base of this branch introduces "the same" changes as this promote...
+            # Since it is too hard for now, just ignore this potential case and continue...
+            # Cherry-pick
+            self.config.logger.info("Cherry-pick! Nothing to do. Continuing.")
+
     def ProcessTransaction(self, depot, transaction):
         trHist = self.TryHist(depot=depot, trNum=transaction)
         if trHist is None or len(trHist.transactions) == 0 is None:
@@ -1142,12 +1184,6 @@ class AccuRev2Git(object):
             srcStream = srcStream.streams[0]
 
             # Perform the git merge of the 'from stream' into the 'to stream' but only if they have the same contents.
-            self.gitRepo.checkout(branchName=dstStream.name)
-            
-            diff = self.TryDiff(streamName=dstStream.name, firstTrNumber=(tr.id - 1), secondTrNumber=tr.id)
-            deletedPathList = self.DeleteDiffItemsFromRepo(diff=diff)
-            popResult = self.TryPop(streamName=dstStream.name, transaction=tr)
-
             commentPrefix = "Merged {src} into {dst}".format(src=srcStream.name, dst=dstStream.name)
             commentSuffix = 'Accurev-stream-id: {streamNumber}\nAccurev-stream-name: {streamName}\nAccurev-transaction-id: {trId}\nAccurev-transaction-type: {trType}\nAccurev-from-stream-id: {fromStreamId}\nAccurev-from-stream-name: {fromStreamName}'.format(streamNumber=dstStream.streamNumber, streamName=dstStream.name, trId=tr.id, trType=tr.Type, fromStreamId=srcStream.streamNumber, fromStreamName=srcStream.name)
             if tr.comment is None:
@@ -1155,38 +1191,7 @@ class AccuRev2Git(object):
             else:
                 tr.comment = '{0}\n\n{1}\n\n{2}'.format(commentPrefix, tr.comment, commentSuffix)
 
-            commitHash = self.Commit(depot=depot, stream=dstStream, transaction=tr, branchName=dstStream.name, allowEmptyCommit=True, noNotes=True)
-            if commitHash is None:
-                raise Exception("Failed to commit promote {tr}!".format(tr=tr.id))
-            diff = self.gitRepo.raw_cmd([u'git', u'diff', u'--stat', dstStream.name, srcStream.name])
-            if diff is None:
-                raise Exception("Failed to get tree for new branch {br}!".format(br=dstStream.name))
-            
-            if len(diff.strip()) == 0:
-                # Merge
-                self.config.logger.info("Merge, branch {src} into {dst}".format(src=srcStream.name, dst=dstStream.name))
-                if self.gitRepo.reset(branch="HEAD^") is None:
-                    raise Exception("Failed to undo commit! git reset HEAD^, failed with: {err}".format(err=self.gitRepo.lastStderr))
-                if self.gitRepo.raw_cmd([u'git', u'stash', u'--all']) is None:
-                    raise Exception("Failed to stash existing changes! Failed with: {err}".format(err=self.gitRepo.lastStderr))
-                if self.gitRepo.raw_cmd([u'git', u'merge', u'--no-ff', u'--no-commit', srcStream.name]) is None:
-                    raise Exception("Failed to merge! Failed with: {err}".format(err=self.gitRepo.lastStderr))
-                if self.gitRepo.raw_cmd([u'git', u'rm', u'--cached', u'-r', u'.']) is None:
-                    raise Exception("Failed to remove stashed changes after the merge! Failed with: {err}".format(err=self.gitRepo.lastStderr))
-                if self.gitRepo.clean(directories=True, force=True, forceSubmodules=True) is None:
-                    raise Exception("Failed to clean working directory! Failed with: {err}".format(err=self.gitRepo.lastStderr))
-                if self.gitRepo.raw_cmd([u'git', u'stash', u'pop']) is None:
-                    raise Exception("Failed to reapply stashed changes! Failed with: {err}".format(err=self.gitRepo.lastStderr))
-
-                commitHash = self.Commit(depot=depot, stream=dstStream, transaction=tr, branchName=dstStream.name, allowEmptyCommit=True, noNotes=True)
-                if commitHash is None:
-                    raise Exception("Failed to re-commit merged promote {tr}!".format(tr=tr.id))
-            else:
-                # This too could be a merge. What we should check is if it is possible to find a commit on the srcStream "branch" 
-                # whose diff against the merge base of this branch introduces "the same" changes as this promote...
-                # Since it is too hard for now, just ignore this potential case and continue...
-                # Cherry-pick
-                self.config.logger.info("Cherry-pick! Nothing to do. Continuing.")
+            self.GitCommitOrMerge(depot=depot, dstStream=dstStream, srcStream=srcStream, tr=tr, commentPrefix=commentPrefix, commentSuffix=commentSuffix)
             
             raise Exception("Incomplete! For each direct child, merge this commit into it if it has inheritted all the changes...")
             
