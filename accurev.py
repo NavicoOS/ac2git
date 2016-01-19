@@ -2392,7 +2392,7 @@ class ext(object):
     # Returns a list of streams which are affected by the given transaction.
     # The transaction must be of type obj.Transaction which is obtained from the obj.History.transactions
     # which is returned by the hist() function.
-    def affected_streams(depot, transaction, includeWorkspaces=True, ignoreTimelocks=True):
+    def affected_streams(depot, transaction, includeWorkspaces=True, ignoreTimelocks=True, doDiffs=False, useCache=False):
         if not isinstance(transaction, obj.Transaction):
             transaction = hist(depot=depot, timeSpec=str(transaction)).transactions[0]
         
@@ -2416,7 +2416,12 @@ class ext(object):
                     if streamMap[stream].basis in childrenSet and stream not in childrenSet:
                         if includeWorkspaces or streamMap[stream].Type.lower() != "workspace":
                             if ignoreTimelocks or streamMap[stream].time is None or streamMap[stream].time >= transaction.time:
-                                newChildrenSet.add(stream)
+                                if doDiffs and transaction.id > 1:
+                                    diffResult = diff(all=True, informationOnly=True, verSpec1=stream, verSpec2=stream, transactionRange="{0}-{1}".format(transaction.id, transaction.id - 1), useCache=useCache)
+                                    if len(diffResult.elements) != 0:
+                                        newChildrenSet.add(stream)
+                                else:
+                                    newChildrenSet.add(stream)
             
             rv = []
             for stream in childrenSet:
