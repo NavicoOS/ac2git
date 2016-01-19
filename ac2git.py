@@ -983,7 +983,6 @@ class AccuRev2Git(object):
                 refspec = "refs/heads/{branch}:refs/heads/{branch} refs/notes/{branch}:refs/notes/{branch}".format(branch=branch)
                 for remoteName in self.config.git.remoteMap:
                     pushOutput = None
-                    success = True
                     try:
                         pushCmd = "git push {remote} {refspec}".format(remote=remoteName, refspec=refspec)
                         pushOutput = subprocess.check_output(pushCmd.split(), stderr=subprocess.STDOUT).decode('utf-8')
@@ -993,9 +992,6 @@ class AccuRev2Git(object):
                         self.config.logger.error("Push to '{remote}' failed!".format(remote=remoteName))
                         self.config.logger.dbg("'{cmd}', returned {returncode} and failed with:".format(cmd="' '".join(e.cmd), returncode=e.returncode))
                         self.config.logger.dbg("{output}".format(output=e.output.decode('utf-8')))
-                        success = False
-                    if not success:
-                        raise Exception("Failed to push to {remote}, aborting!".format(remote=remoteName))
         
         if self.config.accurev.commandCacheFilename is not None:
             accurev.ext.disable_command_cache()
@@ -1072,7 +1068,7 @@ class AccuRev2Git(object):
                     raise Exception("Failed to checkout basis stream {bs} for stream {s}".format(bs=newStream.basis, s=newStream.name))
             
             if self.gitRepo.checkout(branchName=newStream.name, isNewBranch=True) is None:
-                raise Exception("Failed to create new branch {br}".format(newStream.name))
+                raise Exception("Failed to create new branch {br}. Error: {err}".format(br=newStream.name, err=self.gitRepo.lastStderr))
             self.config.logger.info("mkstream name={name}, number={num}".format(name=newStream.name, num=newStream.streamNumber))
             # Modify the commit message
             if tr.comment is not None:
