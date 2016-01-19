@@ -1042,6 +1042,8 @@ class AccuRev2Git(object):
             # Cherry-pick
             self.config.logger.info("Cherry-pick! Nothing to do. Continuing.")
 
+        return commitHash
+
     def ProcessTransaction(self, depot, transaction):
         trHist = self.TryHist(depot=depot, trNum=transaction)
         if trHist is None or len(trHist.transactions) == 0 is None:
@@ -1193,7 +1195,12 @@ class AccuRev2Git(object):
 
             self.GitCommitOrMerge(depot=depot, dstStream=dstStream, srcStream=srcStream, tr=tr, commentPrefix=commentPrefix, commentSuffix=commentSuffix)
             
-            raise Exception("Incomplete! For each direct child, merge this commit into it if it has inheritted all the changes...")
+            affectedStreams = accurev.ext.affected_streams(depot=depot, transaction=tr.id, includeWorkspaces=True, ignoreTimelocks=False, doDiffs=True, useCache=self.config.accurev.UseCommandCache())
+            for stream in affectedStreams:
+                if stream.streamNumber != dstStream.streamNumber and stream.streamNumber != srcStream.streamNumber:
+                    commentPrefix = "Merged {src} into {dst}".format(src=dstStream.name, dst=stream.name)
+                    self.GitCommitOrMerge(depot=depot, dstStream=stream, srcStream=dstStream, tr=tr, commentPrefix=commentPrefix, commentSuffix=commentSuffix)
+            
             
         elif tr.Type == "merge":
             raise Exception("Merge not yet implemented! Required for this to work!")
