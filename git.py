@@ -20,6 +20,9 @@ from math import floor
 
 gitCmd = u'git'
 
+whiteSpaceRe = r'[ \t\r\n]'
+nonWhiteSpaceRe = r'[^ \t\r\n]'
+
 class GitStatus(object):
     # Regular expressions used in fromgitoutput classmethod for parsing the different git lines.
     branchRe        = re.compile(r'^On branch (.*)$')
@@ -220,7 +223,44 @@ class GitBranchListItem(object):
             
             return cls(name=name, shortHash=shortHash, remote=remote, shortComment=comment, isCurrent=isCurrent)
         return None
-    
+
+class GitRemoteListItem(object):
+    remoteVVRe = re.compile(pattern='^(?P<name>{nw}+){w}+(?P<url>{nw}+){w}+(?P<action>{nw}+)'.format(nw=nonWhiteSpaceRe, w=whiteSpaceRe), flags=re.MULTILINE)
+    def __init__(self, name, url, pushUrl=None):
+        self.name    = name
+        self.url     = url
+        self.pushUrl = pushUrl
+
+    def __repr__(self):
+        str = '{name}\t{url} (fetch)\n{name}\t{pushUrl} (push)'.format(name=self.name, url=self.url, pushUrl=self.url if self.pushUrl is None else self.pushUrl)
+        return str
+
+    @classmethod
+    def fromgitremoteoutput(cls, output):
+        remotes = {}
+        for remoteVVMatch in GitRemoteListItem.remoteVVRe.finditer(output):
+            if remoteVVMatch is not None:
+                name = remoteVVMatch.group(u'name')
+                action = remoteVVMatch.group(u'action')
+                url = None
+                pushUrl = None
+                if action == "(fetch)":
+                    url  = remoteVVMatch.group(u'url')
+                elif action == "(push)":
+                    pushUrl = remoteVVMatch.group(u'url')
+                else:
+                    raise Exception("Unrecognized suffix {suffix} for remote string {s}!".format(suffix=action, s=remoteVVMatch.group(0)))
+                
+                if name not in remotes:
+                    remotes[name] = cls(name=name, url=url, pushUrl=pushUrl)
+                else:
+                    if url is not None:
+                        remotes[name].url = url
+                    if pushUrl is not None:
+                        remotes[name].pushUrl = pushUrl
+
+        return remotes.values()
+
 def getDatetimeString(date, timezone=None):
     dateStr = None
     if date is not None:
@@ -302,7 +342,7 @@ class repo(object):
         return self._docmd(cmd)
 
     def branch(self):
-        pass
+        raise Exception("Not yet implemented!")
     
     def rm(self, fileList = [], recursive=False, force=False, cached=False):
         if len(fileList) > 0:
@@ -425,6 +465,11 @@ class repo(object):
                     branchList.append(GitBranchListItem.fromgitbranchoutput(line))
             return branchList
         return None
+
+    def remote_list(self):
+        cmd = [ gitCmd, u'remote', u'-vv' ]
+        output = self._docmd(cmd)
+        return GitRemoteListItem.fromgitremoteoutput(output)
 
     def status(self):
         cmd = [ gitCmd, u'status' ]
