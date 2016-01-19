@@ -869,6 +869,7 @@ class AccuRev2Git(object):
                 # Right now nextTr is an integer representation of our next transaction.
                 # Delete all of the files which are even mentioned in the diff so that we can do a quick populate (wouth the overwrite option)
                 popOverwrite = (self.config.method == "pop")
+                deletedPathList = None
                 if self.config.method == "pop":
                     self.ClearGitRepo()
                 else:
@@ -926,12 +927,13 @@ class AccuRev2Git(object):
                                     self.config.logger.dbg( "  what changed: {0}".format(change.what) )
                                     self.config.logger.dbg( "  original: {0}".format(change.stream1) )
                                     self.config.logger.dbg( "  new:      {0}".format(change.stream2) )
-                        self.config.logger.dbg( "deleted {0} files:".format(len(deletedPathList)) )
-                        for p in deletedPathList:
-                            self.config.logger.dbg( "  {0}".format(p) )
-                        self.config.logger.dbg( "populated {0} files:".format(len(popResult.elements)) )
-                        for e in popResult.elements:
-                            self.config.logger.dbg( "  {0}".format(e.location) )
+                        if deletedPathList is not None:
+                            self.config.logger.dbg( "deleted {0} files:".format(len(deletedPathList)) )
+                            for p in deletedPathList:
+                                self.config.logger.dbg( "  {0}".format(p) )
+                            self.config.logger.dbg( "populated {0} files:".format(len(popResult.elements)) )
+                            for e in popResult.elements:
+                                self.config.logger.dbg( "  {0}".format(e.location) )
                         self.config.logger.info("stream {0}: tr. #{1} is a no-op. Potential but unlikely error. Continuing.".format(stream.name, tr.id))
                     else:
                         break # Early return from processing this stream. Restarting should clean everything up.
