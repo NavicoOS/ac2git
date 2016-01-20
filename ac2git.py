@@ -1157,7 +1157,7 @@ class AccuRev2Git(object):
             commitMessage = self.GenerateCommitMessage(transaction=tr, dstStream=stream)
             self.Commit(depot=depot, stream=stream, transaction=tr, branchName=stream.name, noNotes=True, messageOverride=commitMessage)
             
-        elif tr.Type in [ "keep", "co" ]:
+        elif tr.Type in [ "keep", "co", "move" ]:
             streamName, streamNumber = tr.affectedStream()
             stream = accurev.show.streams(depot=depot, stream=streamNumber, timeSpec=tr.id).streams[0]
             if self.gitRepo.checkout(branchName=stream.name) is None:
@@ -1201,18 +1201,32 @@ class AccuRev2Git(object):
 
             # Determine the stream from which the files in this this transaction were promoted.
             srcStreamName, srcStreamNumber = trHist.fromStream()
-            srcStream = accurev.show.streams(depot=depot, stream=srcStreamName, timeSpec=tr.id)
-            if srcStream is None or srcStream.streams is None or len(srcStream.streams) == 0:
-                raise Exception("Error! accurev show streams -p {d} -s {s} -t {t} failed!".format(d=depot, s=srcStreamName, t=tr.id))
-            srcStream = srcStream.streams[0]
+            srcStream = None
+            if srcStreamName is None:
+                # We have failed to determine the stream from which this transaction came. Hence we now must treat this as a cherry-pick instead of a merge...
+                self.config.logger.error("Error! Could not determine the source stream for promote {tr}. Treating as a cherry-pick.".format(tr=tr.id))
+                diff = self.TryDiff(streamName=dstStream.name, firstTrNumber=(tr.id - 1), secondTrNumber=tr.id)
+                deletedPathList = self.DeleteDiffItemsFromRepo(diff=diff)
+                popResult = self.TryPop(streamName=dstStream.name, transaction=tr)
 
-            # Perform the git merge of the 'from stream' into the 'to stream' but only if they have the same contents.
-            commitMessage = self.GenerateCommitMessage(transaction=tr, dstStream=dstStream, srcStream=srcStream, title="Merged {src} into {dst} - accurev promote.".format(src=srcStream.name, dst=dstStream.name))
-            self.GitCommitOrMerge(depot=depot, dstStream=dstStream, srcStream=srcStream, tr=tr, messageOverride=commitMessage)
+                commitMessage = self.GenerateCommitMessage(transaction=tr, dstStream=dstStream)
+                commitHash = self.Commit(depot=depot, stream=dstStream, transaction=tr, branchName=dstStream.name, allowEmptyCommit=True, noNotes=True, messageOverride=commitMessage)
+                if commitHash is None:
+                    raise Exception("Failed to commit a `{Type}`! tr={tr}".format(Type=tr.Type, tr=tr.id))
+            else:
+                # The source stream is almost always a workspace in which the transaction was generated. This is not ideal, but it is the best we can get.
+                srcStream = accurev.show.streams(depot=depot, stream=srcStreamName, timeSpec=tr.id)
+                if srcStream is None or srcStream.streams is None or len(srcStream.streams) == 0:
+                    raise Exception("Error! accurev show streams -p {d} -s {s} -t {t} failed!".format(d=depot, s=srcStreamName, t=tr.id))
+                srcStream = srcStream.streams[0]
+
+                # Perform the git merge of the 'from stream' into the 'to stream' but only if they have the same contents.
+                commitMessage = self.GenerateCommitMessage(transaction=tr, dstStream=dstStream, srcStream=srcStream, title="Merged {src} into {dst} - accurev promote.".format(src=srcStream.name, dst=dstStream.name))
+                self.GitCommitOrMerge(depot=depot, dstStream=dstStream, srcStream=srcStream, tr=tr, messageOverride=commitMessage)
             
             affectedStreams = accurev.ext.affected_streams(depot=depot, transaction=tr.id, includeWorkspaces=True, ignoreTimelocks=False, doDiffs=True, useCache=self.config.accurev.UseCommandCache())
             for stream in affectedStreams:
-                if stream.streamNumber != dstStream.streamNumber and stream.streamNumber != srcStream.streamNumber:
+                if stream.streamNumber != dstStream.streamNumber and (srcStream is None or stream.streamNumber != srcStream.streamNumber):
                     commitMessage = self.GenerateCommitMessage(transaction=tr, dstStream=stream, srcStream=dstStream, title="Merged {src} into {dst} - accurev parent stream inheritance.".format(src=dstStream.name, dst=stream.name), friendlyMessage="Accurev auto-inherited upstream changes.")
                     self.GitCommitOrMerge(depot=depot, dstStream=stream, srcStream=dstStream, tr=tr, messageOverride=commitMessage)
 

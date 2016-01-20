@@ -608,14 +608,35 @@ class obj:
                 # Invalid XML for an AccuRev hist command response.
                 return None
 
-        def toStream(self):
+        # Returns a list of (streamName, streamNumber) tuples that directly correspond to the
+        # destination streams of the transactions. i.e. If there are 5 transactions there would
+        # be 5 tuples (even if they are all for the same stream). The 4th tuple is the destination
+        # stream for the 4th transaction.
+        def toStreams(self):
+            toStreams = []
+            toStreamName, toStreamNumber = None, None
             if self.transactions is None:
-                raise Exception("Can't workout the source stream for a None transaction.")
-            elif len(self.transactions) != 1:
-                raise Exception("Can't work out the source stream for multiple transactions.")
-            
-            return self.transactions[0].toStream()
+                # Can't workout the source stream for a None transaction.
+                return None, None
+            elif self.streams is not None and len(self.streams) == 1:
+                for tr in self.transactions:
+                    toStreams.append( (self.streams[0].name, self.streams[0].streamNumber) )
+            else:
+                for tr in self.transactions:
+                    toStreamName, toStreamNumber = tr.toStream()
+                    toStreams.append( (toStreamName, toStreamNumber) )
+
+            return toStreams
         
+        def toStream(self):
+            if self.streams is not None and len(self.streams) == 1:
+                return self.streams[0].name, self.streams[0].streamNumber
+            else:
+                toStreams = self.toStreams()
+                if len(toStreams) > 1:
+                    raise Exception("Error! Could not determine which of the many destination streams was the destination stream!")
+                return toStreams[0]
+
         # Pre accurev 6.1 determining the from stream was difficult since the fromStreamName attribute of the transaction
         # was missing. However, if you only queried a single transaction (i.e. `accurev hist -p Depot -t 71 -fex`) then
         # there would be one transaction but two streams listed. From this we can work out which stream things were promoted
@@ -624,9 +645,11 @@ class obj:
         # very specific case.
         def fromStream(self):
             if self.transactions is None:
-                raise Exception("Can't workout the source stream for a None transaction.")
+                # Can't workout the source stream for a None transaction.
+                return None, None
             elif len(self.transactions) != 1:
-                raise Exception("Can't work out the source stream for multiple transactions.")
+                # Can't work out the source stream for multiple transactions.
+                return None, None
             
             fromStreamName, fromStreamNumber = self.transactions[0].fromStream()
             if fromStreamName is None:
@@ -642,7 +665,8 @@ class obj:
                     
                     fromStreamName, fromStreamNumber = fromStream.name, fromStream.streamNumber
                 else:
-                    raise Exception("Error! Could not determine the source stream for promote {tr}.".format(tr=self.transactions[0].id))
+                    # Error! Could not determine the source stream.
+                    return None, None
             
             return (fromStreamName, fromStreamNumber)
     
