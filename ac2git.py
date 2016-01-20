@@ -1305,12 +1305,14 @@ class AccuRev2Git(object):
 
         # Begin processing of the transactions
         startTransaction = state["transaction"] + 1
-        self.config.logger.info( "Processing transaction range #{tr_start}-{tr_end}".format(tr_start=startTransaction, tr_end=endTr.id) )
+        currentTransaction = startTransaction
+        self.config.logger.info( "Processing transaction range #{tr_start}-{tr_end}".format(tr_start=currentTransaction, tr_end=endTr.id) )
 
-        lastPushTime = datetime.now()
-        while startTransaction < endTr.id:
-            self.config.logger.dbg( "Started processing transaction #{tr}".format(tr=startTransaction) )
-            self.ProcessTransaction(depot=self.config.accurev.depot, transaction=startTransaction)
+        startTime = datetime.now()
+        lastPushTime = startTime
+        while currentTransaction < endTr.id:
+            self.config.logger.dbg( "Started processing transaction #{tr}".format(tr=currentTransaction) )
+            self.ProcessTransaction(depot=self.config.accurev.depot, transaction=currentTransaction)
             
             # Validate that there are no pending changes (i.e. everything has been committed)
             status = self.gitRepo.status()
@@ -1327,7 +1329,7 @@ class AccuRev2Git(object):
             if lastCommitHash is None or len(lastCommitHash) == 0:
                 raise Exception("Failed to retrieve last commit hash!")
             
-            state["transaction"] = startTransaction
+            state["transaction"] = currentTransaction
             state["branch"] = status.branch.strip()
             state["commit"] = lastCommitHash.strip()
             cmd = [u'git', u'config', u'--local', u'ac2git.state', u'{0}'.format(json.dumps(state))]
@@ -1337,12 +1339,13 @@ class AccuRev2Git(object):
                 self.config.logger.error("Failed to record current state, aborting!")
                 raise Exception("Error! Failed to record current state, aborting!")
             
-            self.config.logger.dbg( "Finished processing transaction #{tr}".format(tr=startTransaction) )
-            startTransaction += 1
+            self.config.logger.dbg( "Finished processing transaction #{tr}".format(tr=currentTransaction) )
+            currentTransaction += 1
 
+            finishTime = datetime.now()
             # Do a push every 5 min or at the end of processing the transactions...
-            if startTransaction == endTr.id or (datetime.now() - lastPushTime).total_seconds() > 300:
-                lastPushTime = datetime.now()
+            if currentTransaction == endTr.id or (finishTime - lastPushTime).total_seconds() > 300:
+                lastPushTime = finishTime
                 if self.config.git.remoteMap is not None:
                     for remoteName in self.config.git.remoteMap:
                         pushOutput = None
@@ -1355,6 +1358,13 @@ class AccuRev2Git(object):
                             self.config.logger.error("Push to '{remote}' failed!".format(remote=remoteName))
                             self.config.logger.dbg("'{cmd}', returned {returncode} and failed with:".format(cmd="' '".join(e.cmd), returncode=e.returncode))
                             self.config.logger.dbg("{output}".format(output=e.output.decode('utf-8')))
+            
+            # Print the progress message
+            processedTransactions = currentTransaction - startTransaction
+            #if processedTransactions % 10 == 0:
+            runningTime = (finishTime - startTime).total_seconds()
+            totalTransactions = endTr.id - state["transaction"]
+            self.config.logger.info("Progress {progress: >5.2f}%, {processed}/{total}, avg. {throughput:.2f} tr/s ({timeTaken:.2f} s/tr)".format(progress=(processedTransactions/totalTransactions), processed=processedTransactions, total=totalTransactions, throughput=(processedTransactions/runningTime), timeTaken=(runningTime/processedTransactions)))
 
             
     def InitGitRepo(self, gitRepoPath):
