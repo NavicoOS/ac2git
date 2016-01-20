@@ -1085,6 +1085,7 @@ class AccuRev2Git(object):
             raise Exception("Couldn't get history for transaction {tr}. Aborting!".format(tr=transaction))
         
         tr = trHist.transactions[0]
+        self.config.logger.dbg( "Transaction #{tr} - {Type} by {user} to {stream} at {time}".format(tr=tr.id, Type=tr.Type, time=tr.time, user=tr.user, stream=tr.toStream()[0]) )
         
         if tr.Type == "mkstream":
             # Old versions of accurev don't tell you the name of the stream that was created in the mkstream transaction.
@@ -1148,19 +1149,19 @@ class AccuRev2Git(object):
         elif tr.Type == "add":
             streamName, streamNumber = tr.affectedStream()
             stream = accurev.show.streams(depot=depot, stream=streamNumber, timeSpec=tr.id).streams[0]
-            if self.gitRepo.checkout(branchName=streamName) is None:
-                raise Exception("Failed to checkout branch {br}!".format(br=streamName))
+            if self.gitRepo.checkout(branchName=stream.name) is None:
+                raise Exception("Failed to checkout branch {br}!".format(br=stream.name))
             # The add command only introduces new files so we can safely use only `accurev pop` to get the changes.
-            self.TryPop(streamName=streamName, transaction=tr)
+            self.TryPop(streamName=stream.name, transaction=tr)
             
             commitMessage = self.GenerateCommitMessage(transaction=tr, dstStream=stream)
-            self.Commit(depot=depot, stream=stream, transaction=tr, branchName=streamName, noNotes=True, messageOverride=commitMessage)
+            self.Commit(depot=depot, stream=stream, transaction=tr, branchName=stream.name, noNotes=True, messageOverride=commitMessage)
             
         elif tr.Type == "keep":
             streamName, streamNumber = tr.affectedStream()
             stream = accurev.show.streams(depot=depot, stream=streamNumber, timeSpec=tr.id).streams[0]
-            if self.gitRepo.checkout(branchName=streamName) is None:
-                raise Exception("Failed to checkout branch {br}!".format(br=streamName))
+            if self.gitRepo.checkout(branchName=stream.name) is None:
+                raise Exception("Failed to checkout branch {br}!".format(br=stream.name))
             
             diff = self.TryDiff(streamName=stream.name, firstTrNumber=(tr.id - 1), secondTrNumber=tr.id)
             deletedPathList = self.DeleteDiffItemsFromRepo(diff=diff)
@@ -1267,7 +1268,7 @@ class AccuRev2Git(object):
         self.config.logger.info( "Processing transaction range #{tr_start}-{tr_end}".format(tr_start=startTransaction, tr_end=endTr.id) )
 
         while startTransaction < endTr.id:
-            self.config.logger.info( "Started processing transaction #{tr}".format(tr=startTransaction) )
+            self.config.logger.dbg( "Started processing transaction #{tr}".format(tr=startTransaction) )
             self.ProcessTransaction(depot=self.config.accurev.depot, transaction=startTransaction)
             
             # Validate that there are no pending changes (i.e. everything has been committed)
@@ -1295,7 +1296,7 @@ class AccuRev2Git(object):
                 self.config.logger.error("Failed to record current state, aborting!")
                 raise Exception("Error! Failed to record current state, aborting!")
             
-            self.config.logger.info( "Finished processing transaction #{tr}".format(tr=startTransaction) )
+            self.config.logger.dbg( "Finished processing transaction #{tr}".format(tr=startTransaction) )
             startTransaction += 1
             
     def InitGitRepo(self, gitRepoPath):
