@@ -600,7 +600,7 @@ class AccuRev2Git(object):
         self.gitRepo.rm(fileList=['.'], force=True, recursive=True)
         self.ClearGitRepo()
 
-    def Commit(self, depot, stream, transaction, branchName=None, isFirstCommit=False, allowEmptyCommit=False, noNotes=False):
+    def Commit(self, depot, stream, transaction, branchName=None, isFirstCommit=False, allowEmptyCommit=False, noNotes=False, messageOverride=None):
         self.PreserveEmptyDirs()
 
         # Add all of the files to the index
@@ -610,7 +610,9 @@ class AccuRev2Git(object):
         messageFilePath = None
         with tempfile.NamedTemporaryFile(mode='w+', prefix='ac2git_commit_', delete=False) as messageFile:
             messageFilePath = messageFile.name
-            if transaction.comment is None or len(transaction.comment) == 0:
+            if messageOverride is not None:
+                messageFile.write(messageOverride)
+            elif transaction.comment is None or len(transaction.comment) == 0:
                 messageFile.write(' ') # White-space is always stripped from commit messages. See the git commit --cleanup option for details.
             else:
                 # In git the # at the start of the line indicate that this line is a comment inside the message and will not be added.
@@ -996,7 +998,46 @@ class AccuRev2Git(object):
         if self.config.accurev.commandCacheFilename is not None:
             accurev.ext.disable_command_cache()
 
-    def GitCommitOrMerge(self, depot, dstStream, srcStream, tr, commentPrefix, commentSuffix):
+    def AppendCommitMessageSuffixStreamInfo(self, suffixList, linePrefix, stream):
+        if stream is not None:
+            suffixList.append('{linePrefix}-id: {id}'.format(linePrefix=linePrefix, id=stream.streamNumber))
+            suffixList.append('{linePrefix}-name: {name}'.format(linePrefix=linePrefix, name=stream.name))
+            if stream.prevName is not None:
+                suffixList.append('{linePrefix}-prev-name: {name}'.format(linePrefix=linePrefix, name=stream.prevName))
+            suffixList.append('{linePrefix}-basis-id: {id}'.format(linePrefix=linePrefix, id=stream.basisStreamNumber))
+            suffixList.append('{linePrefix}-basis-name: {name}'.format(linePrefix=linePrefix, name=stream.basis))
+            if stream.prevBasis is not None and len(stream.prevBasis) > 0:
+                suffixList.append('{linePrefix}-prev-basis-id: {id}'.format(linePrefix=linePrefix, id=stream.prevBasisStreamNumber))
+                suffixList.append('{linePrefix}-prev-basis-name: {name}'.format(linePrefix=linePrefix, name=stream.prevBasis))
+
+
+    def GenerateCommitMessageSuffix(self, transaction, dstStream=None, srcStream=None):
+        suffixList = []
+        suffixList.append('Accurev-transaction-id: {id}'.format(id=transaction.id))
+        suffixList.append('Accurev-transaction-type: {t}'.format(t=transaction.Type))
+        if dstStream is not None:
+            self.AppendCommitMessageSuffixStreamInfo(suffixList=suffixList, linePrefix='Accurev-stream', stream=dstStream)
+        if srcStream is not None:
+            self.AppendCommitMessageSuffixStreamInfo(suffixList=suffixList, linePrefix='Accurev-from-stream', stream=srcStream)
+        
+        return '\n'.join(suffixList)
+
+    def GenerateCommitMessage(self, transaction, dstStream=None, srcStream=None, title=None, friendlyMessage=None):
+        messageSections = []
+
+        if title is not None:
+            messageSections.append(title)
+        if transaction.comment is not None:
+            messageSections.append(transaction.comment)
+        if friendlyMessage is not None:
+            messageSections.append(friendlyMessage)
+        suffix = self.GenerateCommitMessageSuffix(transaction=transaction, dstStream=dstStream, srcStream=srcStream)
+        if suffix is not None:
+            messageSections.append(suffix)
+        
+        return '\n\n'.join(messageSections)
+
+    def GitCommitOrMerge(self, depot, dstStream, srcStream, tr, messageOverride=None):
         # Perform the git merge of the 'from stream' into the 'to stream' but only if they have the same contents.
         if self.gitRepo.checkout(branchName=dstStream.name) is None:
             raise Exception("git checkout branch {br}, failed!".format(br=dstStream.name))
@@ -1005,7 +1046,7 @@ class AccuRev2Git(object):
         deletedPathList = self.DeleteDiffItemsFromRepo(diff=diff)
         popResult = self.TryPop(streamName=dstStream.name, transaction=tr)
 
-        commitHash = self.Commit(depot=depot, stream=dstStream, transaction=tr, branchName=dstStream.name, allowEmptyCommit=True, noNotes=True)
+        commitHash = self.Commit(depot=depot, stream=dstStream, transaction=tr, branchName=dstStream.name, allowEmptyCommit=True, noNotes=True, messageOverride=messageOverride)
         if commitHash is None:
             raise Exception("Failed to commit promote {tr}!".format(tr=tr.id))
         diff = self.gitRepo.raw_cmd([u'git', u'diff', u'--stat', dstStream.name, srcStream.name])
@@ -1028,7 +1069,7 @@ class AccuRev2Git(object):
             if self.gitRepo.raw_cmd([u'git', u'stash', u'pop']) is None:
                 raise Exception("Failed to reapply stashed changes! Failed with: {err}".format(err=self.gitRepo.lastStderr))
 
-            commitHash = self.Commit(depot=depot, stream=dstStream, transaction=tr, branchName=dstStream.name, allowEmptyCommit=True, noNotes=True)
+            commitHash = self.Commit(depot=depot, stream=dstStream, transaction=tr, branchName=dstStream.name, allowEmptyCommit=True, noNotes=True, messageOverride=messageOverride)
             if commitHash is None:
                 raise Exception("Failed to re-commit merged promote {tr}!".format(tr=tr.id))
         else:
@@ -1071,14 +1112,8 @@ class AccuRev2Git(object):
                 raise Exception("Failed to create new branch {br}. Error: {err}".format(br=newStream.name, err=self.gitRepo.lastStderr))
             self.config.logger.info("mkstream name={name}, number={num}".format(name=newStream.name, num=newStream.streamNumber))
             # Modify the commit message
-            if tr.comment is not None:
-                tr.comment = tr.comment.strip()
-            else:
-                tr.comment = ''
-            if len(tr.comment) > 0:
-                tr.comment += '\n'
-            tr.comment += 'Accurev-transaction-id: {trId}\nAccurev-transaction-type: {trType}\nAccurev-stream-id: {streamNumber}\nAccurev-stream-name: {streamName}\nAccurev-stream-basis-id: {basisNumber}\nAccurev-stream-basis-name: {basisName}'.format(trId=tr.id, trType=tr.Type, streamNumber=newStream.streamNumber, streamName=newStream.name, basisNumber=newStream.basisStreamNumber, basisName=newStream.basis)
-            commitHash = self.Commit(depot=depot, stream=newStream, transaction=tr, branchName=newStream.name, isFirstCommit=True, allowEmptyCommit=True, noNotes=True)
+            commitMessage = self.GenerateCommitMessage(transaction=tr, dstStream=newStream)
+            commitHash = self.Commit(depot=depot, stream=newStream, transaction=tr, branchName=newStream.name, isFirstCommit=True, allowEmptyCommit=True, noNotes=True, messageOverride=commitMessage)
             if commitHash is None:
                 raise Exception("Failed to add empty mkstream commit")
         
@@ -1086,8 +1121,6 @@ class AccuRev2Git(object):
             streamName, streamNumber = tr.affectedStream()
             stream = accurev.show.stream(depot=depot, stream=streamNumber, timeSpec=tr.id).streams[0]
             
-            commentSuffix = 'Accurev-stream-id: {streamNumber}\nAccurev-stream-name: {streamName}\nAccurev-transaction-id: {trId}\nAccurev-transaction-type: {trType}'.format(streamNumber=streamNumber, streamName=streamName, trId=tr.id, trType=tr.Type)
-
             if stream.prevName is not None and len(stream.prevName.strip()) > 0:
                 # if the stream has been renamed, use its new name from now on.
                 if self.gitRepo.raw_cmd(u'git', u'branch', u'-m', stream.prevName, stream.name) is None:
@@ -1104,14 +1137,13 @@ class AccuRev2Git(object):
                     raise Exception("Failed to retrieve the last commit hash for new basis stream {bs}".format(bs=stream.basis))
                 if self.gitRepo.raw_cmd(u'git', u'reset', u'--hard', newBasisCommitHash) is None:
                     raise Exception("Failed to rebase branch {br} from {old} to {new}".format(br=stream.name, old=stream.prevBasis, new=stream.newBasis))
-                commentSuffix += '\nAccurev-stream-prev-basis-number: {number}\nAccurev-stream-prev-basis-name: {name}'.format(number=stream.prevBasisStreamNumber, name=stream.prevBasis)
                 
             diff == self.TryDiff(streamName=stream.name, firstTrNumber=(tr.id - 1), secondTrNumber=tr.id)
             deletedPathList = self.DeleteDiffItemsFromRepo(diff=diff)
             popResult = self.TryPop(streamName=stream.name, transaction=tr)
 
-            tr.comment += commentSuffix
-            commitHash = self.Commit(depot=depot, stream=newStream, transaction=tr, branchName=newStream.name, allowEmptyCommit=True, noNotes=True)
+            commitMessage = self.GenerateCommitMessage(transaction=tr, dstStream=stream)
+            commitHash = self.Commit(depot=depot, stream=newStream, transaction=tr, branchName=newStream.name, allowEmptyCommit=True, noNotes=True, messageOverride=commitMessage)
             if commitHash is None:
                 raise Exception("Failed to add chstream commit")
 
@@ -1123,15 +1155,8 @@ class AccuRev2Git(object):
             # The add command only introduces new files so we can safely use only `accurev pop` to get the changes.
             self.TryPop(streamName=streamName, transaction=tr)
             
-            if tr.comment is not None:
-                tr.comment = tr.comment.strip()
-            else:
-                tr.comment = ''
-            if len(tr.comment) > 0:
-                tr.comment += '\n'
-            tr.comment += 'Accurev-stream-id: {streamNumber}\nAccurev-stream-name: {streamName}\nAccurev-transaction-id: {trId}\nAccurev-transaction-type: {trType}'.format(streamNumber=streamNumber, streamName=streamName, trId=tr.id, trType=tr.Type)
-            
-            self.Commit(depot=depot, stream=stream, transaction=tr, branchName=streamName, noNotes=True)
+            commitMessage = self.GenerateCommitMessage(transaction=tr, dstStream=stream)
+            self.Commit(depot=depot, stream=stream, transaction=tr, branchName=streamName, noNotes=True, messageOverride=commitMessage)
             
         elif tr.Type == "keep":
             streamName, streamNumber = tr.affectedStream()
@@ -1143,9 +1168,8 @@ class AccuRev2Git(object):
             deletedPathList = self.DeleteDiffItemsFromRepo(diff=diff)
             popResult = self.TryPop(streamName=stream.name, transaction=tr)
 
-            tr.comment += 'Accurev-stream-id: {streamNumber}\nAccurev-stream-name: {streamName}\nAccurev-transaction-id: {trId}\nAccurev-transaction-type: {trType}'.format(streamNumber=streamNumber, streamName=streamName, trId=tr.id, trType=tr.Type)
-            
-            commitHash = self.Commit(depot=depot, stream=newStream, transaction=tr, branchName=newStream.name, allowEmptyCommit=True, noNotes=True)
+            commitMessage = self.GenerateCommitMessage(transaction=tr, dstStream=stream)
+            commitHash = self.Commit(depot=depot, stream=newStream, transaction=tr, branchName=newStream.name, allowEmptyCommit=True, noNotes=True, messageOverride=commitMessage)
             if commitHash is None:
                 raise Exception("Failed to commit a `keep`! tr={tr}".format(tr=tr.id))
             
@@ -1182,20 +1206,14 @@ class AccuRev2Git(object):
             srcStream = srcStream.streams[0]
 
             # Perform the git merge of the 'from stream' into the 'to stream' but only if they have the same contents.
-            commentPrefix = "Merged {src} into {dst}".format(src=srcStream.name, dst=dstStream.name)
-            commentSuffix = 'Accurev-stream-id: {streamNumber}\nAccurev-stream-name: {streamName}\nAccurev-transaction-id: {trId}\nAccurev-transaction-type: {trType}\nAccurev-from-stream-id: {fromStreamId}\nAccurev-from-stream-name: {fromStreamName}'.format(streamNumber=dstStream.streamNumber, streamName=dstStream.name, trId=tr.id, trType=tr.Type, fromStreamId=srcStream.streamNumber, fromStreamName=srcStream.name)
-            if tr.comment is None:
-                tr.comment = '{0}\n\n{1}'.format(commentPrefix, commentSuffix)
-            else:
-                tr.comment = '{0}\n\n{1}\n\n{2}'.format(commentPrefix, tr.comment, commentSuffix)
-
-            self.GitCommitOrMerge(depot=depot, dstStream=dstStream, srcStream=srcStream, tr=tr, commentPrefix=commentPrefix, commentSuffix=commentSuffix)
+            commitMessage = self.GenerateCommitMessage(transaction=tr, dstStream=dstStream, srcStream=srcStream, title="Merged {src} into {dst} - accurev promote.".format(src=srcStream.name, dst=dstStream.name))
+            self.GitCommitOrMerge(depot=depot, dstStream=dstStream, srcStream=srcStream, tr=tr, messageOverride=commitMessage)
             
             affectedStreams = accurev.ext.affected_streams(depot=depot, transaction=tr.id, includeWorkspaces=True, ignoreTimelocks=False, doDiffs=True, useCache=self.config.accurev.UseCommandCache())
             for stream in affectedStreams:
                 if stream.streamNumber != dstStream.streamNumber and stream.streamNumber != srcStream.streamNumber:
-                    commentPrefix = "Merged {src} into {dst}".format(src=dstStream.name, dst=stream.name)
-                    self.GitCommitOrMerge(depot=depot, dstStream=stream, srcStream=dstStream, tr=tr, commentPrefix=commentPrefix, commentSuffix=commentSuffix)
+                    commitMessage = self.GenerateCommitMessage(transaction=tr, dstStream=stream, srcStream=dstStream, title="Merged {src} into {dst} - accurev parent stream inheritance.".format(src=dstStream.name, dst=stream.name), friendlyMessage="Accurev auto-inherited upstream changes.")
+                    self.GitCommitOrMerge(depot=depot, dstStream=stream, srcStream=dstStream, tr=tr, messageOverride=messageOverride)
             
             
         elif tr.Type == "merge":
