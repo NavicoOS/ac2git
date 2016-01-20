@@ -1293,6 +1293,7 @@ class AccuRev2Git(object):
         startTransaction = state["transaction"] + 1
         self.config.logger.info( "Processing transaction range #{tr_start}-{tr_end}".format(tr_start=startTransaction, tr_end=endTr.id) )
 
+        lastPushTime = datetime.now()
         while startTransaction < endTr.id:
             self.config.logger.dbg( "Started processing transaction #{tr}".format(tr=startTransaction) )
             self.ProcessTransaction(depot=self.config.accurev.depot, transaction=startTransaction)
@@ -1324,6 +1325,23 @@ class AccuRev2Git(object):
             
             self.config.logger.dbg( "Finished processing transaction #{tr}".format(tr=startTransaction) )
             startTransaction += 1
+
+            # Do a push every 5 min or at the end of processing the transactions...
+            if startTransaction == endTr.id or (datetime.now() - lastPushTime).total_seconds() > 300:
+                lastPushTime = datetime.now()
+                if self.config.git.remoteMap is not None:
+                    for remoteName in self.config.git.remoteMap:
+                        pushOutput = None
+                        try:
+                            pushCmd = "git push {remote} --all".format(remote=remoteName)
+                            pushOutput = subprocess.check_output(pushCmd.split(), stderr=subprocess.STDOUT).decode('utf-8')
+                            self.config.logger.info("Push to '{remote}' succeeded:".format(remote=remoteName))
+                            self.config.logger.info(pushOutput)
+                        except subprocess.CalledProcessError as e:
+                            self.config.logger.error("Push to '{remote}' failed!".format(remote=remoteName))
+                            self.config.logger.dbg("'{cmd}', returned {returncode} and failed with:".format(cmd="' '".join(e.cmd), returncode=e.returncode))
+                            self.config.logger.dbg("{output}".format(output=e.output.decode('utf-8')))
+
             
     def InitGitRepo(self, gitRepoPath):
         gitRootDir, gitRepoDir = os.path.split(gitRepoPath)
