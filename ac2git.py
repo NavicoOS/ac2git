@@ -1107,9 +1107,9 @@ class AccuRev2Git(object):
             
             if self.gitRepo.checkout(branchName=newStream.name, isNewBranch=True) is None:
                 raise Exception("Failed to create new branch {br}. Error: {err}".format(br=newStream.name, err=self.gitRepo.lastStderr))
-            self.config.logger.info("mkstream name={name}, number={num}".format(name=newStream.name, num=newStream.streamNumber))
+            self.config.logger.info("mkstream name={name}, number={num}, basis={basis}, basis-number={basisNumber}".format(name=newStream.name, num=newStream.streamNumber, basis=newStream.basis, basisNumber=newStream.basisStreamNumber))
             # Modify the commit message
-            commitMessage = self.GenerateCommitMessage(transaction=tr, dstStream=newStream)
+            commitMessage = self.GenerateCommitMessage(transaction=tr, dstStream=newStream, title="Created {name} based on {basis}".format(name=newStream.name, basis='-' if newStream.basis is None else newStream.basis))
             commitHash = self.Commit(depot=depot, stream=newStream, transaction=tr, branchName=newStream.name, isFirstCommit=True, allowEmptyCommit=True, noNotes=True, messageOverride=commitMessage)
             if commitHash is None:
                 raise Exception("Failed to add empty mkstream commit")
