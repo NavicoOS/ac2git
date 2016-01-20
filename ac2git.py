@@ -1058,8 +1058,6 @@ class AccuRev2Git(object):
             self.config.logger.info("Merge, branch {src} into {dst}".format(src=srcStream.name, dst=dstStream.name))
             if self.gitRepo.reset(branch="HEAD^") is None:
                 raise Exception("Failed to undo commit! git reset HEAD^, failed with: {err}".format(err=self.gitRepo.lastStderr))
-            if self.gitRepo.raw_cmd([u'git', u'stash', u'--all']) is None:
-                raise Exception("Failed to stash existing changes! Failed with: {err}".format(err=self.gitRepo.lastStderr))
             if self.gitRepo.raw_cmd([u'git', u'merge', u'--no-ff', u'--no-commit', u'-s', u'ours', srcStream.name]) is None:
                 raise Exception("Failed to merge! Failed with: {err}".format(err=self.gitRepo.lastStderr))
             
