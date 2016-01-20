@@ -1361,10 +1361,11 @@ class AccuRev2Git(object):
             
             # Print the progress message
             processedTransactions = currentTransaction - startTransaction
-            #if processedTransactions % 10 == 0:
             runningTime = (finishTime - startTime).total_seconds()
             totalTransactions = endTr.id - state["transaction"]
-            self.config.logger.info("Progress {progress: >5.2f}%, {processed}/{total}, avg. {throughput:.2f} tr/s ({timeTaken:.2f} s/tr)".format(progress=(processedTransactions/totalTransactions), processed=processedTransactions, total=totalTransactions, throughput=(processedTransactions/runningTime), timeTaken=(runningTime/processedTransactions)))
+            eta = (runningTime/processedTransactions) * (totalTransactions - processedTransactions)
+            etaDays, etaHours, etaMin, etaSec = int(eta / 60 / 60 / 24), int((eta / 60 / 60) % 24), int((eta / 60) % 60), (eta % 60)
+            self.config.logger.info("Progress {progress: >5.2f}%, {processed}/{total}, avg. {throughput:.2f} tr/s ({timeTaken:.2f} s/tr). ETA {etaDays}d {etaHours}:{etaMin:0>2d}:{etaSec:0>5.2f} (h:mm:ss.ss).".format(progress=(processedTransactions/totalTransactions), processed=processedTransactions, total=totalTransactions, throughput=(processedTransactions/runningTime), timeTaken=(runningTime/processedTransactions), etaDays=etaDays, etaHours=etaHours, etaMin=etaMin, etaSec=etaSec))
 
             
     def InitGitRepo(self, gitRepoPath):
