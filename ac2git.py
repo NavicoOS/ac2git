@@ -1055,7 +1055,6 @@ class AccuRev2Git(object):
         
         if len(diff.strip()) == 0:
             # Merge
-            self.config.logger.info("Merge, branch {src} into {dst}".format(src=srcStream.name, dst=dstStream.name))
             if self.gitRepo.reset(branch="HEAD^") is None:
                 raise Exception("Failed to undo commit! git reset HEAD^, failed with: {err}".format(err=self.gitRepo.lastStderr))
             if self.gitRepo.raw_cmd([u'git', u'merge', u'--no-ff', u'--no-commit', u'-s', u'ours', srcStream.name]) is None:
@@ -1068,12 +1067,13 @@ class AccuRev2Git(object):
             commitHash = self.Commit(depot=depot, stream=dstStream, transaction=tr, branchName=dstStream.name, allowEmptyCommit=True, noNotes=True, messageOverride=messageOverride)
             if commitHash is None:
                 raise Exception("Failed to re-commit merged promote {tr}!".format(tr=tr.id))
+            self.config.logger.info("Merged, branch {src} into {dst}, {commit}".format(src=srcStream.name, dst=dstStream.name, commit=commitHash))
         else:
             # This too could be a merge. What we should check is if it is possible to find a commit on the srcStream "branch" 
             # whose diff against the merge base of this branch introduces "the same" changes as this promote...
             # Since it is too hard for now, just ignore this potential case and continue...
             # Cherry-pick
-            self.config.logger.info("Cherry-pick! Nothing to do. Continuing.")
+            self.config.logger.info("Cherry-picked, branch {src} into {dst}, {commit}".format(src=srcStream.name, dst=dstStream.name, commit=commitHash))
 
         return commitHash
 
@@ -1149,17 +1149,21 @@ class AccuRev2Git(object):
             stream = accurev.show.streams(depot=depot, stream=streamNumber, timeSpec=tr.id).streams[0]
             if self.gitRepo.checkout(branchName=stream.name) is None:
                 raise Exception("Failed to checkout branch {br}!".format(br=stream.name))
+            elif stream.Type != "workspace":
+                raise Exception("Invariant error! Assumed that a {Type} transaction can only occur on a workspace. Stream {name}, type {streamType}".format(Type=tr.type, name=stream.name, streamType=stream.Type))
             # The add command only introduces new files so we can safely use only `accurev pop` to get the changes.
             self.TryPop(streamName=stream.name, transaction=tr)
             
             commitMessage = self.GenerateCommitMessage(transaction=tr, dstStream=stream)
             self.Commit(depot=depot, stream=stream, transaction=tr, branchName=stream.name, noNotes=True, messageOverride=commitMessage)
             
-        elif tr.Type == "keep":
+        elif tr.Type in [ "keep", "co" ]:
             streamName, streamNumber = tr.affectedStream()
             stream = accurev.show.streams(depot=depot, stream=streamNumber, timeSpec=tr.id).streams[0]
             if self.gitRepo.checkout(branchName=stream.name) is None:
                 raise Exception("Failed to checkout branch {br}!".format(br=stream.name))
+            elif stream.Type != "workspace":
+                raise Exception("Invariant error! Assumed that a {Type} transaction can only occur on a workspace. Stream {name}, type {streamType}".format(Type=tr.type, name=stream.name, streamType=stream.Type))
             
             diff = self.TryDiff(streamName=stream.name, firstTrNumber=(tr.id - 1), secondTrNumber=tr.id)
             deletedPathList = self.DeleteDiffItemsFromRepo(diff=diff)
@@ -1168,7 +1172,7 @@ class AccuRev2Git(object):
             commitMessage = self.GenerateCommitMessage(transaction=tr, dstStream=stream)
             commitHash = self.Commit(depot=depot, stream=stream, transaction=tr, branchName=stream.name, allowEmptyCommit=True, noNotes=True, messageOverride=commitMessage)
             if commitHash is None:
-                raise Exception("Failed to commit a `keep`! tr={tr}".format(tr=tr.id))
+                raise Exception("Failed to commit a `{Type}`! tr={tr}".format(tr=tr.id, Type=tr.Type))
             
         elif tr.Type == "promote":
             # Promotes can be thought of as merges or cherry-picks in git and deciding which one we are dealing with
@@ -1211,9 +1215,33 @@ class AccuRev2Git(object):
                 if stream.streamNumber != dstStream.streamNumber and stream.streamNumber != srcStream.streamNumber:
                     commitMessage = self.GenerateCommitMessage(transaction=tr, dstStream=stream, srcStream=dstStream, title="Merged {src} into {dst} - accurev parent stream inheritance.".format(src=dstStream.name, dst=stream.name), friendlyMessage="Accurev auto-inherited upstream changes.")
                     self.GitCommitOrMerge(depot=depot, dstStream=stream, srcStream=dstStream, tr=tr, messageOverride=commitMessage)
+
+        elif tr.Type in [ "defunct", "purge" ]:
+            streamName, streamNumber = tr.affectedStream()
+            stream = accurev.show.streams(depot=depot, stream=streamNumber, timeSpec=tr.id).streams[0]
+            if self.gitRepo.checkout(branchName=stream.name) is None:
+                raise Exception("Failed to checkout branch {br}!".format(br=stream.name))
             
-        elif tr.Type == "merge":
-            raise Exception("Merge not yet implemented! Required for this to work!")
+            diff = self.TryDiff(streamName=stream.name, firstTrNumber=(tr.id - 1), secondTrNumber=tr.id)
+            deletedPathList = self.DeleteDiffItemsFromRepo(diff=diff)
+            popResult = self.TryPop(streamName=stream.name, transaction=tr)
+
+            commitMessage = self.GenerateCommitMessage(transaction=tr, dstStream=stream)
+            commitHash = self.Commit(depot=depot, stream=stream, transaction=tr, branchName=stream.name, allowEmptyCommit=True, noNotes=True, messageOverride=commitMessage)
+            if commitHash is None:
+                raise Exception("Failed to commit a `{Type}`! tr={tr}".format(Type=tr.Type, tr=tr.id))
+            
+            if stream.Type != "workspace":
+                self.config.logger.info("Note: {trType} transaction {id} on stream {stream} ({streamType}). Merging down-stream. Usually defuncts occur on workspaces!".format(trType=tr.Type, id=tr.id, stream=stream.name, streamType=stream.Type))
+                affectedStreams = accurev.ext.affected_streams(depot=depot, transaction=tr.id, includeWorkspaces=True, ignoreTimelocks=False, doDiffs=True, useCache=self.config.accurev.UseCommandCache())
+                for s in affectedStreams:
+                    if s.streamNumber != stream.streamNumber and s.streamNumber != srcStream.streamNumber:
+                        commitMessage = self.GenerateCommitMessage(transaction=tr, dstStream=s, srcStream=stream, title="Merged {src} into {dst} - accurev parent stream inheritance ({trType}).".format(src=stream.name, dst=s.name, trType=tr.Type), friendlyMessage="Accurev auto-inherited upstream changes.")
+                        self.GitCommitOrMerge(depot=depot, dstStream=s, srcStream=stream, tr=tr, messageOverride=commitMessage)
+                
+            
+        elif tr.Type == "defcomp":
+            self.config.logger.info("Ignoring transaction #{id} - {Type}".format(id=tr.id, Type=tr.Type))
 
         else:
             message = "Not yet implemented! Unrecognized transaction type {type}".format(type=tr.Type)
