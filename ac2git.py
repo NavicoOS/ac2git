@@ -1060,14 +1060,12 @@ class AccuRev2Git(object):
                 raise Exception("Failed to undo commit! git reset HEAD^, failed with: {err}".format(err=self.gitRepo.lastStderr))
             if self.gitRepo.raw_cmd([u'git', u'stash', u'--all']) is None:
                 raise Exception("Failed to stash existing changes! Failed with: {err}".format(err=self.gitRepo.lastStderr))
-            if self.gitRepo.raw_cmd([u'git', u'merge', u'--no-ff', u'--no-commit', srcStream.name]) is None:
+            if self.gitRepo.raw_cmd([u'git', u'merge', u'--no-ff', u'--no-commit', u'-s', u'ours', srcStream.name]) is None:
                 raise Exception("Failed to merge! Failed with: {err}".format(err=self.gitRepo.lastStderr))
-            if self.gitRepo.raw_cmd([u'git', u'rm', u'--cached', u'-r', u'.']) is None:
-                raise Exception("Failed to remove stashed changes after the merge! Failed with: {err}".format(err=self.gitRepo.lastStderr))
-            if self.gitRepo.clean(directories=True, force=True, forceSubmodules=True) is None:
-                raise Exception("Failed to clean working directory! Failed with: {err}".format(err=self.gitRepo.lastStderr))
-            if self.gitRepo.raw_cmd([u'git', u'stash', u'pop']) is None:
-                raise Exception("Failed to reapply stashed changes! Failed with: {err}".format(err=self.gitRepo.lastStderr))
+            
+            diff = self.TryDiff(streamName=dstStream.name, firstTrNumber=(tr.id - 1), secondTrNumber=tr.id)
+            deletedPathList = self.DeleteDiffItemsFromRepo(diff=diff)
+            popResult = self.TryPop(streamName=dstStream.name, transaction=tr)
 
             commitHash = self.Commit(depot=depot, stream=dstStream, transaction=tr, branchName=dstStream.name, allowEmptyCommit=True, noNotes=True, messageOverride=messageOverride)
             if commitHash is None:
@@ -1119,7 +1117,7 @@ class AccuRev2Git(object):
         
         elif tr.Type == "chstream":
             streamName, streamNumber = tr.affectedStream()
-            stream = accurev.show.stream(depot=depot, stream=streamNumber, timeSpec=tr.id).streams[0]
+            stream = accurev.show.streams(depot=depot, stream=streamNumber, timeSpec=tr.id).streams[0]
             
             if stream.prevName is not None and len(stream.prevName.strip()) > 0:
                 # if the stream has been renamed, use its new name from now on.
@@ -1138,12 +1136,12 @@ class AccuRev2Git(object):
                 if self.gitRepo.raw_cmd(u'git', u'reset', u'--hard', newBasisCommitHash) is None:
                     raise Exception("Failed to rebase branch {br} from {old} to {new}".format(br=stream.name, old=stream.prevBasis, new=stream.newBasis))
                 
-            diff == self.TryDiff(streamName=stream.name, firstTrNumber=(tr.id - 1), secondTrNumber=tr.id)
+            diff = self.TryDiff(streamName=stream.name, firstTrNumber=(tr.id - 1), secondTrNumber=tr.id)
             deletedPathList = self.DeleteDiffItemsFromRepo(diff=diff)
             popResult = self.TryPop(streamName=stream.name, transaction=tr)
 
             commitMessage = self.GenerateCommitMessage(transaction=tr, dstStream=stream)
-            commitHash = self.Commit(depot=depot, stream=newStream, transaction=tr, branchName=newStream.name, allowEmptyCommit=True, noNotes=True, messageOverride=commitMessage)
+            commitHash = self.Commit(depot=depot, stream=stream, transaction=tr, branchName=stream.name, allowEmptyCommit=True, noNotes=True, messageOverride=commitMessage)
             if commitHash is None:
                 raise Exception("Failed to add chstream commit")
 
@@ -1164,12 +1162,12 @@ class AccuRev2Git(object):
             if self.gitRepo.checkout(branchName=streamName) is None:
                 raise Exception("Failed to checkout branch {br}!".format(br=streamName))
             
-            diff == self.TryDiff(streamName=stream.name, firstTrNumber=(tr.id - 1), secondTrNumber=tr.id)
+            diff = self.TryDiff(streamName=stream.name, firstTrNumber=(tr.id - 1), secondTrNumber=tr.id)
             deletedPathList = self.DeleteDiffItemsFromRepo(diff=diff)
             popResult = self.TryPop(streamName=stream.name, transaction=tr)
 
             commitMessage = self.GenerateCommitMessage(transaction=tr, dstStream=stream)
-            commitHash = self.Commit(depot=depot, stream=newStream, transaction=tr, branchName=newStream.name, allowEmptyCommit=True, noNotes=True, messageOverride=commitMessage)
+            commitHash = self.Commit(depot=depot, stream=stream, transaction=tr, branchName=stream.name, allowEmptyCommit=True, noNotes=True, messageOverride=commitMessage)
             if commitHash is None:
                 raise Exception("Failed to commit a `keep`! tr={tr}".format(tr=tr.id))
             
@@ -1213,8 +1211,7 @@ class AccuRev2Git(object):
             for stream in affectedStreams:
                 if stream.streamNumber != dstStream.streamNumber and stream.streamNumber != srcStream.streamNumber:
                     commitMessage = self.GenerateCommitMessage(transaction=tr, dstStream=stream, srcStream=dstStream, title="Merged {src} into {dst} - accurev parent stream inheritance.".format(src=dstStream.name, dst=stream.name), friendlyMessage="Accurev auto-inherited upstream changes.")
-                    self.GitCommitOrMerge(depot=depot, dstStream=stream, srcStream=dstStream, tr=tr, messageOverride=messageOverride)
-            
+                    self.GitCommitOrMerge(depot=depot, dstStream=stream, srcStream=dstStream, tr=tr, messageOverride=commitMessage)
             
         elif tr.Type == "merge":
             raise Exception("Merge not yet implemented! Required for this to work!")
