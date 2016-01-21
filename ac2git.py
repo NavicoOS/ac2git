@@ -219,6 +219,21 @@ class Config(object):
             
             return str
             
+    class Include(object):
+        @classmethod
+        def fromxmlelement(cls, xmlElement):
+            if xmlElement is not None and xmlElement.tag == 'include':
+                filename = xmlElement.attrib.get('filename')
+
+        def __init__(self, filename):
+            self.filename = filename
+
+        def __repr(self):
+            str = "Config.Include(filename=" + repr(self.filename)
+            str += ")"
+
+            return str
+
     @staticmethod
     def FilenameFromScriptName(scriptName):
         (root, ext) = os.path.splitext(scriptName)
@@ -249,7 +264,11 @@ class Config(object):
                 for userMapElem in userMapsElem.findall('map-user'):
                     usermaps.append(Config.UserMap.fromxmlelement(userMapElem))
             
-            return cls(accurev=accurev, git=git, usermaps=usermaps, method=method, logFilename=logFilename)
+            includes = []
+            for includeElem in xmlRoot.findall('include'):
+                includes.append(Config.Include.fromxmlelement(includeElem))
+
+            return cls(accurev=accurev, git=git, usermaps=usermaps, method=method, logFilename=logFilename, includes=includes)
         else:
             # Invalid XML for an accurev2git configuration file.
             return None
@@ -261,16 +280,18 @@ class Config(object):
             with codecs.open(filename) as f:
                 configXml = f.read()
                 config = Config.fromxmlstring(configXml)
-        
+            if config is not None and len(config.includes) != 0:
+                print("WARNING: Ignoring includes. Not yet implemented!", file=sys.stderr)
         return config
 
-    def __init__(self, accurev = None, git = None, usermaps = None, method = None, logFilename = None):
+    def __init__(self, accurev = None, git = None, usermaps = None, method = None, logFilename = None, includes = []):
         self.accurev     = accurev
         self.git         = git
         self.usermaps    = usermaps
         self.method      = method
         self.logFilename = logFilename
         self.logger      = Config.Logger()
+        self.includes    = includes
         
     def __repr__(self):
         str = "Config(accurev=" + repr(self.accurev)
