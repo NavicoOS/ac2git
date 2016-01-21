@@ -65,8 +65,10 @@ This script contains 2 primary classes,`Config` and `AccuRev2Git`; an `AccuRev2G
  2. `AccuRev2Git.Start()` - This is the function that starts the conversion. It ensures a couple of things like that you have logged into accurev and then calls into `AccuRev2Git.ProcessStreams()`.
  3. `AccuRev2Git.ProcessStreams()` - Is a very simple function that iterates over the streams specified in the configuration.
  4. `AccuRev2Git.ProcessStream()` - This is the **workhorse**. It is where all the logic for converting a stream is located and the rest of the functions in the `AccuRev2Git` class are merely helpers for this function.
+ 5. `AccuRev2Git.ProcessTransactions()` - Is the counterpart to `AccuRev2Git.ProcessStreams()` that uses a different algorithm to generate a merged git repository. It iterates over transactions in sequence generating merge points between git branches along the way.
+ 6. `AccuRev2Git.ProcessTransaction()` - Is the core of the transactions method and is the workhorse of `AccuRev2Git.ProcessTransactions()` mentioned above. In this method you can see exactly how each different type of transaction is mapped to git.
 
-As a bonus there is one more function that may interest you and that is the monstrosity `AccuRev2Git.StitchBranches()`. This function does all of the work required to turn many orphaned branches into a repo with branch merges. It is still a work in progress and needs to be split up.
+As a bonus there is one more function that may interest you and that is the monstrosity `AccuRev2Git.StitchBranches()`. This function does all of the work required to turn many orphaned branches into a repo with branch merges (does not apply if the _"transactions method"_ was used, (5) & (6) above). It is still a work in progress and needs to be split up.
 
 ### git_stitch.py ###
 

@@ -140,10 +140,6 @@ Effectively this command does the heavy lifting for us so that the _diff method_
   + Populate the transaction and commit it into git. _(The populate here is done with the recursive option but without the overwrite option. Meaning that only the changed items are downloaded over the network.)_.
   + Repeat loop until done.
 
-#### Transactions method (work in progress) ####
-
-This method attempts to iterate over the depot transaction by transaction and generate the most correct git conversion possible. It is not compatible with other methods mentioned above and is currently planned to only be capable of converting the entire depot. If this method is used the finalize step doesn't need to be performed as the repository should already have the correct merge points. It is work in progress and is not ready for use just yet. Watch this space.
-
 ### The result ###
 
 What this script will spit out is a git repository with independent orphaned branches representing your streams. Meaning, that each stream is converted separately on a branch that has no merge points with any other branch.
@@ -157,7 +153,14 @@ However, there is hope because I've implemented an experimental feature, describ
 
 ### Experimental features ###
 
-#### Branch merges ####
+#### Transactions method ####
+
+This method attempts to iterate over the depot transaction by transaction and generate the most correct git conversion possible. It is not compatible with other methods mentioned above and is currently planned to only be capable of converting the entire depot. If this method is used the finalize step (described below) doesn't need to be performed as the repository should already have the correct merge points. It is worth noting that this approach, though sequencial _(where the previous approaches could be run in parallel)_, has an additional benefit that the git repository can be used to supplement the missing/unavailable information in order to detect additional merge points which would have been missed by the already mentioned _"finalize method"_. 
+
+This method iterates over each transaction made to a depot in sequence starting at transaction 1. For each transaction type it tries to create the git representation of what has occurred in accurev. For most transactions that can occur on a workspace (i.e. `keep`, `move`, `co`) it generates a git commit on the branch which shares the same name as the workspace in which the transaction occurred. Stream operations like `mkstream` or `chstream` in turn can result in a git branch being renamed or moved, or simply a commit being created. If you are interested in what is going on the best place to look is the `ac2git.py` file and the method `AccuRev2Git.ProcessTransaction()`.
+
+
+#### Branch merges (a.k.a. finalize step) ####
 
 I've been working on making the converted repo more usable by creating fake merge points where possible. This is still in early stages and is experimental so I recommend running it on a copy of the converted repo.
 
