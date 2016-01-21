@@ -885,7 +885,7 @@ class AccuRev2Git(object):
 
         deepHist = None
         if self.config.method == "deep-hist":
-            ignoreTimelocks=True # The code for the timelocks is not tested fully yet. Once tested setting this to false should make the resulting set of transactions smaller
+            ignoreTimelocks=False # The code for the timelocks is not tested fully yet. Once tested setting this to false should make the resulting set of transactions smaller
                                  # at the cost of slightly larger number of upfront accurev commands called.
             self.config.logger.dbg("accurev.ext.deep_hist(depot={0}, stream={1}, timeSpec='{2}-{3}', ignoreTimelocks={4})".format(depot, stream.name, tr.id, endTr.id, ignoreTimelocks))
             deepHist = accurev.ext.deep_hist(depot=depot, stream=stream.name, timeSpec="{0}-{1}".format(tr.id, endTr.id), ignoreTimelocks=ignoreTimelocks)
