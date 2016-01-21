@@ -1270,7 +1270,7 @@ class AccuRev2Git(object):
                 self.config.logger.info("Note: {trType} transaction {id} on stream {stream} ({streamType}). Merging down-stream. Usually defuncts occur on workspaces!".format(trType=tr.Type, id=tr.id, stream=stream.name, streamType=stream.Type))
                 affectedStreams = accurev.ext.affected_streams(depot=depot, transaction=tr.id, includeWorkspaces=True, ignoreTimelocks=False, doDiffs=True, useCache=self.config.accurev.UseCommandCache())
                 for s in affectedStreams:
-                    if s.streamNumber != stream.streamNumber and s.streamNumber != srcStream.streamNumber:
+                    if s.streamNumber != stream.streamNumber:
                         commitMessage = self.GenerateCommitMessage(transaction=tr, dstStream=s, srcStream=stream, title="Merged {src} into {dst} - accurev parent stream inheritance ({trType}).".format(src=stream.name, dst=s.name, trType=tr.Type), friendlyMessage="Accurev auto-inherited upstream changes.")
                         self.GitCommitOrMerge(depot=depot, dstStream=s, srcStream=stream, tr=tr, messageOverride=commitMessage)
                 
