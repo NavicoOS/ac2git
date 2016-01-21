@@ -1265,35 +1265,47 @@ class AccuRev2Git(object):
     def ProcessTransactions(self):
         # Determine the last processed transaction, if any.
         stateStr = self.gitRepo.raw_cmd([u'git', u'config', u'--local', u'ac2git.state'])
-        state = { "transaction": 0, "branch": None, "commit": None }
+        state = { "transaction": 0, "branch_list": None }
         if stateStr is not None and len(stateStr) > 0:
             state = json.loads(stateStr.strip())
             self.config.logger.dbg( "Loaded state {state}".format(state=state) )
             
             # Determine the last processed transaction's associated branch, if any (for first transaction there is none).
-            if state["branch"] is not None and state["commit"] is not None:
-                if len(state["branch"]) == 0 or len(state["commit"]) == 0:
-                    raise Exception("Invalid state! Found last transaction but no last branch/commit information.")
-            
+            if state["transaction"] != 0 and state["branch_list"] is not None and len(state["branch_list"]) != 0:
                 # Reset the repo to the last branch's tip (which should be equivalent to our last transaction).
                 self.config.logger.dbg( "Clean current branch" )
                 self.gitRepo.clean(directories=True, force=True, forceSubmodules=True, includeIgnored=True)
                 self.config.logger.dbg( "Reset current branch" )
                 self.gitRepo.reset(isHard=True)
-                self.config.logger.dbg( "Checkout last processed transaction #{tr} on branch {branchName} at commit {commit}".format(tr=state["transaction"], branchName=state["branch"], commit=state["commit"]) )
-                result = self.gitRepo.raw_cmd([u'git', u'checkout', u'-B', state["branch"], state["commit"]])
+                
+                # Restore all branches to the last saved state but do the branch that was current at the time last.
+                currentBranch = None
+                for br in state["branch_list"]:
+                    if not br["is_current"]:
+                        self.config.logger.dbg( "Restore branch {branchName} at commit {commit}".format(branchName=br["name"], commit=br["commit"]) )
+                        result = self.gitRepo.raw_cmd([u'git', u'checkout', u'-B', br["name"], br["commit"]])
+                        if result is None:
+                            raise Exception("Failed to restore last state. git checkout -B {br} {c}; failed.".format(br=br["name"], c=br["commit"]))
+                    else:
+                        currentBranch = br
+                if currentBranch is None:
+                    raise Exception("Invariant error! There must have been at least one current branch saved.")
+                self.config.logger.dbg( "Checkout last processed transaction #{tr} on branch {branchName} at commit {commit}".format(tr=state["transaction"], branchName=currentBranch["name"], commit=currentBranch["commit"]) )
+                result = self.gitRepo.raw_cmd([u'git', u'checkout', u'-B', currentBranch["name"], currentBranch["commit"]])
                 if result is None:
-                    raise Exception("Failed to restore last state. git checkout -B {br} {c}; failed.".format(br=state["branch"], c=state["commit"]))
+                    raise Exception("Failed to restore last state. git checkout -B {br} {c}; failed.".format(br=currentBranch["name"], c=currentBranch["commit"]))
+
+                # Print out and validate current state as clean.
                 status = self.gitRepo.status()
                 self.config.logger.dbg( "Status of {branch} - {staged} staged, {changed} changed, {untracked} untracked files{initial_commit}.".format(branch=status.branch, staged=len(status.staged), changed=len(status.changed), untracked=len(status.untracked), initial_commit=', initial commit' if status.initial_commit else '') )
                 if status is None:
                     raise Exception("Invalid initial state! The status command return is invalid.")
-                if status.branch is None or status.branch != state["branch"]:
-                    raise Exception("Invalid initial state! The status command returned an invalid name for current branch. Expected {branchName} but got {statusBranch}.".format(branchName=state["branch"], statusBranch=status.branch))
+                if status.branch is None or status.branch != currentBranch["name"]:
+                    raise Exception("Invalid initial state! The status command returned an invalid name for current branch. Expected {branchName} but got {statusBranch}.".format(branchName=currentBranch["name"], statusBranch=status.branch))
                 if len(status.staged) != 0 or len(status.changed) != 0 or len(status.untracked) != 0:
                     raise Exception("Invalid initial state! There are changes in the tracking repository. Staged {staged}, changed {changed}, untracked {untracked}.".format(staged=status.staged, changed=status.changed, untracked=status.untracked))
-            elif state["branch"] is None or state["commit"] is None:
-                raise Exception("Invalid state! Found last transaction but no last branch/commit information.")
+            else:
+                raise Exception("Invalid state! Information found for previous run but is incomplete, corrupt or incorrect.")
         else:
             self.config.logger.dbg( "No last state!" )
 
@@ -1330,8 +1342,18 @@ class AccuRev2Git(object):
                 raise Exception("Failed to retrieve last commit hash!")
             
             state["transaction"] = currentTransaction
-            state["branch"] = status.branch.strip()
-            state["commit"] = lastCommitHash.strip()
+            # Record the current position of all the branches.
+            state["branch_list"] = []
+            for br in self.gitRepo.branch_list():
+                if br.isCurrent:
+                    if br.name != status.branch.strip() or not lastCommitHash.strip().startswith(br.shortHash):
+                        raise Exception("Invariant error! git status and git branch --list reconciliation failed. Status: {statusName} ({statusHash}), Br. list: {listName} ({listHash}).".format(statusName=status.branch.strip(), statusHash=lastCommitHash, listName=br.name, listHash=br.shortHash))
+                brHash = OrderedDict()
+                brHash["name"] = br.name
+                brHash["commit"] = br.shortHash
+                brHash["is_current"] = br.isCurrent
+                state["branch_list"].append(brHash)
+
             cmd = [u'git', u'config', u'--local', u'ac2git.state', u'{0}'.format(json.dumps(state))]
             if self.gitRepo.raw_cmd(cmd) is None:
                 self.config.logger.error("Error! Command {cmd}".format(cmd=' '.join(str(x) for x in cmd)))
