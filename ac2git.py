@@ -1136,32 +1136,33 @@ class AccuRev2Git(object):
                 raise Exception("Failed to add empty mkstream commit")
         
         elif tr.Type == "chstream":
-            streamName, streamNumber = tr.affectedStream()
-            stream = accurev.show.streams(depot=depot, stream=streamNumber, timeSpec=tr.id).streams[0]
+            #streamName, streamNumber = tr.affectedStream()
+            #stream = accurev.show.streams(depot=depot, stream=streamNumber, timeSpec=tr.id).streams[0]
             
-            if stream.prevName is not None and len(stream.prevName.strip()) > 0:
+            if tr.stream.prevName is not None and len(tr.stream.prevName.strip()) > 0:
                 # if the stream has been renamed, use its new name from now on.
-                if self.gitRepo.raw_cmd(u'git', u'branch', u'-m', stream.prevName, stream.name) is None:
-                    raise Exception("Failed to rename branch {old} to {new}".format(old=stream.prevName, new=stream.name))
-                commentSuffix += '\nAccurev-stream-prev-name: {name}'.format(name=stream.prevName)
+                if self.gitRepo.raw_cmd([ u'git', u'branch', u'-m', tr.stream.prevName, tr.stream.name ]) is None:
+                    raise Exception("Failed to rename branch {old} to {new}. Err: {err}".format(old=tr.stream.prevName, new=tr.stream.name, err=self.gitRepo.lastStderr))
+                self.config.logger.info("Renamed branch {oldName} to {newName}".format(oldName=tr.stream.prevName, newName=tr.stream.name))
                 
-            if self.gitRepo.checkout(branchName=stream.name) is None:
-                raise Exception("Failed to checkout branch {br}".format(stream.name))
+            if self.gitRepo.checkout(branchName=tr.stream.name) is None:
+                raise Exception("Failed to checkout branch {br}".format(br=tr.stream.name))
 
-            if stream.prevBasis is not None and len(stream.prevBasis) > 0:
+            if tr.stream.prevBasis is not None and len(tr.stream.prevBasis) > 0:
                 # We need to change where our stream is parented, i.e. rebase it...
-                newBasisCommitHash = self.GetLastCommitHash(branchName=stream.basis)
+                newBasisCommitHash = self.GetLastCommitHash(branchName=tr.stream.basis)
                 if newBasisCommitHash is None:
-                    raise Exception("Failed to retrieve the last commit hash for new basis stream {bs}".format(bs=stream.basis))
-                if self.gitRepo.raw_cmd(u'git', u'reset', u'--hard', newBasisCommitHash) is None:
-                    raise Exception("Failed to rebase branch {br} from {old} to {new}".format(br=stream.name, old=stream.prevBasis, new=stream.newBasis))
+                    raise Exception("Failed to retrieve the last commit hash for new basis stream {bs}".format(bs=tr.stream.basis))
+                if self.gitRepo.raw_cmd([ u'git', u'reset', u'--hard', newBasisCommitHash ]) is None:
+                    raise Exception("Failed to rebase branch {br} from {old} to {new}. Err: {err}".format(br=tr.stream.name, old=tr.stream.prevBasis, new=tr.stream.newBasis, err=self.gitRepo.lastStderr))
+                self.config.logger.info("Rebased branch {name} from {oldBasis} to {newBasis}".format(name=tr.stream.name, oldBasis=tr.stream.prevBasis, newBasis=tr.stream.basis))
                 
-            diff = self.TryDiff(streamName=stream.name, firstTrNumber=(tr.id - 1), secondTrNumber=tr.id)
+            diff = self.TryDiff(streamName=tr.stream.name, firstTrNumber=(tr.id - 1), secondTrNumber=tr.id)
             deletedPathList = self.DeleteDiffItemsFromRepo(diff=diff)
-            popResult = self.TryPop(streamName=stream.name, transaction=tr)
+            popResult = self.TryPop(streamName=tr.stream.name, transaction=tr)
 
-            commitMessage = self.GenerateCommitMessage(transaction=tr, dstStream=stream)
-            commitHash = self.Commit(depot=depot, stream=stream, transaction=tr, branchName=stream.name, allowEmptyCommit=True, noNotes=True, messageOverride=commitMessage)
+            commitMessage = self.GenerateCommitMessage(transaction=tr, dstStream=tr.stream)
+            commitHash = self.Commit(depot=depot, stream=tr.stream, transaction=tr, branchName=tr.stream.name, allowEmptyCommit=True, noNotes=True, messageOverride=commitMessage)
             if commitHash is None:
                 raise Exception("Failed to add chstream commit")
 
