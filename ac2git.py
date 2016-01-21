@@ -1289,7 +1289,9 @@ class AccuRev2Git(object):
         state = { "transaction": 0, "branch_list": None }
         if stateStr is not None and len(stateStr) > 0:
             state = json.loads(stateStr.strip())
-            self.config.logger.dbg( "Loaded state {state}".format(state=state) )
+            self.config.logger.dbg( "Loaded last state at transaction {tr} as:".format(tr=state["transaction"]) )
+            for br in state["branch_list"]:
+                self.config.logger.dbg( " - Branch {br} at {hash}{current}.".format(br=br["name"], hash=br["commit"], current=", current" if br["is_current"] else "") )
             
             # Determine the last processed transaction's associated branch, if any (for first transaction there is none).
             if state["transaction"] != 0 and state["branch_list"] is not None and len(state["branch_list"]) != 0:
