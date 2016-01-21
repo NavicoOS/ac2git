@@ -1285,8 +1285,9 @@ class AccuRev2Git(object):
             raise Exception(message)
 
     def ProcessTransactions(self):
+        stateRefspec = u'refs/ac2git_state'
         # Determine the last processed transaction, if any.
-        stateStr = self.gitRepo.raw_cmd([u'git', u'config', u'--local', u'ac2git.state'])
+        stateStr = self.gitRepo.raw_cmd([u'git', u'show', stateRefspec])
         state = { "transaction": 0, "branch_list": None }
         if stateStr is not None and len(stateStr) > 0:
             state = json.loads(stateStr.strip())
@@ -1378,13 +1379,34 @@ class AccuRev2Git(object):
                 brHash["is_current"] = br.isCurrent
                 state["branch_list"].append(brHash)
 
-            cmd = [u'git', u'config', u'--local', u'ac2git.state', u'{0}'.format(json.dumps(state))]
-            if self.gitRepo.raw_cmd(cmd) is None:
-                self.config.logger.error("Error! Command {cmd}".format(cmd=' '.join(str(x) for x in cmd)))
-                self.config.logger.error("  Failed with: {err}".format(err=self.gitRepo.lastStderr))
-                self.config.logger.error("Failed to record current state, aborting!")
-                raise Exception("Error! Failed to record current state, aborting!")
             
+            stateFilePath = None
+            with tempfile.NamedTemporaryFile(mode='w+', prefix='ac2git_state_', delete=False) as stateFile:
+                stateFilePath = stateFile.name
+                stateFile.write(json.dumps(state))
+            if stateFilePath is not None:
+                cmd = [ u'git', u'hash-object', u'-w', u'{0}'.format(stateFilePath) ]
+                stateObjHash = ''
+                tryCount = 0
+                while stateObjHash is not None and len(stateObjHash) == 0 and tryCount < AccuRev2Git.commandFailureRetryCount:
+                    stateObjHash = self.gitRepo.raw_cmd(cmd)
+                    stateObjHash = stateObjHash.strip()
+                    tryCount += 1
+                os.remove(stateFilePath)
+                updateRefRetr = None
+                if stateObjHash is not None:
+                    cmd = [ u'git', u'update-ref', stateRefspec, stateObjHash ]
+                    updateRefRetr = self.gitRepo.raw_cmd(cmd)
+                if stateObjHash is None or updateRefRetr is None:
+                    self.config.logger.dbg("Error! Command {cmd}".format(cmd=' '.join(str(x) for x in cmd)))
+                    self.config.logger.dbg("  Failed with: {err}".format(err=self.gitRepo.lastStderr))
+                    self.config.logger.error("Failed to record current state, aborting!")
+                    raise Exception("Error! Failed to record current state, aborting!")
+            else:
+                self.config.logger.error("Failed to create temporary file for state of transaction {0}".format(tr.id))
+                raise Exception("Error! Failed to record current state, aborting!")
+                
+
             self.config.logger.dbg( "Finished processing transaction #{tr}".format(tr=currentTransaction) )
             currentTransaction += 1
 
@@ -1397,6 +1419,8 @@ class AccuRev2Git(object):
                         pushOutput = None
                         try:
                             pushCmd = "git push {remote} --all".format(remote=remoteName)
+                            pushOutput = subprocess.check_output(pushCmd.split(), stderr=subprocess.STDOUT).decode('utf-8')
+                            pushCmd = "git push {remote} {refspec}".format(remote=remoteName, refspec=stateRefspec)
                             pushOutput = subprocess.check_output(pushCmd.split(), stderr=subprocess.STDOUT).decode('utf-8')
                             self.config.logger.info("Push to '{remote}' succeeded:".format(remote=remoteName))
                             self.config.logger.info(pushOutput)

@@ -306,13 +306,19 @@ class repo(object):
 
         output = ''
         error  = ''
-        process.poll()
-        while process.returncode is None:
+        
+        while process.poll() is None:
             stdoutdata, stderrdata = process.communicate()
             output += stdoutdata
             error  += stderrdata
-            process.poll()
         
+        try:
+            stdoutdata, stderrdata = process.communicate()
+            output += stdoutdata
+            error  += stderrdata
+        except:
+            pass
+
         self._lastCommand = process
         self.lastStderr = error
         self.lastStdout = output
