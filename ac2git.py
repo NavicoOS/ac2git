@@ -1460,12 +1460,12 @@ class AccuRev2Git(object):
                             self.config.logger.dbg("{output}".format(output=e.output.decode('utf-8')))
             
             # Print the progress message
-            processedTransactions = currentTransaction - startTransaction
-            runningTime = (finishTime - startTime).total_seconds()
-            totalTransactions = endTr.id - state["transaction"]
-            eta = (runningTime/processedTransactions) * (totalTransactions - processedTransactions)
+            processedTransactions = currentTransaction - startTransaction # Represents the number of transactions that were processed in this invokation of the script.
+            runningTime = (finishTime - startTime).total_seconds()        # Represents the time (in seconds) that we have been running the conversion in this invokation.
+            totalTransactions = endTr.id - state["transaction"]           # Represents the total number of transactions processed since we started (this invokation).
+            eta = (runningTime/processedTransactions) * (totalTransactions - processedTransactions)  # Expected time until done (in seconds).
             etaDays, etaHours, etaMin, etaSec = int(eta / 60 / 60 / 24), int((eta / 60 / 60) % 24), int((eta / 60) % 60), (eta % 60)
-            self.config.logger.info("Progress {progress: >5.2f}%, {processed}/{total}, avg. {throughput:.2f} tr/s ({timeTaken:.2f} s/tr). ETA {etaDays}d {etaHours}:{etaMin:0>2d}:{etaSec:0>5.2f} (h:mm:ss.ss).".format(progress=(processedTransactions/totalTransactions), processed=processedTransactions, total=totalTransactions, throughput=(processedTransactions/runningTime), timeTaken=(runningTime/processedTransactions), etaDays=etaDays, etaHours=etaHours, etaMin=etaMin, etaSec=etaSec))
+            self.config.logger.info("Progress {progress: >5.2f}%, {processed}/{total}, avg. {throughput:.2f} tr/s ({timeTaken:.2f} s/tr). ETA {etaDays}d {etaHours}:{etaMin:0>2d}:{etaSec:0>5.2f} (h:mm:ss.ss).".format(progress=((currentTransaction - 1)/endTr.id), processed=(currentTransaction - 1), total=endTr.id, throughput=(processedTransactions/runningTime), timeTaken=(runningTime/processedTransactions), etaDays=etaDays, etaHours=etaHours, etaMin=etaMin, etaSec=etaSec))
 
             
     def InitGitRepo(self, gitRepoPath):
