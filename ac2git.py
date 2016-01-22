@@ -1285,7 +1285,7 @@ class AccuRev2Git(object):
             raise Exception(message)
 
     def ProcessTransactions(self):
-        stateRefspec = u'refs/ac2git_state'
+        stateRefspec = u'refs/ac2git/state'
         # Determine the last processed transaction, if any.
         stateStr = self.gitRepo.raw_cmd([u'git', u'show', stateRefspec])
         state = { "transaction": 0, "branch_list": None }
@@ -1420,7 +1420,7 @@ class AccuRev2Git(object):
                         try:
                             pushCmd = "git push {remote} --all".format(remote=remoteName)
                             pushOutput = subprocess.check_output(pushCmd.split(), stderr=subprocess.STDOUT).decode('utf-8')
-                            pushCmd = "git push {remote} {refspec}".format(remote=remoteName, refspec=stateRefspec)
+                            pushCmd = "git push {remote} +{refspec}:{refspec}".format(remote=remoteName, refspec=stateRefspec)
                             pushOutput = subprocess.check_output(pushCmd.split(), stderr=subprocess.STDOUT).decode('utf-8')
                             self.config.logger.info("Push to '{remote}' succeeded:".format(remote=remoteName))
                             self.config.logger.info(pushOutput)
