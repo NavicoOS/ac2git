@@ -658,8 +658,11 @@ class AccuRev2Git(object):
         # For now just force the time to be UTC centric but preferrably we would have this set-up to either use the local timezone
         # or allow each user to be given a timezone for geographically distributed teams...
         # The PyTz library should be considered for the timezone conversions. Do not roll your own...
-        if self.gitRepo.commit(messageFile=messageFilePath, committer=committer, committer_date=committerDate, committer_tz=committerTimezone, author=committer, date=committerDate, tz=committerTimezone, allow_empty_message=True, allow_empty=allowEmptyCommit, gitOpts=[u'-c', u'core.autocrlf=false']):
-            commitHash = self.GetLastCommitHash()
+        commitResult = self.gitRepo.commit(messageFile=messageFilePath, committer=committer, committer_date=committerDate, committer_tz=committerTimezone, author=committer, date=committerDate, tz=committerTimezone, allow_empty_message=True, allow_empty=allowEmptyCommit, gitOpts=[u'-c', u'core.autocrlf=false'])
+        if commitResult is not None:
+            commitHash = commitResult.shortHash
+            if commitHash is None:
+                commitHash = self.GetLastCommitHash()
             if commitHash is not None:
                 if lastCommitHash != commitHash:
                     self.config.logger.dbg( "Committed {0}".format(commitHash) )

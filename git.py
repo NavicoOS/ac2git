@@ -261,6 +261,53 @@ class GitRemoteListItem(object):
 
         return remotes.values()
 
+class GitCommit(object):
+    # Regular expressions used in fromgitoutput classmethod for parsing the different git lines.
+    infoRe        = re.compile(r'^\[(?P<branch>[^ \t\r\n]+)[ ](?P<shortHash>[^ \t\r\n]+)\][ ](?P<title>.*)$')
+
+    # Git commit output examples:
+    #
+    # Example 1:
+    # > git commit -m "Cleaning up the log output for transactions method."
+    # [master 66d6c95] Cleaning up the log output for transactions method.
+    #  1 file changed, 3 insertions(+), 1 deletion(-)
+    #
+    # Example 2:
+    # > git commit -m "Fixing the cherry-pick commit message for transactions method."
+    # [master a536a2c] Fixing the cherry-pick commit message for transactions method.
+    #  1 file changed, 12 insertions(+), 9 deletions(-)
+    #
+    # Example 3:
+    # > git commit -m "Adding parsing of git commit output."
+    # [master b712533] Adding parsing of git commit output.
+    #  2 files changed, 53 insertions(+), 13 deletions(-)
+
+    def __init__(self, branch=None, shortHash=None, title=None):
+        self.branch    = branch    # Name of the branch on which the commit was made.
+        self.shortHash = shortHash # The string representing the short commit hash (a 7 digit hex number).
+        self.title     = title     # The first line of the commit message.
+
+    def __repr__(self):
+        str = '[{br} {short_hash}] {title}'.format(br=self.branch, short_hash=self.shortHash, title=self.title)
+        return str
+    
+    @classmethod
+    def fromgitoutput(cls, gitOutput):
+        if gitOutput is not None:
+            lines = gitOutput.split(u'\n')
+            if len(lines) > 0:
+                infoMatch = GitCommit.infoRe.match(lines[0])
+                if infoMatch is not None:
+                    branch = infoMatch.group("branch")
+                    shortHash = infoMatch.group("shortHash")
+                    title = infoMatch.group("title")
+                    return cls(branch=branch, shortHash=shortHash, title=title)
+                else:
+                    raise Exception("Failed to match git commit output! re: '{re}'\noutput:\n{output}".format(re=GitCommit.infoRe.pattern, output=lines[0]))
+            else:
+                raise Exception("Git commit returned no lines!")
+        return None
+
 def getDatetimeString(date, timezone=None):
     dateStr = None
     if date is not None:
@@ -306,19 +353,13 @@ class repo(object):
 
         output = ''
         error  = ''
-        
-        while process.poll() is None:
+        process.poll()
+        while process.returncode is None:
             stdoutdata, stderrdata = process.communicate()
             output += stdoutdata
             error  += stderrdata
+            process.poll()
         
-        try:
-            stdoutdata, stderrdata = process.communicate()
-            output += stdoutdata
-            error  += stderrdata
-        except:
-            pass
-
         self._lastCommand = process
         self.lastStderr = error
         self.lastStdout = output
@@ -448,8 +489,8 @@ class repo(object):
         
         # Execute the command
         output = self._docmd(cmd, env=newEnv)
-        
-        return (output is not None)
+
+        return GitCommit.fromgitoutput(output)
     
     def branch_list(self, containsCommit=None, mergedCommit=None, noMergedCommit=None):
         cmd = [ gitCmd, u'branch', u'-vv' ]
