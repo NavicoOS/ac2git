@@ -2271,6 +2271,8 @@ def AccuRev2GitMain(argv):
     parser.add_argument('-m', '--check-missing-users', dest='checkMissingUsers', action='store_const', const=True, help="It will print a list of usernames that are in accurev but were not found in the usermap.")
     parser.add_argument('--auto-config', nargs='?', dest='autoConfigFilename', const=configFilename, default=None, metavar='<config-filename>', help="Auto-generate the configuration file from known AccuRev information. It is required that an accurev username and password are provided either in an existing config file or via the -u and -p options. If there is an existing config file it is backed up and only the accurev username and password will be copied to the new configuration file. If you wish to preserve the config but add more information to it then it is recommended that you use the --fixup-config option instead.")
     parser.add_argument('--fixup-config', nargs='?', dest='fixupConfigFilename', const=configFilename, default=None, metavar='<config-filename>', help="Fixup the configuration file by adding updated AccuRev information. It is the same as the --auto-config option but the existing configuration file options are preserved. Other command line arguments that are provided will override the existing configuration file options for the new configuration file.")
+    parser.add_argument('-T', '--track',    dest='track', action='store_const', const=True, help="Tracking mode. Sets the 'tracking' flag which makes the script run continuously in a loop. Only makes sense for when you want this script to continuously track the accurev depot's newest transactions (i.e. you're using 'highest' or 'now' as your end transactions).")
+    parser.add_argument('-I', '--tracking-intermission', nargs='?', dest='intermission', type=int, const=300, default=0, metavar='<intermission-sec>', help="Sets the intermission (in seconds) between consecutive iterations of the script in 'tracking' mode. The script sleeps for <intermission-sec> seconds before continuing the next conversion. This is useless if the --track option is not used.")
     
     args = parser.parse_args()
     
@@ -2292,47 +2294,54 @@ def AccuRev2GitMain(argv):
     if doEarlyReturn:
         return earlyReturnCode
     
-    # Load the config file
-    config = Config.fromfile(filename=args.configFilename)
-    if config is None:
-        sys.stderr.write("Config file '{0}' not found.\n".format(args.configFilename))
-        return 1
-    elif config.git is not None:
-        if not os.path.isabs(config.git.repoPath):
-            config.git.repoPath = os.path.abspath(config.git.repoPath)
+    while True:
+        # Load the config file
+        config = Config.fromfile(filename=args.configFilename)
+        if config is None:
+            sys.stderr.write("Config file '{0}' not found.\n".format(args.configFilename))
+            return 1
+        elif config.git is not None:
+            if not os.path.isabs(config.git.repoPath):
+                config.git.repoPath = os.path.abspath(config.git.repoPath)
 
-    # Set the overrides for in the configuration from the arguments
-    SetConfigFromArgs(config=config, args=args)
-    
-    if not ValidateConfig(config):
-        return 1
-    
-    config.logger.isDbgEnabled = ( args.debug == True )
+        # Set the overrides for in the configuration from the arguments
+        SetConfigFromArgs(config=config, args=args)
+        
+        if not ValidateConfig(config):
+            return 1
+        
+        config.logger.isDbgEnabled = ( args.debug == True )
 
-    state = AccuRev2Git(config)
-    
-    if config.logFilename is not None and not args.disableLogFile:
-        mode = 'a'
-        if args.resetLogFile:
-            mode = 'w'
-        with codecs.open(config.logFilename, mode, 'utf-8') as f:
-            f.write(u'{0}\n'.format(u" ".join(sys.argv)))
-            state.config.logger.logFile = f
-            state.config.logger.logFileDbgEnabled = ( args.debug == True )
-    
+        state = AccuRev2Git(config)
+        
+        if config.logFilename is not None and not args.disableLogFile:
+            mode = 'a'
+            if args.resetLogFile:
+                mode = 'w'
+            with codecs.open(config.logFilename, mode, 'utf-8') as f:
+                f.write(u'{0}\n'.format(u" ".join(sys.argv)))
+                state.config.logger.logFile = f
+                state.config.logger.logFileDbgEnabled = ( args.debug == True )
+        
+                PrintConfigSummary(state.config)
+                if args.checkMissingUsers:
+                    PrintMissingUsers(state.config)
+                state.config.logger.info("Restart:" if args.restart else "Start:")
+                state.config.logger.referenceTime = datetime.now()
+                rv = state.Start(isRestart=args.restart)
+        else:
             PrintConfigSummary(state.config)
             if args.checkMissingUsers:
                 PrintMissingUsers(state.config)
             state.config.logger.info("Restart:" if args.restart else "Start:")
             state.config.logger.referenceTime = datetime.now()
             rv = state.Start(isRestart=args.restart)
-    else:
-        PrintConfigSummary(state.config)
-        if args.checkMissingUsers:
-            PrintMissingUsers(state.config)
-        state.config.logger.info("Restart:" if args.restart else "Start:")
-        state.config.logger.referenceTime = datetime.now()
-        rv = state.Start(isRestart=args.restart)
+        if not args.track:
+            break
+        elif args.intermission is not None:
+            print("Tracking mode enabled: sleep for {0} seconds.".format(args.intermission))
+            time.sleep(args.intermission)
+        print("Tracking mode enabled: Continuing conversion.")
 
     return rv
         
