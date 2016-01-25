@@ -1075,9 +1075,9 @@ class AccuRev2Git(object):
         commitHash = self.Commit(depot=depot, stream=dstStream, transaction=tr, branchName=dstBranchName, allowEmptyCommit=True, noNotes=True, messageOverride=commitMessageOverride)
         if commitHash is None:
             raise Exception("Failed to commit promote {tr}!".format(tr=tr.id))
-        diff = self.gitRepo.raw_cmd([u'git', u'diff', u'--stat', dstBranchName, srcBranchName])
+        diff = self.gitRepo.raw_cmd([u'git', u'diff', u'--stat', dstBranchName, srcBranchName, u'--' ])
         if diff is None:
-            raise Exception("Failed to get tree for new branch {br}!".format(br=dstBranchName))
+            raise Exception("Failed to diff new branch {nBr} to old branch {oBr}! Err: {err}".format(nBr=dstBranchName, oBr=srcBranchName, err=self.gitRepo.lastStderr))
         
         if len(diff.strip()) == 0:
             # Merge
