@@ -1027,7 +1027,8 @@ class AccuRev2Git(object):
             suffixList.append( ('{linePrefix}:'.format(linePrefix=linePrefix), '{name} (id: {id})'.format(id=stream.streamNumber, name=stream.name)) )
             if stream.prevName is not None:
                 suffixList.append( ('{linePrefix}-prev-name:'.format(linePrefix=linePrefix), '{name}'.format(name=stream.prevName)) )
-            suffixList.append( ('{linePrefix}-basis:'.format(linePrefix=linePrefix), '{name} (id: {id})'.format(name=stream.basis, id=stream.basisStreamNumber)) )
+            if stream.basis is not None:
+                suffixList.append( ('{linePrefix}-basis:'.format(linePrefix=linePrefix), '{name} (id: {id})'.format(name=stream.basis, id=stream.basisStreamNumber)) )
             if stream.prevBasis is not None and len(stream.prevBasis) > 0:
                 suffixList.append( ('{linePrefix}-prev-basis:'.format(linePrefix=linePrefix), '{name} (id: {id})'.format(name=stream.prevBasis, id=stream.prevBasisStreamNumber)) )
 
