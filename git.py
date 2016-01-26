@@ -20,19 +20,16 @@ from math import floor
 
 gitCmd = u'git'
 
-whiteSpaceRe = r'[ \t\r\n]'
-nonWhiteSpaceRe = r'[^ \t\r\n]'
-
 class GitStatus(object):
     # Regular expressions used in fromgitoutput classmethod for parsing the different git lines.
-    branchRe        = re.compile(r'^On branch (.*)$')
-    blankRe         = re.compile(r'^\s*$')
-    commentRe       = re.compile(r'^\s+\(.*\)$')
+    branchRe        = re.compile(pattern=r'^On branch (\S+)$')
+    blankRe         = re.compile(pattern=r'^\s*$')
+    commentRe       = re.compile(pattern=r'^\s+\(.*\)$')
     # The fileRe - Has a clause at the end for possible submodule modifications where git prints 
     #                (untracked content, modified content)
     #              suffixed messages. This suffix is currently ignored.
-    fileRe          = re.compile(r'^\s+(new file|modified|deleted|renamed):\s+(.+)\s*(\(.+\))?$')
-    untrackedFileRe = re.compile(r'^\s+(\S+)\s*$')
+    fileRe          = re.compile(pattern=r'^\s+(new file|modified|deleted|renamed):\s+(.+)\s*(\(.+\))?$')
+    untrackedFileRe = re.compile(pattern=r'^\s+(\S+)\s*$')
         
     def __init__(self, branch=None, staged=[], changed=[], untracked=[], initial_commit=None):
         self.branch    = branch    # Name of the branch.
@@ -185,7 +182,7 @@ class GitStatus(object):
 # GitBranchListItem is an object serialization of a single branch output when the git branch -vv
 # command is run.
 class GitBranchListItem(object):
-    branchVVRe = re.compile(r'^(?P<iscurrent>\*)?\s+(?P<name>\S+)\s+(?P<hash>\S+)\s+(?:(?P<remote>\[\S+\])\s+)?(?P<comment>.*)$')
+    branchVVRe = re.compile(pattern=r'^(?P<iscurrent>\*)?\s+(?P<name>\S+)\s+(?P<hash>\S+)\s+(?:(?P<remote>\[\S+\])\s+)?(?P<comment>.*)$')
     def __init__(self, name, shortHash, remote, shortComment, isCurrent):
         self.name = name
         self.shortHash = shortHash
@@ -225,7 +222,7 @@ class GitBranchListItem(object):
         return None
 
 class GitRemoteListItem(object):
-    remoteVVRe = re.compile(pattern='^(?P<name>{nw}+){w}+(?P<url>{nw}+){w}+(?P<action>{nw}+)'.format(nw=nonWhiteSpaceRe, w=whiteSpaceRe), flags=re.MULTILINE)
+    remoteVVRe = re.compile(pattern='^(?P<name>\S+)\s+(?P<url>\S+)\s+(?P<action>\S+)', flags=re.MULTILINE)
     def __init__(self, name, url, pushUrl=None):
         self.name    = name
         self.url     = url
@@ -263,7 +260,7 @@ class GitRemoteListItem(object):
 
 class GitCommit(object):
     # Regular expressions used in fromgitoutput classmethod for parsing the different git lines.
-    infoRe        = re.compile(r'^\[(?P<branch>[^ \t\r\n]+)[ ](?P<shortHash>[^ \t\r\n]+)\][ ](?P<title>.*)$')
+    infoRe        = re.compile(pattern=r'^\[(?P<branch>\S+)\s(?P<shortHash>\S+)\]\s(?P<title>.*)$')
 
     # Git commit output examples:
     #
@@ -681,7 +678,7 @@ def isRepo(path=None):
 # If the path does not contain a .git/ directory then None is returned.
 # e.g. Calling GetGitDirPrefix('/home/developer/.git/src') would return '/home/developer/.git'.
 #      It is guaranteed that the returned path will not be terminated with a slash.
-gitDirRegex = re.compile(r'((^|.*[\\/]).git)([\\/]|$)')
+gitDirRegex = re.compile(pattern=r'((^|.*[\\/]).git)([\\/]|$)')
 def GetGitDirPrefix(path):
     # This regex will work even for paths which mix \ and /.
     global gitDirRegex
