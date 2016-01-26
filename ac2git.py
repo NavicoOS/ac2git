@@ -1024,23 +1024,33 @@ class AccuRev2Git(object):
 
     def AppendCommitMessageSuffixStreamInfo(self, suffixList, linePrefix, stream):
         if stream is not None:
-            suffixList.append('{linePrefix}: {name} (id: {id})'.format(linePrefix=linePrefix, id=stream.streamNumber, name=stream.name))
+            suffixList.append( ('{linePrefix}:'.format(linePrefix=linePrefix), '{name} (id: {id})'.format(id=stream.streamNumber, name=stream.name)) )
             if stream.prevName is not None:
-                suffixList.append('{linePrefix}-prev-name: {name}'.format(linePrefix=linePrefix, name=stream.prevName))
-            suffixList.append('{linePrefix}-basis: {name} (id: {id})'.format(linePrefix=linePrefix, name=stream.basis, id=stream.basisStreamNumber))
+                suffixList.append( ('{linePrefix}-prev-name:'.format(linePrefix=linePrefix), '{name}'.format(name=stream.prevName)) )
+            suffixList.append( ('{linePrefix}-basis:'.format(linePrefix=linePrefix), '{name} (id: {id})'.format(name=stream.basis, id=stream.basisStreamNumber)) )
             if stream.prevBasis is not None and len(stream.prevBasis) > 0:
-                suffixList.append('{linePrefix}-prev-basis: {name} (id: {id})'.format(linePrefix=linePrefix, name=stream.prevBasis, id=stream.prevBasisStreamNumber))
+                suffixList.append( ('{linePrefix}-prev-basis:'.format(linePrefix=linePrefix), '{name} (id: {id})'.format(name=stream.prevBasis, id=stream.prevBasisStreamNumber)) )
 
     def GenerateCommitMessageSuffix(self, transaction, dstStream=None, srcStream=None):
         suffixList = []
-        suffixList.append('Accurev-transaction-id: {id}'.format(id=transaction.id))
-        suffixList.append('Accurev-transaction-type: {t}'.format(t=transaction.Type))
+        suffixList.append( ('Accurev-transaction-id:', '{id}'.format(id=transaction.id)) )
+        suffixList.append( ('Accurev-transaction-type:', '{t}'.format(t=transaction.Type)) )
         if dstStream is not None:
             self.AppendCommitMessageSuffixStreamInfo(suffixList=suffixList, linePrefix='Accurev-stream', stream=dstStream)
         if srcStream is not None:
             self.AppendCommitMessageSuffixStreamInfo(suffixList=suffixList, linePrefix='Accurev-from-stream', stream=srcStream)
         
-        return '\n'.join(suffixList)
+        # Ensure that all the items are nicely column aligned by padding the titles with spaces after the colon.
+        longestSuffixTitle = 0
+        for suffix in suffixList:
+            if longestSuffixTitle < len(suffix[0]):
+                longestSuffixTitle = len(suffix[0])
+        suffixFormat = '{suffix: <' + str(longestSuffixTitle) + '} {info}'
+        lineList = []
+        for suffix in suffixList:
+            lineList.append(suffixFormat.format(suffix=suffix[0], info=suffix[1]))
+            
+        return '\n'.join(lineList)
 
     def GenerateCommitMessage(self, transaction, dstStream=None, srcStream=None, title=None, friendlyMessage=None):
         messageSections = []
