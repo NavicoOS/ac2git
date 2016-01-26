@@ -146,8 +146,9 @@ class Config(object):
         @classmethod
         def fromxmlelement(cls, xmlElement):
             if xmlElement is not None and xmlElement.tag == 'git':
-                repoPath = xmlElement.attrib.get('repo-path')
-                finalize = xmlElement.attrib.get('finalize')
+                repoPath     = xmlElement.attrib.get('repo-path')
+                messageStyle = xmlElement.attrib.get('message-style')
+                finalize     = xmlElement.attrib.get('finalize')
                 if finalize is not None:
                     if finalize.lower() == "true":
                         finalize = True
@@ -165,19 +166,24 @@ class Config(object):
                     
                     remoteMap[remoteName] = git.GitRemoteListItem(name=remoteName, url=remoteUrl, pushUrl=remotePushUrl)
 
-                return cls(repoPath=repoPath, finalize=finalize, remoteMap=remoteMap)
+                return cls(repoPath=repoPath, messageStyle=messageStyle, finalize=finalize, remoteMap=remoteMap)
             else:
                 return None
             
-        def __init__(self, repoPath, finalize=None, remoteMap=None):
-            self.repoPath  = repoPath
-            self.finalize  = finalize
-            self.remoteMap = remoteMap
+        def __init__(self, repoPath, messageStyle=None, finalize=None, remoteMap=None):
+            self.repoPath     = repoPath
+            self.messageStyle = messageStyle
+            self.finalize     = finalize
+            self.remoteMap    = remoteMap
 
         def __repr__(self):
             str = "Config.Git(repoPath=" + repr(self.repoPath)
-            str += ", finalize="         + repr(self.finalize)
-            str += ", remoteMap="        + repr(self.remoteMap)
+            if self.messageStyle is not None:
+                str += ", messageStyle=" + repr(self.messageStyle)
+            if self.finalize is not None:
+                str += ", finalize="     + repr(self.finalize)
+            if self.remoteMap is not None:
+                str += ", remoteMap="    + repr(self.remoteMap)
             str += ")"
             
             return str
@@ -944,17 +950,31 @@ class AccuRev2Git(object):
                 tr = hist.transactions[0]
                 stream = accurev.show.streams(depot=depot, stream=stream.streamNumber, timeSpec=tr.id).streams[0]
 
+                # Work out the source and destination streams for the promote (for the purposes of the commit message info).
+                destStreamName, destStreamNumber = hist.toStream()
+                if destStreamName is not None:
+                    destStream = accurev.show.streams(depot=depot, stream=destStreamName, timeSpec=tr.id).streams[0]
+                else:
+                    destStream = None
+
+                try:
+                    srcStreamName, srcStreamNumber = hist.fromStream()
+                    if srcStreamName is not None:
+                        srcStream = accurev.show.streams(depot=depot, stream=srcStreamName, timeSpec=tr.id).streams[0]
+                except:
+                    srcStreamName, srcStreamNumber = None, None
+                    srcStream = None
+
                 # Populate
-                #destStream = self.GetDestinationStreamName(history=hist, depot=depot) # Slower: This performes an extra accurev.show.streams() command for correct stream names.
-                destStream = self.GetDestinationStreamName(history=hist, depot=None) # Quicker: This does not perform an extra accurev.show.streams() command for correct stream names.
-                self.config.logger.dbg( "{0} pop: {1} {2}{3}".format(stream.name, tr.Type, tr.id, " to {0}".format(destStream) if destStream is not None else "") )
+                self.config.logger.dbg( "{0} pop: {1} {2}{3}".format(stream.name, tr.Type, tr.id, " to {0}".format(destStreamName) if destStreamName is not None else "") )
 
                 popResult = self.TryPop(streamName=stream.name, transaction=tr, overwrite=popOverwrite)
                 if not popResult:
                     return (None, None)
 
                 # Commit
-                commitHash = self.Commit(depot=depot, stream=stream, transaction=tr, branchName=branchName, isFirstCommit=False)
+                commitMessage = self.GenerateCommitMessage(transaction=tr, stream=stream, dstStream=destStream, srcStream=srcStream)
+                commitHash = self.Commit(depot=depot, stream=stream, transaction=tr, branchName=branchName, isFirstCommit=False, messageOverride=commitMessage)
                 if commitHash is None:
                     if"nothing to commit" in self.gitRepo.lastStdout:
                         if diff is not None:
@@ -975,7 +995,7 @@ class AccuRev2Git(object):
                     else:
                         break # Early return from processing this stream. Restarting should clean everything up.
                 else:
-                    self.config.logger.info( "stream {0}: tr. #{1} {2} into {3} -> commit {4} on {5}".format(stream.name, tr.id, tr.Type, destStream if destStream is not None else 'unknown', commitHash[:8], branchName) )
+                    self.config.logger.info( "stream {0}: tr. #{1} {2} into {3} -> commit {4} on {5}".format(stream.name, tr.id, tr.Type, destStreamName if destStreamName is not None else 'unknown', commitHash[:8], branchName) )
             else:
                 self.config.logger.info( "Reached end transaction #{0} for {1} -> {2}".format(endTr.id, stream.name, branchName) )
                 break
@@ -1032,14 +1052,16 @@ class AccuRev2Git(object):
             if stream.prevBasis is not None and len(stream.prevBasis) > 0:
                 suffixList.append( ('{linePrefix}-prev-basis:'.format(linePrefix=linePrefix), '{name} (id: {id})'.format(name=stream.prevBasis, id=stream.prevBasisStreamNumber)) )
 
-    def GenerateCommitMessageSuffix(self, transaction, dstStream=None, srcStream=None):
+    def GenerateCommitMessageSuffix(self, transaction, stream=None, dstStream=None, srcStream=None):
         suffixList = []
         suffixList.append( ('Accurev-transaction-id:', '{id}'.format(id=transaction.id)) )
         suffixList.append( ('Accurev-transaction-type:', '{t}'.format(t=transaction.Type)) )
+        if stream is not None:
+            self.AppendCommitMessageSuffixStreamInfo(suffixList=suffixList, linePrefix='Accurev-stream', stream=stream)
         if dstStream is not None:
-            self.AppendCommitMessageSuffixStreamInfo(suffixList=suffixList, linePrefix='Accurev-stream', stream=dstStream)
+            self.AppendCommitMessageSuffixStreamInfo(suffixList=suffixList, linePrefix='Accurev-dst-stream', stream=dstStream)
         if srcStream is not None:
-            self.AppendCommitMessageSuffixStreamInfo(suffixList=suffixList, linePrefix='Accurev-from-stream', stream=srcStream)
+            self.AppendCommitMessageSuffixStreamInfo(suffixList=suffixList, linePrefix='Accurev-src-stream', stream=srcStream)
         
         # Ensure that all the items are nicely column aligned by padding the titles with spaces after the colon.
         longestSuffixTitle = 0
@@ -1053,20 +1075,29 @@ class AccuRev2Git(object):
             
         return '\n'.join(lineList)
 
-    def GenerateCommitMessage(self, transaction, dstStream=None, srcStream=None, title=None, friendlyMessage=None):
+    def GenerateCommitMessage(self, transaction, stream=None, dstStream=None, srcStream=None, title=None, friendlyMessage=None):
         messageSections = []
-
-        if title is not None:
-            messageSections.append(title)
-        if transaction.comment is not None:
-            messageSections.append(transaction.comment)
-        if friendlyMessage is not None:
-            messageSections.append(friendlyMessage)
-        suffix = self.GenerateCommitMessageSuffix(transaction=transaction, dstStream=dstStream, srcStream=srcStream)
-        if suffix is not None:
-            messageSections.append(suffix)
         
-        return '\n\n'.join(messageSections)
+        style = "normal"
+        if self.config.git.messageStyle is not None:
+            style = self.config.git.messageStyle.lower()
+
+        if style == "clean":
+            return transaction.comment
+        elif style == "normal":
+            if title is not None:
+                messageSections.append(title)
+            if transaction.comment is not None:
+                messageSections.append(transaction.comment)
+            if friendlyMessage is not None:
+                messageSections.append(friendlyMessage)
+            suffix = self.GenerateCommitMessageSuffix(transaction=transaction, stream=stream, dstStream=dstStream, srcStream=srcStream)
+            if suffix is not None:
+                messageSections.append(suffix)
+        
+            return '\n\n'.join(messageSections)
+
+        raise Exception("Unrecognized git message style '{s}'".format(s=style))
 
     def GitCommitOrMerge(self, depot, dstStream, srcStream, tr, commitMessageOverride=None, mergeMessageOverride=None):
         # Perform the git merge of the 'from stream' into the 'to stream' but only if they have the same contents.
@@ -1148,7 +1179,7 @@ class AccuRev2Git(object):
                 raise Exception("Failed to create new branch {br}. Error: {err}".format(br=newBranchName, err=self.gitRepo.lastStderr))
             self.config.logger.info("mkstream name={name}, number={num}, basis={basis}, basis-number={basisNumber}".format(name=newStream.name, num=newStream.streamNumber, basis=newStream.basis, basisNumber=newStream.basisStreamNumber))
             # Modify the commit message
-            commitMessage = self.GenerateCommitMessage(transaction=tr, dstStream=newStream, title="Created {name} based on {basis}".format(name=newBranchName, basis='-' if newStream.basis is None else basisBranchName))
+            commitMessage = self.GenerateCommitMessage(transaction=tr, stream=newStream, title="Created {name} based on {basis}".format(name=newBranchName, basis='-' if newStream.basis is None else basisBranchName))
             commitHash = self.Commit(depot=depot, stream=newStream, transaction=tr, branchName=newBranchName, isFirstCommit=True, allowEmptyCommit=True, noNotes=True, messageOverride=commitMessage)
             if commitHash is None:
                 raise Exception("Failed to add empty mkstream commit")
@@ -1184,7 +1215,7 @@ class AccuRev2Git(object):
             deletedPathList = self.DeleteDiffItemsFromRepo(diff=diff)
             popResult = self.TryPop(streamName=tr.stream.name, transaction=tr)
 
-            commitMessage = self.GenerateCommitMessage(transaction=tr, dstStream=tr.stream)
+            commitMessage = self.GenerateCommitMessage(transaction=tr, stream=tr.stream)
             commitHash = self.Commit(depot=depot, stream=tr.stream, transaction=tr, branchName=branchName, allowEmptyCommit=True, noNotes=True, messageOverride=commitMessage)
             if commitHash is None:
                 raise Exception("Failed to add chstream commit")
@@ -1200,7 +1231,7 @@ class AccuRev2Git(object):
             # The add command only introduces new files so we can safely use only `accurev pop` to get the changes.
             self.TryPop(streamName=stream.name, transaction=tr)
             
-            commitMessage = self.GenerateCommitMessage(transaction=tr, dstStream=stream)
+            commitMessage = self.GenerateCommitMessage(transaction=tr, stream=stream)
             self.Commit(depot=depot, stream=stream, transaction=tr, branchName=branchName, noNotes=True, messageOverride=commitMessage)
             
         elif tr.Type in [ "keep", "co", "move" ]:
@@ -1216,7 +1247,7 @@ class AccuRev2Git(object):
             deletedPathList = self.DeleteDiffItemsFromRepo(diff=diff)
             popResult = self.TryPop(streamName=stream.name, transaction=tr)
 
-            commitMessage = self.GenerateCommitMessage(transaction=tr, dstStream=stream)
+            commitMessage = self.GenerateCommitMessage(transaction=tr, stream=stream)
             commitHash = self.Commit(depot=depot, stream=stream, transaction=tr, branchName=branchName, allowEmptyCommit=True, noNotes=True, messageOverride=commitMessage)
             if commitHash is None:
                 raise Exception("Failed to commit a `{Type}`! tr={tr}".format(tr=tr.id, Type=tr.Type))
@@ -1261,7 +1292,7 @@ class AccuRev2Git(object):
                 deletedPathList = self.DeleteDiffItemsFromRepo(diff=diff)
                 popResult = self.TryPop(streamName=dstStream.name, transaction=tr)
 
-                commitMessage = self.GenerateCommitMessage(transaction=tr, dstStream=dstStream)
+                commitMessage = self.GenerateCommitMessage(transaction=tr, stream=dstStream)
                 commitHash = self.Commit(depot=depot, stream=dstStream, transaction=tr, branchName=dstBranchName, allowEmptyCommit=True, noNotes=True, messageOverride=commitMessage)
                 if commitHash is None:
                     raise Exception("Failed to commit a `{Type}`! tr={tr}".format(Type=tr.Type, tr=tr.id))
@@ -1274,16 +1305,16 @@ class AccuRev2Git(object):
                 srcBranchName = self.SanitizeBranchName(srcStream.name)
 
                 # Perform the git merge of the 'from stream' into the 'to stream' but only if they have the same contents.
-                mergeCommitMessage = self.GenerateCommitMessage(transaction=tr, dstStream=dstStream, srcStream=srcStream, friendlyMessage="Merged {src} into {dst} - accurev promote.".format(src=srcBranchName, dst=dstBranchName))
-                cherryPickCommitMessage = self.GenerateCommitMessage(transaction=tr, dstStream=dstStream, srcStream=srcStream, friendlyMessage="Cherry-picked {src} into {dst} - accurev promote.".format(src=srcBranchName, dst=dstBranchName))
+                mergeCommitMessage = self.GenerateCommitMessage(transaction=tr, stream=dstStream, srcStream=srcStream, friendlyMessage="Merged {src} into {dst} - accurev promote.".format(src=srcBranchName, dst=dstBranchName))
+                cherryPickCommitMessage = self.GenerateCommitMessage(transaction=tr, stream=dstStream, srcStream=srcStream, friendlyMessage="Cherry-picked {src} into {dst} - accurev promote.".format(src=srcBranchName, dst=dstBranchName))
                 self.GitCommitOrMerge(depot=depot, dstStream=dstStream, srcStream=srcStream, tr=tr, commitMessageOverride=cherryPickCommitMessage, mergeMessageOverride=mergeCommitMessage)
             
             affectedStreams = accurev.ext.affected_streams(depot=depot, transaction=tr.id, includeWorkspaces=True, ignoreTimelocks=False, doDiffs=True, useCache=self.config.accurev.UseCommandCache())
             for stream in affectedStreams:
                 branchName = self.SanitizeBranchName(stream.name)
                 if stream.streamNumber != dstStream.streamNumber and (srcStream is None or stream.streamNumber != srcStream.streamNumber):
-                    mergeCommitMessage = self.GenerateCommitMessage(transaction=tr, dstStream=stream, srcStream=dstStream, friendlyMessage="Merged {src} into {dst} - accurev parent stream inheritance.".format(src=dstBranchName, dst=branchName))
-                    cherryPickCommitMessage = self.GenerateCommitMessage(transaction=tr, dstStream=stream, srcStream=dstStream, friendlyMessage="Cherry-picked {src} into {dst} - accurev parent stream inheritance.".format(src=dstBranchName, dst=branchName))
+                    mergeCommitMessage = self.GenerateCommitMessage(transaction=tr, stream=stream, dstStream=dstStream, srcStream=srcStream, friendlyMessage="Merged {src} into {dst} - accurev parent stream inheritance.".format(src=dstBranchName, dst=branchName))
+                    cherryPickCommitMessage = self.GenerateCommitMessage(transaction=tr, stream=stream, dstStream=dstStream, srcStream=srcStream, friendlyMessage="Cherry-picked {src} into {dst} - accurev parent stream inheritance.".format(src=dstBranchName, dst=branchName))
                     self.GitCommitOrMerge(depot=depot, dstStream=stream, srcStream=dstStream, tr=tr, commitMessageOverride=cherryPickCommitMessage, mergeMessageOverride=mergeCommitMessage)
 
         elif tr.Type in [ "defunct", "purge" ]:
@@ -1297,7 +1328,7 @@ class AccuRev2Git(object):
             deletedPathList = self.DeleteDiffItemsFromRepo(diff=diff)
             popResult = self.TryPop(streamName=stream.name, transaction=tr)
 
-            commitMessage = self.GenerateCommitMessage(transaction=tr, dstStream=stream)
+            commitMessage = self.GenerateCommitMessage(transaction=tr, stream=stream)
             commitHash = self.Commit(depot=depot, stream=stream, transaction=tr, branchName=branchName, allowEmptyCommit=True, noNotes=True, messageOverride=commitMessage)
             if commitHash is None:
                 raise Exception("Failed to commit a `{Type}`! tr={tr}".format(Type=tr.Type, tr=tr.id))
@@ -1308,8 +1339,8 @@ class AccuRev2Git(object):
                 for s in affectedStreams:
                     if s.streamNumber != stream.streamNumber:
                         bName = self.SanitizeBranchName(s.name)
-                        mergeCommitMessage = self.GenerateCommitMessage(transaction=tr, dstStream=s, srcStream=stream, friendlyMessage="Merged {src} into {dst} - accurev parent stream inheritance ({trType}).".format(src=branchName, dst=bName, trType=tr.Type))
-                        cherryPickCommitMessage = self.GenerateCommitMessage(transaction=tr, dstStream=s, srcStream=stream, friendlyMessage="Merged {src} into {dst} - accurev parent stream inheritance ({trType}).".format(src=branchName, dst=bName, trType=tr.Type))
+                        mergeCommitMessage = self.GenerateCommitMessage(transaction=tr, stream=s, dstStream=stream, friendlyMessage="Merged {src} into {dst} - accurev parent stream inheritance ({trType}).".format(src=branchName, dst=bName, trType=tr.Type))
+                        cherryPickCommitMessage = self.GenerateCommitMessage(transaction=tr, stream=s, dstStream=stream, friendlyMessage="Merged {src} into {dst} - accurev parent stream inheritance ({trType}).".format(src=branchName, dst=bName, trType=tr.Type))
                         self.GitCommitOrMerge(depot=depot, dstStream=s, srcStream=stream, tr=tr, commitMessageOverride=cherryPickCommitMessage, mergeMessageOverride=commitMessage)
                 
             
@@ -1955,7 +1986,10 @@ def DumpExampleConfigFile(outputFilename):
             <stream>some_other_stream</stream>
         </stream-list>
     </accurev>
-    <git repo-path="/put/the/git/repo/here" finalize="false" >  <!-- The system path where you want the git repo to be populated. Note: this folder should already exist. 
+    <git repo-path="/put/the/git/repo/here" message-style="normal" finalize="false" >  <!-- The system path where you want the git repo to be populated. Note: this folder should already exist. 
+                                                                     The message-style attribute can either be "normal" or "clean". When set to "normal" accurev transaction information is included
+                                                                     at the end (in the footer) of each commit message. When set to "clean" the transaction comment is the commit message without any
+                                                                     additional information.
                                                                      The finalize attribute switches this script from converting accurev transactions to independent orphaned
                                                                      git branches to the "branch stitching" mode which should be activated only once the conversion is completed.
                                                                      Make sure to have a backup of your repo just in case. Once finalize is set to true this script will rewrite
@@ -2092,12 +2126,15 @@ def AutoConfigFile(filename, args, preserveConfig=False):
         file.write("""
         </stream-list>
     </accurev>
-    <git repo-path="{git_repo_path}" finalize="false" >  <!-- The system path where you want the git repo to be populated. Note: this folder should already exist.
+    <git repo-path="{git_repo_path}" message-style="{message_style}" finalize="{finalize}" >  <!-- The system path where you want the git repo to be populated. Note: this folder should already exist.
+                                                              The message-style attribute can either be "normal" or "clean". When set to "normal" accurev transaction information is included
+                                                              at the end (in the footer) of each commit message. When set to "clean" the transaction comment is the commit message without any
+                                                              additional information.
                                                               The finalize attribute switches this script from converting accurev transactions to independent orphaned
                                                               git branches to the "branch stitching" mode which should be activated only once the conversion is completed.
                                                               Make sure to have a backup of your repo just in case. Once finalize is set to true this script will rewrite
                                                               the git history in an attempt to recreate merge points.
-                                                         -->""".format(git_repo_path=config.git.repoPath))
+                                                         -->""".format(git_repo_path=config.git.repoPath, message_style=config.git.messageStyle if config.git.messageStyle is not None else 'normal', finalize=str(config.git.finalize).lower() if config.git.finalize is not None else "false"))
         if config.git.remoteMap is not None:
             for remoteName in remoteMap:
                 remote = remoteMap[remoteName]
@@ -2228,6 +2265,7 @@ def PrintConfigSummary(config):
         config.logger.info('  now: {0}'.format(datetime.now()))
         config.logger.info('  git')
         config.logger.info('    repo path: {0}'.format(config.git.repoPath))
+        config.logger.info('    message style: {0}'.format(config.git.messageStyle))
         if config.git.remoteMap is not None:
             for remoteName in config.git.remoteMap:
                 remote = config.git.remoteMap[remoteName]
