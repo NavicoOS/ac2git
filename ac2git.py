@@ -1024,16 +1024,12 @@ class AccuRev2Git(object):
 
     def AppendCommitMessageSuffixStreamInfo(self, suffixList, linePrefix, stream):
         if stream is not None:
-            suffixList.append('{linePrefix}-id: {id}'.format(linePrefix=linePrefix, id=stream.streamNumber))
-            suffixList.append('{linePrefix}-name: {name}'.format(linePrefix=linePrefix, name=stream.name))
+            suffixList.append('{linePrefix}: {name} (id: {id})'.format(linePrefix=linePrefix, id=stream.streamNumber, name=stream.name))
             if stream.prevName is not None:
                 suffixList.append('{linePrefix}-prev-name: {name}'.format(linePrefix=linePrefix, name=stream.prevName))
-            suffixList.append('{linePrefix}-basis-id: {id}'.format(linePrefix=linePrefix, id=stream.basisStreamNumber))
-            suffixList.append('{linePrefix}-basis-name: {name}'.format(linePrefix=linePrefix, name=stream.basis))
+            suffixList.append('{linePrefix}-basis: {name} (id: {id})'.format(linePrefix=linePrefix, name=stream.basis, id=stream.basisStreamNumber))
             if stream.prevBasis is not None and len(stream.prevBasis) > 0:
-                suffixList.append('{linePrefix}-prev-basis-id: {id}'.format(linePrefix=linePrefix, id=stream.prevBasisStreamNumber))
-                suffixList.append('{linePrefix}-prev-basis-name: {name}'.format(linePrefix=linePrefix, name=stream.prevBasis))
-
+                suffixList.append('{linePrefix}-prev-basis: {name} (id: {id})'.format(linePrefix=linePrefix, name=stream.prevBasis, id=stream.prevBasisStreamNumber))
 
     def GenerateCommitMessageSuffix(self, transaction, dstStream=None, srcStream=None):
         suffixList = []
@@ -1267,16 +1263,16 @@ class AccuRev2Git(object):
                 srcBranchName = self.SanitizeBranchName(srcStream.name)
 
                 # Perform the git merge of the 'from stream' into the 'to stream' but only if they have the same contents.
-                mergeCommitMessage = self.GenerateCommitMessage(transaction=tr, dstStream=dstStream, srcStream=srcStream, title="Merged {src} into {dst} - accurev promote.".format(src=srcBranchName, dst=dstBranchName))
-                cherryPickCommitMessage = self.GenerateCommitMessage(transaction=tr, dstStream=dstStream, srcStream=srcStream, title="Cherry-picked {src} into {dst} - accurev promote.".format(src=srcBranchName, dst=dstBranchName))
+                mergeCommitMessage = self.GenerateCommitMessage(transaction=tr, dstStream=dstStream, srcStream=srcStream, friendlyMessage="Merged {src} into {dst} - accurev promote.".format(src=srcBranchName, dst=dstBranchName))
+                cherryPickCommitMessage = self.GenerateCommitMessage(transaction=tr, dstStream=dstStream, srcStream=srcStream, friendlyMessage="Cherry-picked {src} into {dst} - accurev promote.".format(src=srcBranchName, dst=dstBranchName))
                 self.GitCommitOrMerge(depot=depot, dstStream=dstStream, srcStream=srcStream, tr=tr, commitMessageOverride=cherryPickCommitMessage, mergeMessageOverride=mergeCommitMessage)
             
             affectedStreams = accurev.ext.affected_streams(depot=depot, transaction=tr.id, includeWorkspaces=True, ignoreTimelocks=False, doDiffs=True, useCache=self.config.accurev.UseCommandCache())
             for stream in affectedStreams:
                 branchName = self.SanitizeBranchName(stream.name)
                 if stream.streamNumber != dstStream.streamNumber and (srcStream is None or stream.streamNumber != srcStream.streamNumber):
-                    mergeCommitMessage = self.GenerateCommitMessage(transaction=tr, dstStream=stream, srcStream=dstStream, title="Merged {src} into {dst} - accurev parent stream inheritance.".format(src=dstBranchName, dst=branchName), friendlyMessage="Accurev auto-inherited upstream changes.")
-                    cherryPickCommitMessage = self.GenerateCommitMessage(transaction=tr, dstStream=stream, srcStream=dstStream, title="Cherry-picked {src} into {dst} - accurev parent stream inheritance.".format(src=dstBranchName, dst=branchName), friendlyMessage="Accurev auto-inherited upstream changes.")
+                    mergeCommitMessage = self.GenerateCommitMessage(transaction=tr, dstStream=stream, srcStream=dstStream, friendlyMessage="Merged {src} into {dst} - accurev parent stream inheritance.".format(src=dstBranchName, dst=branchName))
+                    cherryPickCommitMessage = self.GenerateCommitMessage(transaction=tr, dstStream=stream, srcStream=dstStream, friendlyMessage="Cherry-picked {src} into {dst} - accurev parent stream inheritance.".format(src=dstBranchName, dst=branchName))
                     self.GitCommitOrMerge(depot=depot, dstStream=stream, srcStream=dstStream, tr=tr, commitMessageOverride=cherryPickCommitMessage, mergeMessageOverride=mergeCommitMessage)
 
         elif tr.Type in [ "defunct", "purge" ]:
@@ -1301,8 +1297,8 @@ class AccuRev2Git(object):
                 for s in affectedStreams:
                     if s.streamNumber != stream.streamNumber:
                         bName = self.SanitizeBranchName(s.name)
-                        mergeCommitMessage = self.GenerateCommitMessage(transaction=tr, dstStream=s, srcStream=stream, title="Merged {src} into {dst} - accurev parent stream inheritance ({trType}).".format(src=branchName, dst=bName, trType=tr.Type), friendlyMessage="Accurev auto-inherited upstream changes.")
-                        cherryPickCommitMessage = self.GenerateCommitMessage(transaction=tr, dstStream=s, srcStream=stream, title="Merged {src} into {dst} - accurev parent stream inheritance ({trType}).".format(src=branchName, dst=bName, trType=tr.Type), friendlyMessage="Accurev auto-inherited upstream changes.")
+                        mergeCommitMessage = self.GenerateCommitMessage(transaction=tr, dstStream=s, srcStream=stream, friendlyMessage="Merged {src} into {dst} - accurev parent stream inheritance ({trType}).".format(src=branchName, dst=bName, trType=tr.Type))
+                        cherryPickCommitMessage = self.GenerateCommitMessage(transaction=tr, dstStream=s, srcStream=stream, friendlyMessage="Merged {src} into {dst} - accurev parent stream inheritance ({trType}).".format(src=branchName, dst=bName, trType=tr.Type))
                         self.GitCommitOrMerge(depot=depot, dstStream=s, srcStream=stream, tr=tr, commitMessageOverride=cherryPickCommitMessage, mergeMessageOverride=commitMessage)
                 
             

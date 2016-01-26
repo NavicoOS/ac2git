@@ -182,7 +182,7 @@ class GitStatus(object):
 # GitBranchListItem is an object serialization of a single branch output when the git branch -vv
 # command is run.
 class GitBranchListItem(object):
-    branchVVRe = re.compile(pattern=r'^(?P<iscurrent>\*)?\s+(?P<name>\S+)\s+(?P<hash>\S+)\s+(?:(?P<remote>\[\S+\])\s+)?(?P<comment>.*)$')
+    branchVVRe = re.compile(pattern=r'^(?P<iscurrent>\*)?\s+(?P<name>\S+)\s+(?P<hash>[A-Fa-f0-9]+)\s+(?:(?P<remote>\[\S+\])\s+)?(?P<comment>.*)$')
     def __init__(self, name, shortHash, remote, shortComment, isCurrent):
         self.name = name
         self.shortHash = shortHash
@@ -260,7 +260,7 @@ class GitRemoteListItem(object):
 
 class GitCommit(object):
     # Regular expressions used in fromgitoutput classmethod for parsing the different git lines.
-    infoRe        = re.compile(pattern=r'^\[(?P<branch>\S+)\s(?P<shortHash>\S+)\]\s(?P<title>.*)$')
+    infoRe        = re.compile(pattern=r'^\[(?P<branch>\S+)\s(?P<root>\(root-commit\)\s)?(?P<shortHash>[A-Fa-f0-9]+)\]\s(?P<title>.*)$')
 
     # Git commit output examples:
     #
@@ -279,10 +279,11 @@ class GitCommit(object):
     # [master b712533] Adding parsing of git commit output.
     #  2 files changed, 53 insertions(+), 13 deletions(-)
 
-    def __init__(self, branch=None, shortHash=None, title=None):
+    def __init__(self, branch=None, shortHash=None, title=None, isRoot=False):
         self.branch    = branch    # Name of the branch on which the commit was made.
         self.shortHash = shortHash # The string representing the short commit hash (a 7 digit hex number).
         self.title     = title     # The first line of the commit message.
+        self.isRoot    = isRoot
 
     def __repr__(self):
         str = '[{br} {short_hash}] {title}'.format(br=self.branch, short_hash=self.shortHash, title=self.title)
@@ -298,7 +299,8 @@ class GitCommit(object):
                     branch = infoMatch.group("branch")
                     shortHash = infoMatch.group("shortHash")
                     title = infoMatch.group("title")
-                    return cls(branch=branch, shortHash=shortHash, title=title)
+                    isRoot = infoMatch.group("root") is not None
+                    return cls(branch=branch, shortHash=shortHash, title=title, isRoot=isRoot)
                 else:
                     raise Exception("Failed to match git commit output! re: '{re}'\noutput:\n{output}".format(re=GitCommit.infoRe.pattern, output=lines[0]))
             else:
