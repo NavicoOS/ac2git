@@ -952,18 +952,17 @@ class AccuRev2Git(object):
 
                 # Work out the source and destination streams for the promote (for the purposes of the commit message info).
                 destStreamName, destStreamNumber = hist.toStream()
+                destStream = None
                 if destStreamName is not None:
                     destStream = accurev.show.streams(depot=depot, stream=destStreamName, timeSpec=tr.id).streams[0]
-                else:
-                    destStream = None
 
+                srcStream = None
                 try:
                     srcStreamName, srcStreamNumber = hist.fromStream()
                     if srcStreamName is not None:
                         srcStream = accurev.show.streams(depot=depot, stream=srcStreamName, timeSpec=tr.id).streams[0]
                 except:
                     srcStreamName, srcStreamNumber = None, None
-                    srcStream = None
 
                 # Populate
                 self.config.logger.dbg( "{0} pop: {1} {2}{3}".format(stream.name, tr.Type, tr.id, " to {0}".format(destStreamName) if destStreamName is not None else "") )
