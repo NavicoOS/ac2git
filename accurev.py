@@ -2042,7 +2042,7 @@ def stat(all=False, inBackingStream=False, dispBackingChain=False, defaultGroupO
 # AccuRev history command
 def hist( depot=None, stream=None, timeSpec=None, listFile=None, isListFileXml=False, elementList=None
         , allElementsFlag=False, elementId=None, transactionKind=None, commentString=None, username=None
-        , expandedMode=False, showIssues=False, verboseMode=False, listMode=False, showStatus=False, transactionMode=False
+        , expandedMode=True, showIssues=False, verboseMode=False, listMode=False, showStatus=False, transactionMode=False
         , outputFilename=None, useCache=False):
     if useCache:
         if timeSpec is None:

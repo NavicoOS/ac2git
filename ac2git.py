@@ -468,8 +468,14 @@ class AccuRev2Git(object):
         return gitDatetimeStr
 
     # Adds a JSON string respresentation of `stateDict` to the given commit using `git notes add`.
-    def AddScriptStateNote(self, depotName, stream, transaction, commitHash, ref, committer=None, committerDate=None, committerTimezone=None):
+    def AddScriptStateNote(self, depotName, stream, transaction, commitHash, ref, committer=None, committerDate=None, committerTimezone=None, dstStream=None, srcStream=None):
         stateDict = { "depot": depotName, "stream": stream.name, "stream_number": stream.streamNumber, "transaction_number": transaction.id, "transaction_kind": transaction.Type }
+        if dstStream is not None:
+            stateDict["dst_stream"]        = dstStream.name
+            stateDict["dst_stream_number"] = dstStream.streamNumber
+        if srcStream is not None:
+            stateDict["src_stream"]        = srcStream.name
+            stateDict["src_stream_number"] = srcStream.streamNumber
         notesFilePath = None
         with tempfile.NamedTemporaryFile(mode='w+', prefix='ac2git_note_', delete=False) as notesFile:
             notesFilePath = notesFile.name
@@ -596,6 +602,8 @@ class AccuRev2Git(object):
             stateJson = self.gitRepo.notes.show(obj=commitHash, ref=branchName)
             if stateJson is not None:
                 break
+            else:
+                time.sleep(3)
 
         if stateJson is not None:
             stateJson = stateJson.strip()
@@ -1572,25 +1580,73 @@ class AccuRev2Git(object):
         child = None
         if stream1 is not None and stream2 is not None:
             #print ("self.GetParentChild(stream1={0}, stream2={1}, timeSpec={2}".format(str(stream1), str(stream2), str(timeSpec)))
+            s1 = accurev.show.streams(depot=self.config.accurev.depot, stream=stream1, timeSpec=timeSpec, listChildren=False).streams[0]
+            s2 = accurev.show.streams(depot=self.config.accurev.depot, stream=stream2, timeSpec=timeSpec, listChildren=False).streams[0]
+
             stream1Children = accurev.show.streams(depot=self.config.accurev.depot, stream=stream1, timeSpec=timeSpec, listChildren=True)
             stream2Children = accurev.show.streams(depot=self.config.accurev.depot, stream=stream2, timeSpec=timeSpec, listChildren=True)
 
             found = False
             for stream in stream1Children.streams:
-                if stream.name == stream2:
-                    if not onlyDirectChild or stream.basis == stream1:
+                if stream.streamNumber == s2.streamNumber:
+                    if not onlyDirectChild or stream.basisStreamNumber == s1.streamNumber:
                         parent = stream1
                         child = stream2
                     found = True
                     break
             if not found:
                 for stream in stream2Children.streams:
-                    if stream.name == stream1:
-                        if not onlyDirectChild or stream.basis == stream2:
+                    if stream.streamNumber == s1.streamNumber:
+                        if not onlyDirectChild or stream.basisStreamNumber == s2.streamNumber:
                             parent = stream2
                             child = stream1
                         break
         return (parent, child)
+
+    def GetMergeTarget(self, depot, stream1, stream2, timeSpec=u'now', onlyDirectChild=False):
+        mergeTarget, mergeSource, message = None, None, None
+
+        hist = accurev.hist(depot=depot, timeSpec=timeSpec)
+        tr = hist.transactions[0]
+        trStr = "tr. {id} {t}".format(id=tr.id, t=tr.Type)
+
+        dstStreamName, dstStreamNumber = hist.toStream()
+        if dstStreamName is None:
+            raise Exception("Couldn't determine the target stream of transaction {tr}.".format(timeSpec))
+
+        if dstStreamName != stream1 and dstStreamName != stream2:
+            # Unrelated streams. Do not merge! They are likely either siblings or cousins of some sort but not mergable.
+            return None, None, "{tr}. target is {tgt}. Neither {s1} nor {s2} match that name".format(tr=trStr, tgt=dstStreamName, s1=stream1, s2=stream2)
+
+        srcStreamName, srcStreamNumber = None, None
+        try:
+            srcStreamName, srcStreamNumber = hist.fromStream()
+        except:
+            pass
+
+        if srcStreamName is None:
+            parent, child = self.GetParentChild(stream1=stream1, stream2=stream2, timeSpec=timeSpec, onlyDirectChild=onlyDirectChild)
+            if parent is None:
+                mergeTarget, mergeSource, message = None, None, "{tr}. Streams {s1} and {s2} couldn't be placed in a parent ({p}) child ({c}) relationship.".format(tr=trStr, s1=stream1, s2=stream2, p=parent, c=child)
+            elif dstStreamName == parent:
+                mergeTarget, mergeSource, message = child, parent, "{tr}. Merging {src} into {tgt} (parent/child check)".format(tr=trStr, src=mergeSource, tgt=mergeTarget) # merge parent into child.
+            else:
+                # So the destination stream was the child but the parent was also affected? This can only happen if we don't have enough
+                # information available to make a good decision. In that case we don't know the merge target.
+                mergeTarget, mergeSource, message = None, None, "{tr}. Streams {s1} and {s2} were placed as parent({p}) and child ({c}) but the parent wasn't the destination ({d})".format(tr=trStr, s1=stream1, s2=stream2, p=parent, c=child, d=dstStreamName)
+        elif srcStreamName == dstStreamName:
+            raise Exception("Invariant violation: How can both the source and destination streams be the same? Transaction: {tr}, stream: {s}".format(tr=timeSpec, s=dstStreamName))
+        else:
+            # At this point, we know that dstStreamName is either stream1 or stream2. We also know that dstStreamName != srcStreamName...
+            # Hence if the next check passes, we will return the dstStreamName as the target and srcStreamName as the source of the merge.
+            if srcStreamName == stream1 or srcStreamName == stream2:
+                mergeTarget, mergeSource, message = dstStreamName, srcStreamName, "{tr}. Merging {src} into {tgt} (source/destination check)".format(tr=trStr, src=mergeSource, tgt=mergeTarget)
+            else:
+                # If we ended up with the source stream being different then these two are not meant to be merged.
+                mergeTarget, mergeSource, message = None, None, "{tr}. Streams {s1} and {s2} don't match the source {src}".format(tr=trStr, s1=stream1, s2=stream2, src=srcStreamName)
+
+        # Merge mergeSource into mergeTarget.
+        return mergeTarget, mergeSource, message
 
     def GetStreamName(self, state=None, commitHash=None):
         if state is None:
@@ -1639,18 +1695,34 @@ class AccuRev2Git(object):
                         
                         firstTime = int(first[u'committer'][u'time'])
                         secondTime = int(second[u'committer'][u'time'])
+
+                        # Get the state information for both streams.
+                        firstState = self.GetStateForCommit(commitHash=first[u'hash'], branchName=first[u'branch'].name)
+                        secondState = self.GetStateForCommit(commitHash=second[u'hash'], branchName=second[u'branch'].name)
+
+                        # Store the state for later use in alias mapping.
+                        commitStateMap[first[u'hash']] = firstState
+                        commitStateMap[second[u'hash']] = secondState
     
+                        firstTrId = firstState["transaction_number"]
+                        secondTrId = secondState["transaction_number"]
+
+                        # Get the information for the first stream
+                        firstStream = self.GetStreamName(state=firstState, commitHash=first[u'hash'])
+                        if firstStream is None:
+                            self.config.logger.error("Branch stitching error: incorrect state. Could not get stream name for branch {0}.".format(firstBranch))
+                            raise Exception("Branch stitching failed!")
+
+                        # Get the information for the second stream
+                        secondStream = self.GetStreamName(state=secondState, commitHash=second[u'hash'])
+                        if secondStream is None:
+                            self.config.logger.error("Branch stitching error: incorrect state. Could not get stream name for branch {0}.".format(secondBranch))
+                            raise Exception("Branch stitching failed!")
+
                         wereSwapped = False
+                        formatDict = { "first_hash": first[u'hash'][:8], "first_stream": firstStream, "first_tr": firstTrId, "second_hash": second[u'hash'][:8], "second_stream": secondStream, "second_tr": secondTrId, "tree_hash": tree_hash[:8] }
                         if firstTime == secondTime:
                             # Normally both commits would have originated from the same transaction. However, if not, let's try and order them by transaciton number first.
-                            firstState = self.GetStateForCommit(commitHash=first[u'hash'], branchName=first[u'branch'].name)
-                            secondState = self.GetStateForCommit(commitHash=second[u'hash'], branchName=second[u'branch'].name)
-
-                            commitStateMap[first[u'hash']] = firstState
-                            commitStateMap[second[u'hash']] = secondState
-
-                            firstTrId = firstState["transaction_number"]
-                            secondTrId = secondState["transaction_number"]
 
                             if firstTrId < secondTrId:
                                 # This should really never be true given that AccuRev is centralized and synchronous and that firstTime == secondTime above...
@@ -1665,35 +1737,31 @@ class AccuRev2Git(object):
                                 # The same transaction affected both commits (the id's are unique in accurev)...
                                 # Must mean that they are substreams of eachother or sibling substreams of a third stream. Let's see which it is.
 
-                                # Get the information for the first stream
-                                firstStream = self.GetStreamName(state=firstState, commitHash=first[u'hash'])
-                                if firstStream is None:
-                                    self.config.logger.error("Branch stitching error: incorrect state. Could not get stream name for branch {0}.".format(firstBranch))
-                                    raise Exception("Branch stitching failed!")
-
-                                # Get the information for the second stream
-                                secondStream = self.GetStreamName(state=secondState, commitHash=second[u'hash'])
-                                if secondStream is None:
-                                    self.config.logger.error("Branch stitching error: incorrect state. Could not get stream name for branch {0}.".format(secondBranch))
-                                    raise Exception("Branch stitching failed!")
-
                                 # Find which one is the parent of the other. They must be inline since they were affected by the same transaction (since the times match)
                                 parentStream, childStream = self.GetParentChild(stream1=firstStream, stream2=secondStream, timeSpec=firstTrId, onlyDirectChild=False)
+
                                 if parentStream is not None and childStream is not None:
                                     if firstStream == childStream:
                                         aliasMap[first[u'hash']] = second[u'hash']
-                                        self.config.logger.info(u'  squashing: {0} ({1}/{2}) as equiv. to {3} ({4}/{5}). tree {6}.'.format(first[u'hash'][:8], firstStream, firstTrId, second[u'hash'][:8], secondStream, secondTrId, tree_hash[:8]))
+                                        self.config.logger.info(u'  squashing: {first_hash} ({first_stream}/{first_tr}) as equiv. to {second_hash} ({second_stream}/{second_tr}). tree {tree_hash}.'.format(**formatDict))
                                     elif secondStream == childStream:
                                         aliasMap[second[u'hash']] = first[u'hash']
-                                        self.config.logger.info(u'  squashing: {3} ({4}/{5}) as equiv. to {0} ({1}/{2}). tree {6}.'.format(first[u'hash'][:8], firstStream, firstTrId, second[u'hash'][:8], secondStream, secondTrId, tree_hash[:8]))
+                                        self.config.logger.info(u'  squashing: {second_hash} ({second_stream}/{second_tr}) as equiv. to {first_hash} ({first_stream}/{first_tr}). tree {tree_hash}.'.format(**formatDict))
                                     else:
                                         Exception("Invariant violation! Either (None, None), (firstStream, secondStream) or (secondStream, firstStream) should be possible")
                                 else:
-                                    self.config.logger.info(u'  unrelated: {0} ({1}/{2}) is equiv. to {3} ({4}/{5}). tree {6}.'.format(first[u'hash'][:8], firstStream, firstTrId, second[u'hash'][:8], secondStream, secondTrId, tree_hash[:8]))
+                                    self.config.logger.info(u'  unrelated: {first_hash} ({first_stream}/{first_tr}) as equiv. to {second_hash} ({second_stream}/{second_tr}). tree {tree_hash}. (not parent/child/grandchild)'.format(**formatDict))
                                     
                         elif firstTime < secondTime:
                             # Already in the correct order...
-                            pass
+                            mergeTarget, mergeSource, msg = self.GetMergeTarget(depot=self.config.accurev.depot, stream1=firstStream, stream2=secondStream, timeSpec=firstTrId, onlyDirectChild=False)
+                            formatDict["extra_msg"] = msg
+                            if mergeTarget is None or mergeSource is None:
+                                # Unrelated, don't merge!
+                                self.config.logger.info(u'  unrelated: {first_hash} ({first_stream}/{first_tr}) is equiv. to {second_hash} ({second_stream}/{second_tr}). tree {tree_hash}. Msg: {extra_msg}'.format(**formatDict))
+                                first, second = None, None
+                            elif mergeTarget != secondStream or mergeSource != firstStream:
+                                raise Exception("Invariant violation! Merge target: {mt} != second stream: {ss} or merge source: {ms} != first stream: {fs} is True.".format(mt=mergeTarget, ss=secondStream, ms=mergeSource, fs=firstStream))
                         else:
                             raise Exception(u'Error: wrong sort order!')
 
@@ -1707,7 +1775,11 @@ class AccuRev2Git(object):
                                         commitRewriteMap[second[u'hash']][parent] = True
                             # Add the new parent
                             commitRewriteMap[second[u'hash']][first[u'hash']] = True
-                            self.config.logger.info(u'  merge:     {0} as parent of {1}. tree {2}. parents {3}'.format(first[u'hash'][:8], second[u'hash'][:8], tree_hash[:8], [x[:8] for x in commitRewriteMap[second[u'hash']].keys()] ))
+                            message = u'  merge:     {first_hash} as parent of {second_hash}. tree {tree_hash}.'.format(**formatDict)
+                            message += u' parents {parents}.'.format(parents=[x[:8] for x in commitRewriteMap[second[u'hash']].keys()])
+                            if 'extra_msg' in formatDict:
+                                message += u' Msg: {extra_msg}'.format(**formatDict)
+                            self.config.logger.info(message)
 
             # Reduce the aliasMap to only the items that are actually aliased and remove indirect links to the non-aliased commit (aliases of aliases).
             reducedAliasMap = {}
@@ -1787,7 +1859,7 @@ class AccuRev2Git(object):
 
             # Write parent filter shell script
             parentFilterPath = os.path.join(self.cwd, 'parent_filter.sh')
-            self.config.logger.info("Writing parent filter '{0}'.".format(parentFilterPath))
+            self.config.logger.info("Writing parent filter '{file_path}'.".format(file_path=parentFilterPath))
             with codecs.open(parentFilterPath, 'w', 'ascii') as f:
                 # http://www.tutorialspoint.com/unix/case-esac-statement.htm
                 f.write('#!/bin/sh\n\n')
@@ -1803,40 +1875,42 @@ class AccuRev2Git(object):
                 f.write('esac\n\n')
 
             # Write the commit filter shell script
+            commitMapFilePath = os.path.join(self.cwd, 'commit.map').replace('\\', '/')
             commitFilterPath = os.path.join(self.cwd, 'commit_filter.sh')
-            self.config.logger.info("Writing commit filter '{0}'.".format(commitFilterPath))
+            self.config.logger.info("Writing commit filter '{path}'.".format(path=commitFilterPath))
             with codecs.open(commitFilterPath, 'w', 'ascii') as f:
                 # http://www.tutorialspoint.com/unix/case-esac-statement.htm
                 f.write('#!/bin/sh\n\n')
+                f.write('echo -n "${GIT_COMMIT}," >> {map_file};'.format(map_file=commitMapFilePath))
                 f.write('case "$GIT_COMMIT" in\n')
                 for commitHash in aliasMap:
                     if commitHash != aliasMap[commitHash]:
                         # Skip this commit
-                        f.write('    "{0}") echo skip_commit \\$@\n'.format(commitHash))
+                        f.write('    "{hash}") echo skip_commit \\$@ | tee -a {map_file};\n'.format(map_file=commitMapFilePath, hash=commitHash))
                         f.write('    ;;\n')
-                f.write('    *) echo git_commit_non_empty_tree \\$@;\n') # If we don't want to skip this commit then just commit it...
+                f.write('    *) echo git_commit_non_empty_tree \\$@ | tee -a {map_file};\n'.format(map_file=commitMapFilePath)) # If we don't want to skip this commit then just commit it...
                 f.write('    ;;\n')
                 f.write('esac\n\n')
 
             stitchScriptPath = os.path.join(self.cwd, 'stitch_branches.sh')
-            self.config.logger.info("Writing branch stitching script '{0}'.".format(stitchScriptPath))
+            self.config.logger.info("Writing branch stitching script '{path}'.".format(path=stitchScriptPath))
             with codecs.open(stitchScriptPath, 'w', 'ascii') as f:
                 # http://www.tutorialspoint.com/unix/case-esac-statement.htm
                 f.write('#!/bin/sh\n\n')
-                f.write('chmod +x {0}\n'.format(parentFilterPath))
-                f.write('chmod +x {0}\n'.format(commitFilterPath))
-                f.write('cd {0}\n'.format(self.config.git.repoPath))
+                f.write('chmod +x {parent_filter}\n'.format(parent_filter=parentFilterPath.replace('\\', '/')))
+                f.write('chmod +x {commit_filter}\n'.format(commit_filter=commitFilterPath.replace('\\', '/')))
+                f.write('cd {repo_path}\n'.format(repo_path=self.config.git.repoPath.replace('\\', '/')))
 
                 rewriteHeads = ""
                 branchList = self.gitRepo.branch_list()
                 for branch in branchList:
-                    rewriteHeads += " {0}".format(branch.name)
+                    rewriteHeads += " {branchName}".format(branchName=branch.name)
                 f.write("git filter-branch --parent-filter 'eval $({parent_filter})' --commit-filter 'eval $({commit_filter})' -- {rewrite_heads}\n".format(parent_filter=parentFilterPath, commit_filter=commitFilterPath, rewrite_heads=rewriteHeads))
                 f.write('cd -\n')
 
-            self.config.logger.info("Branch stitching script generated: {0}".format(stitchScriptPath))
+            self.config.logger.info("Branch stitching script generated: {stitch_path}".format(stitch_path=stitchScriptPath))
             self.config.logger.info("To apply execute the following command:")
-            self.config.logger.info("  chmod +x {0}".format(stitchScriptPath))
+            self.config.logger.info("  chmod +x {stitch_path}".format(stitch_path=stitchScriptPath))
 
     # Start
     #   Begins a new AccuRev to Git conversion process discarding the old repository (if any).
