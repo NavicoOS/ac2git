@@ -329,6 +329,7 @@ class AccuRev2Git(object):
     gitNotesRef_AccurevHist    = 'accurev/hist'
 
     commandFailureRetryCount = 3
+    commandFailureSleepSeconds = 3
 
     def __init__(self, config):
         self.config = config
@@ -584,6 +585,7 @@ class AccuRev2Git(object):
                     commitHash = None
                 else:
                     break
+            time.sleep(AccuRev2Git.commandFailureSleepSeconds)
 
         if commitHash is None:
             self.config.logger.error("Failed to retrieve last git commit hash. Command `{0}` failed.".format(' '.join(cmd)))
@@ -606,8 +608,7 @@ class AccuRev2Git(object):
                     break
                 else:
                     stateJson = None
-            else:
-                time.sleep(3)
+            time.sleep(AccuRev2Git.commandFailureSleepSeconds)
 
         if stateJson is not None:
             stateJson = stateJson.strip()
@@ -698,6 +699,7 @@ class AccuRev2Git(object):
                             stateNoteWritten = ( self.AddScriptStateNote(depotName=depot, stream=stream, transaction=transaction, commitHash=commitHash, ref=ref, committer=committer, committerDate=committerDate, committerTimezone=committerTimezone) is not None )
                             if stateNoteWritten:
                                 break
+                            time.sleep(AccuRev2Git.commandFailureSleepSeconds)
                         if not stateNoteWritten:
                             # The XML output in the notes is how we track our conversion progress. It is not acceptable for it to fail.
                             # Undo the commit and print an error.
@@ -1894,7 +1896,7 @@ class AccuRev2Git(object):
             with codecs.open(commitFilterPath, 'w', 'ascii') as f:
                 # http://www.tutorialspoint.com/unix/case-esac-statement.htm
                 f.write('#!/bin/sh\n\n')
-                f.write('echo -n "${GIT_COMMIT}," >> {map_file};'.format(map_file=commitMapFilePath))
+                f.write('echo -n "${GIT_COMMIT}," >> ' + str(commitMapFilePath))
                 f.write('case "$GIT_COMMIT" in\n')
                 for commitHash in aliasMap:
                     if commitHash != aliasMap[commitHash]:
