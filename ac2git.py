@@ -601,7 +601,11 @@ class AccuRev2Git(object):
         for i in range(0, AccuRev2Git.commandFailureRetryCount):
             stateJson = self.gitRepo.notes.show(obj=commitHash, ref=branchName)
             if stateJson is not None:
-                break
+                stateJson = stateJson.strip()
+                if len(stateJson) > 0:
+                    break
+                else:
+                    stateJson = None
             else:
                 time.sleep(3)
 
