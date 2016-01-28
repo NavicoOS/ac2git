@@ -607,7 +607,11 @@ class AccuRev2Git(object):
 
         if stateJson is not None:
             stateJson = stateJson.strip()
-            stateObj = json.loads(stateJson)
+            try:
+                stateObj = json.loads(stateJson)
+            except:
+                self.config.logger.error("While getting state for commit {hash}, branch {branch}. Failed to parse JSON string [{json}].".format(hash=commitHash, branch=branchName, json=stateJson))
+                raise Exception("While getting state for commit {hash}, branch {branch}. Failed to parse JSON string [{json}].".format(hash=commitHash, branch=branchName, json=stateJson))
         else:
             self.config.logger.error("Failed to load the last transaction for commit {0} from {1} notes.".format(commitHash, branchName))
             self.config.logger.error("  i.e git notes --ref={0} show {1}    - returned nothing.".format(branchName, commitHash))
@@ -1681,7 +1685,12 @@ class AccuRev2Git(object):
                         raise Exception("Commit {commit} is not a valid hash!".format(commit=commit))
                     aliasMap[commit[u'hash']] = commit[u'hash'] # Initially each commit maps to itself.
 
+            totalItems = len(branchRevMap)
+            progressFormat = "{percent: >3d}%"
+            currentItem = 0
             for tree_hash in branchRevMap:
+                currentItem += 1
+                progressStr = progressFormat.format(percent=int(100*currentItem/totalItems))
                 if len(branchRevMap[tree_hash]) > 1:
                     # We should make some decisions about how to merge these commits which reference the same tree
                     # and what their ideal parents are. Once we decide we will write it to file in a nice bash friendly
@@ -1720,7 +1729,7 @@ class AccuRev2Git(object):
                             raise Exception("Branch stitching failed!")
 
                         wereSwapped = False
-                        formatDict = { "first_hash": first[u'hash'][:8], "first_stream": firstStream, "first_tr": firstTrId, "second_hash": second[u'hash'][:8], "second_stream": secondStream, "second_tr": secondTrId, "tree_hash": tree_hash[:8] }
+                        formatDict = { "progress": progressStr, "first_hash": first[u'hash'][:8], "first_stream": firstStream, "first_tr": firstTrId, "second_hash": second[u'hash'][:8], "second_stream": secondStream, "second_tr": secondTrId, "tree_hash": tree_hash[:8] }
                         if firstTime == secondTime:
                             # Normally both commits would have originated from the same transaction. However, if not, let's try and order them by transaciton number first.
 
@@ -1743,14 +1752,14 @@ class AccuRev2Git(object):
                                 if parentStream is not None and childStream is not None:
                                     if firstStream == childStream:
                                         aliasMap[first[u'hash']] = second[u'hash']
-                                        self.config.logger.info(u'  squashing: {first_hash} ({first_stream}/{first_tr}) as equiv. to {second_hash} ({second_stream}/{second_tr}). tree {tree_hash}.'.format(**formatDict))
+                                        self.config.logger.info(u'{progress}  squashing: {first_hash} ({first_stream}/{first_tr}) as equiv. to {second_hash} ({second_stream}/{second_tr}). tree {tree_hash}.'.format(**formatDict))
                                     elif secondStream == childStream:
                                         aliasMap[second[u'hash']] = first[u'hash']
-                                        self.config.logger.info(u'  squashing: {second_hash} ({second_stream}/{second_tr}) as equiv. to {first_hash} ({first_stream}/{first_tr}). tree {tree_hash}.'.format(**formatDict))
+                                        self.config.logger.info(u'{progress}  squashing: {second_hash} ({second_stream}/{second_tr}) as equiv. to {first_hash} ({first_stream}/{first_tr}). tree {tree_hash}.'.format(**formatDict))
                                     else:
                                         Exception("Invariant violation! Either (None, None), (firstStream, secondStream) or (secondStream, firstStream) should be possible")
                                 else:
-                                    self.config.logger.info(u'  unrelated: {first_hash} ({first_stream}/{first_tr}) as equiv. to {second_hash} ({second_stream}/{second_tr}). tree {tree_hash}. (not parent/child/grandchild)'.format(**formatDict))
+                                    self.config.logger.info(u'{progress}  unrelated: {first_hash} ({first_stream}/{first_tr}) as equiv. to {second_hash} ({second_stream}/{second_tr}). tree {tree_hash}. (not parent/child/grandchild)'.format(**formatDict))
                                     
                         elif firstTime < secondTime:
                             # Already in the correct order...
@@ -1758,7 +1767,7 @@ class AccuRev2Git(object):
                             formatDict["extra_msg"] = msg
                             if mergeTarget is None or mergeSource is None:
                                 # Unrelated, don't merge!
-                                self.config.logger.info(u'  unrelated: {first_hash} ({first_stream}/{first_tr}) is equiv. to {second_hash} ({second_stream}/{second_tr}). tree {tree_hash}. Msg: {extra_msg}'.format(**formatDict))
+                                self.config.logger.info(u'{progress}  unrelated: {first_hash} ({first_stream}/{first_tr}) is equiv. to {second_hash} ({second_stream}/{second_tr}). tree {tree_hash}. Msg: {extra_msg}'.format(**formatDict))
                                 first, second = None, None
                             elif mergeTarget != secondStream or mergeSource != firstStream:
                                 raise Exception("Invariant violation! Merge target: {mt} != second stream: {ss} or merge source: {ms} != first stream: {fs} is True.".format(mt=mergeTarget, ss=secondStream, ms=mergeSource, fs=firstStream))
@@ -1775,7 +1784,7 @@ class AccuRev2Git(object):
                                         commitRewriteMap[second[u'hash']][parent] = True
                             # Add the new parent
                             commitRewriteMap[second[u'hash']][first[u'hash']] = True
-                            message = u'  merge:     {first_hash} as parent of {second_hash}. tree {tree_hash}.'.format(**formatDict)
+                            message = u'{progress}  merge:     {first_hash} as parent of {second_hash}. tree {tree_hash}.'.format(**formatDict)
                             message += u' parents {parents}.'.format(parents=[x[:8] for x in commitRewriteMap[second[u'hash']].keys()])
                             if 'extra_msg' in formatDict:
                                 message += u' Msg: {extra_msg}'.format(**formatDict)
