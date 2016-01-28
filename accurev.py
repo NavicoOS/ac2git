@@ -1029,6 +1029,37 @@ class obj:
                 str += ")"
                 
                 return str
+
+            # Gets the stream from the list whose name or number match nameOrNumber.
+            # Warning: Searching for streams via show.streams(stream="Stream_Name", timeSpec=1234)
+            #          will work for the current and all past names of the stream 
+            #          if the stream has been renamed. This method will find and
+            #          return the stream only if its name matches exactly what it was
+            #          called at that point in time (i.e. at transaction 1234).
+            # Recommendation: Always use stream number for searches.
+            def getStream(self, nameOrNumber):
+                # Sanitize the inputs.
+                if self.streams is None or len(self.streams) == 0:
+                    return None
+                elif nameOrNumber is None:
+                    return None
+                # Prepare state
+                name = None
+                streamNumber = None
+                if isinstance(nameOrNumber, int):
+                    streamNumber = nameOrNumber
+                else:
+                    name = nameOrNumber
+                    try:
+                        streamNumber = int(nameOrNumber)
+                    except:
+                        pass
+                # Find the matching stream
+                for stream in self.streams:
+                    if (name is not None and name == stream.name) or (streamNumber is not None and streamNumber == stream.streamNumber):
+                        return stream
+                # Not found
+                return None
                 
             @classmethod
             def fromxmlstring(cls, xmlText):
@@ -2154,10 +2185,27 @@ class show(object):
                 ts = obj.TimeSpec.fromstring(timeSpec)
             else:
                 ts = timeSpec
-                
+
             useCache = ts is not None and not (isinstance(ts.start, str) or isinstance(ts.end, str)) # If both values are non-keywords, we can cache them.
             useCache = useCache and listFile is None # Ensure that we don't have any file operations...
             
+        if useCache and depot is not None and stream is not None and isinstance(stream, int):
+            # At this point we know that the command is cache-able. Here we try and maximize the use of the cache for the 'stream' argument.
+            # For stream numbers it is safe to optimize the cache by getting all the streams at this transaction (which will be a single
+            # cache entry) and then filtering the result to look like it would as if we only queried accurev for the specified stream.
+            # Warning: This only works for stream id's (stream numbers) since the command does some magical things with renamed streams!
+            #          A stream can be queried by any of its past names by using this command at any point in time but its returned name
+            #          is as it was at the particular transaction. This means that if we only have the name and the stream was renamed we may
+            #          not be able to figure out which stream the user is trying to get. Hence the isinstance(stream, int) condition!!!
+            xmlOutput = raw.show.streams(depot=depot, timeSpec=timeSpec, stream=None, matchType=matchType, listFile=listFile, listPathAndChildren=listPathAndChildren, listChildren=listChildren, listImmediateChildren=listImmediateChildren, nonEmptyDefaultGroupsOnly=nonEmptyDefaultGroupsOnly, isXmlOutput=True, includeDeactivatedItems=includeDeactivatedItems, includeOldDefinitions=includeOldDefinitions, includeHasDefaultGroupAttribute=includeHasDefaultGroupAttribute, useCache=useCache)
+            
+            rvObj = obj.Show.Streams.fromxmlstring(xmlOutput)
+            if rvObj is not None:
+                s = rvObj.getStream(stream)
+                if s is not None:
+                    rvObj.streams = [ s ]
+                    return rvObj
+
         xmlOutput = raw.show.streams(depot=depot, timeSpec=timeSpec, stream=stream, matchType=matchType, listFile=listFile, listPathAndChildren=listPathAndChildren, listChildren=listChildren, listImmediateChildren=listImmediateChildren, nonEmptyDefaultGroupsOnly=nonEmptyDefaultGroupsOnly, isXmlOutput=True, includeDeactivatedItems=includeDeactivatedItems, includeOldDefinitions=includeOldDefinitions, includeHasDefaultGroupAttribute=includeHasDefaultGroupAttribute, useCache=useCache)
         return obj.Show.Streams.fromxmlstring(xmlOutput)
 
@@ -2191,17 +2239,17 @@ class ext(object):
     # transaction is returned. If no mkstream transaction exists None is returned.
     # returns obj.Transaction
     @staticmethod
-    def stream_info(stream, transaction):
+    def stream_info(stream, transaction, useCache=False):
         # As of AccuRev 4.7.2, the data stored in the database by the mkstream command includes the stream-ID. 
         # Streams and workspaces created after installing 4.7.2 will display this additional stream information 
         # as part of the hist command.
         timeSpec = '{0}-1.1'.format(transaction)
-        history = hist(stream=stream, timeSpec=timeSpec, transactionKind='chstream')
+        history = hist(stream=stream, timeSpec=timeSpec, transactionKind='chstream', useCache=useCache)
         
         if history is not None and history.transactions is not None and len(history.transactions) > 0:
             return history.transactions[0]
         
-        history = hist(stream=stream, timeSpec=timeSpec, transactionKind='mkstream')
+        history = hist(stream=stream, timeSpec=timeSpec, transactionKind='mkstream', useCache=useCache)
 
         if history is not None and history.transactions is not None and len(history.transactions) > 0:
             return history.transactions[0]
@@ -2210,8 +2258,8 @@ class ext(object):
     
     # Returns a dictionary where the keys are the stream names and the values are obj.Stream objects.
     @staticmethod
-    def stream_dict(depot, transaction):
-        streams = show.streams(depot=depot, timeSpec='{0}'.format(transaction))
+    def stream_dict(depot, transaction, useCache=False):
+        streams = show.streams(depot=depot, timeSpec='{0}'.format(transaction), useCache=useCache)
         streamDict = None
         if streams is not None:
             streams = streams.streams
@@ -2226,8 +2274,8 @@ class ext(object):
     #   [ stream, parent, parent's parent, ... ]
     # where each item in the list is an object of type obj.Stream
     @staticmethod
-    def stream_parent_list(depot, stream, transaction):
-        streamDict = ext.stream_dict(depot=depot, transaction=transaction)
+    def stream_parent_list(depot, stream, transaction, useCache=False):
+        streamDict = ext.stream_dict(depot=depot, transaction=transaction, useCache=useCache)
 
         if stream not in streamDict:
             raise Exception('Unhandled error: stream either doesn\'t exist or has changed names in this transaction range')
@@ -2322,12 +2370,12 @@ class ext(object):
     @staticmethod
     # Retrieves a list of _all transactions_ which affect the given stream, directly or indirectly (via parent promotes).
     # Returns a list of obj.Transaction(object) types.
-    def deep_hist(depot=None, stream=None, timeSpec='now', ignoreTimelocks=True):
+    def deep_hist(depot=None, stream=None, timeSpec='now', ignoreTimelocks=True, useCache=False):
         # Validate arguments
         # ==================
         if stream is None:
             # When the stream is not specified then we just want all the depot transactions for the given time-spec.
-            return hist(depot=depot, timeSpec=timeSpec)
+            return hist(depot=depot, timeSpec=timeSpec, useCache=useCache)
 
         if isinstance(timeSpec, obj.TimeSpec):
             ts = timeSpec
@@ -2336,7 +2384,9 @@ class ext(object):
         else:
             raise Exception("Unrecognized time-spec type {0}".format(type(timeSpec)))
 
-        streamInfo = show.streams(stream=stream).streams[0]
+        # Since we don't know if this stream has been renamed in the past, we can't optimize this for the cache
+        # like we do subsequently (by using Show.Streams(obj).getStream()).
+        streamInfo = show.streams(stream=stream, useCache=useCache).streams[0]
 
         # Normalize the timeSpec
         # ======================
@@ -2348,10 +2398,10 @@ class ext(object):
             # Make descending
             ts = ts.reversed()
         # Next, we need to ensure that we don't query things before the stream existed.
-        mkstream = hist(stream=stream, transactionKind="mkstream", timeSpec="now")
+        mkstream = hist(stream=stream, transactionKind="mkstream", timeSpec="now", useCache=useCache)
         if len(mkstream.transactions) == 0:
             # the assumption is that the depot name matches the root stream name (for which there is no mkstream transaction)
-            firstTr = hist(depot=depot, timeSpec="1")
+            firstTr = hist(depot=depot, timeSpec="1", useCache=useCache)
             if firstTr is None or len(firstTr.transactions) == 0:
                 raise Exception("Error: assumption that the root stream has the same name as the depot doesn't hold. Aborting...")
             mkstreamTr = firstTr.transactions[0]
@@ -2373,7 +2423,7 @@ class ext(object):
         trList = []
 
         # Get the history for the requested stream.
-        history = hist(depot=depot, stream=stream, timeSpec=str(ts))
+        history = hist(depot=depot, stream=stream, timeSpec=str(ts), useCache=useCache)
 
         prevTr = None
         parentTs = ts
@@ -2382,28 +2432,28 @@ class ext(object):
                 # Parent stream changed.
                 if prevTr is not None:
                     parentTs = obj.TimeSpec(start=parentTs.start, end=(tr.id - 1))
-                    streamInfo = show.streams(depot=depot, stream=stream, timeSpec=parentTs.start).streams[0]
+                    streamInfo = show.streams(depot=depot, stream=streamInfo.streamNumber, timeSpec=parentTs.start, useCache=useCache).streams[0]
                     parentStream = streamInfo.basis
                     if parentStream is not None:
                         timelockTs = parentTs
                         if not ignoreTimelocks:
                             timelockTs = ext.restrict_timespec_to_timelock(depot=streamInfo.depotName, timeSpec=parentTs, timelock=streamInfo.time)
                         if timelockTs is not None: # A None value indicates that the entire timespec is after the timelock.
-                            parentTrList = ext.deep_hist(depot=depot, stream=parentStream, timeSpec=timelockTs, ignoreTimelocks=ignoreTimelocks)
+                            parentTrList = ext.deep_hist(depot=depot, stream=parentStream, timeSpec=timelockTs, ignoreTimelocks=ignoreTimelocks, useCache=useCache)
                             trList.extend(parentTrList)
                     parentTs = obj.TimeSpec(start=tr.id, end=ts.end)
 
             trList.append(tr)
             prevTr = tr
 
-        streamInfo = show.streams(depot=depot, stream=stream, timeSpec=parentTs.start).streams[0]
+        streamInfo = show.streams(depot=depot, stream=streamInfo.streamNumber, timeSpec=parentTs.start, useCache=useCache).streams[0]
         parentStream = streamInfo.basis
         if parentStream is not None:
             timelockTs = parentTs
             if not ignoreTimelocks:
                 timelockTs = ext.restrict_timespec_to_timelock(depot=streamInfo.depotName, timeSpec=parentTs, timelock=streamInfo.time)
             if timelockTs is not None: # A None value indicates that the entire timespec is after the timelock.
-                parentTrList = ext.deep_hist(depot=depot, stream=parentStream, timeSpec=timelockTs, ignoreTimelocks=ignoreTimelocks)
+                parentTrList = ext.deep_hist(depot=depot, stream=parentStream, timeSpec=timelockTs, ignoreTimelocks=ignoreTimelocks, useCache=useCache)
                 trList.extend(parentTrList)
 
         rv = sorted(trList, key=lambda tr: tr.id)
@@ -2418,15 +2468,15 @@ class ext(object):
     # which is returned by the hist() function.
     def affected_streams(depot, transaction, includeWorkspaces=True, ignoreTimelocks=True, doDiffs=False, useCache=False):
         if not isinstance(transaction, obj.Transaction):
-            transaction = hist(depot=depot, timeSpec=str(transaction)).transactions[0]
+            transaction = hist(depot=depot, timeSpec=str(transaction), useCache=useCache).transactions[0]
         
         rv = None
 
         destStreamNum = transaction.affectedStream()[1]
-        destStream = show.streams(depot=depot, timeSpec=transaction.id, stream=destStreamNum).streams[0].name
+        destStream = show.streams(depot=depot, stream=destStreamNum, timeSpec=transaction.id, useCache=useCache).streams[0].name
 
         if destStream is not None:
-            streamMap = ext.stream_dict(depot=depot, transaction=transaction.id)
+            streamMap = ext.stream_dict(depot=depot, transaction=transaction.id, useCache=useCache)
 
             childrenSet = set()
             newChildrenSet = set()

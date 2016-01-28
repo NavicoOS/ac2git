@@ -866,7 +866,7 @@ class AccuRev2Git(object):
                 if not popResult:
                     return (None, None)
                 
-                stream = accurev.show.streams(depot=depot, stream=stream.streamNumber, timeSpec=tr.id).streams[0]
+                stream = accurev.show.streams(depot=depot, stream=stream.streamNumber, timeSpec=tr.id, useCache=self.config.accurev.UseCommandCache()).streams[0]
                 commitHash = self.Commit(depot=depot, stream=stream, transaction=tr, branchName=branchName, isFirstCommit=True)
                 if not commitHash:
                     self.config.logger.dbg( "{0} first commit has failed. Is it an empty commit? Continuing...".format(stream.name) )
@@ -900,7 +900,7 @@ class AccuRev2Git(object):
                     return (None, None)
 
             tr = hist.transactions[0]
-            stream = accurev.show.streams(depot=depot, stream=stream.streamNumber, timeSpec=tr.id).streams[0]
+            stream = accurev.show.streams(depot=depot, stream=stream.streamNumber, timeSpec=tr.id, useCache=self.config.accurev.UseCommandCache()).streams[0]
             self.config.logger.dbg("{0}: last processed transaction was #{1}".format(stream.name, tr.id))
 
         endTrHist = self.TryHist(depot=depot, trNum=endTransaction)
@@ -966,19 +966,23 @@ class AccuRev2Git(object):
                     self.config.logger.dbg("accurev hist -p {0} -t {1}.1 failed.".format(depot, endTransaction))
                     return (None, None)
                 tr = hist.transactions[0]
-                stream = accurev.show.streams(depot=depot, stream=stream.streamNumber, timeSpec=tr.id).streams[0]
+                stream = accurev.show.streams(depot=depot, stream=stream.streamNumber, timeSpec=tr.id, useCache=self.config.accurev.UseCommandCache()).streams[0]
 
                 # Work out the source and destination streams for the promote (for the purposes of the commit message info).
                 destStreamName, destStreamNumber = hist.toStream()
                 destStream = None
-                if destStreamName is not None:
-                    destStream = accurev.show.streams(depot=depot, stream=destStreamName, timeSpec=tr.id).streams[0]
+                if destStreamNumber is not None:
+                    destStream = accurev.show.streams(depot=depot, stream=destStreamNumber, timeSpec=tr.id, useCache=self.config.accurev.UseCommandCache()).streams[0]
+                elif dstStreamName is not None:
+                    destStream = accurev.show.streams(depot=depot, stream=destStreamName, timeSpec=tr.id, useCache=self.config.accurev.UseCommandCache()).streams[0]
 
                 srcStream = None
                 try:
                     srcStreamName, srcStreamNumber = hist.fromStream()
+                    if srcStreamNumber is not None:
+                        srcStream = accurev.show.streams(depot=depot, stream=srcStreamNumber, timeSpec=tr.id, useCache=self.config.accurev.UseCommandCache()).streams[0]
                     if srcStreamName is not None:
-                        srcStream = accurev.show.streams(depot=depot, stream=srcStreamName, timeSpec=tr.id).streams[0]
+                        srcStream = accurev.show.streams(depot=depot, stream=srcStreamName, timeSpec=tr.id, useCache=self.config.accurev.UseCommandCache()).streams[0]
                 except:
                     srcStreamName, srcStreamNumber = None, None
 
@@ -1028,7 +1032,7 @@ class AccuRev2Git(object):
             depot  = self.config.accurev.depot
             streamInfo = None
             try:
-                streamInfo = accurev.show.streams(depot=depot, stream=stream).streams[0]
+                streamInfo = accurev.show.streams(depot=depot, stream=stream, useCache=self.config.accurev.UseCommandCache()).streams[0]
             except IndexError:
                 self.config.logger.error( "Failed to get stream information. `accurev show streams -p {0} -s {1}` returned no streams".format(depot, stream) )
                 return
@@ -1174,13 +1178,13 @@ class AccuRev2Git(object):
             # Old versions of accurev don't tell you the name of the stream that was created in the mkstream transaction.
             # The only way to find out what stream was created is to diff the output of the `accurev show streams` command
             # between the mkstream transaction and the one that preceedes it.
-            streams = accurev.show.streams(depot=depot, timeSpec=transaction)
+            streams = accurev.show.streams(depot=depot, timeSpec=transaction, useCache=self.config.accurev.UseCommandCache())
             newStream = None
             if transaction == 1:
                 newStream = streams.streams[0]
             else:
                 streamSet = set()
-                oldStreams = accurev.show.streams(depot=depot, timeSpec=(transaction - 1))
+                oldStreams = accurev.show.streams(depot=depot, timeSpec=(transaction - 1), useCache=self.config.accurev.UseCommandCache())
                 for stream in oldStreams.streams:
                     streamSet.add(stream.name)
                 for stream in streams.streams:
@@ -1203,7 +1207,7 @@ class AccuRev2Git(object):
         
         elif tr.Type == "chstream":
             #streamName, streamNumber = tr.affectedStream()
-            #stream = accurev.show.streams(depot=depot, stream=streamNumber, timeSpec=tr.id).streams[0]
+            #stream = accurev.show.streams(depot=depot, stream=streamNumber, timeSpec=tr.id, useCache=self.config.accurev.UseCommandCache()).streams[0]
             
             branchName = self.SanitizeBranchName(tr.stream.name)
             if tr.stream.prevName is not None and len(tr.stream.prevName.strip()) > 0:
@@ -1239,7 +1243,7 @@ class AccuRev2Git(object):
 
         elif tr.Type == "add":
             streamName, streamNumber = tr.affectedStream()
-            stream = accurev.show.streams(depot=depot, stream=streamNumber, timeSpec=tr.id).streams[0]
+            stream = accurev.show.streams(depot=depot, stream=streamNumber, timeSpec=tr.id, useCache=self.config.accurev.UseCommandCache()).streams[0]
             branchName = self.SanitizeBranchName(stream.name)
             if self.gitRepo.checkout(branchName=branchName) is None:
                 raise Exception("Failed to checkout branch {br}!".format(br=branchName))
@@ -1253,7 +1257,7 @@ class AccuRev2Git(object):
             
         elif tr.Type in [ "keep", "co", "move" ]:
             streamName, streamNumber = tr.affectedStream()
-            stream = accurev.show.streams(depot=depot, stream=streamNumber, timeSpec=tr.id).streams[0]
+            stream = accurev.show.streams(depot=depot, stream=streamNumber, timeSpec=tr.id, useCache=self.config.accurev.UseCommandCache()).streams[0]
             branchName = self.SanitizeBranchName(stream.name)
             if self.gitRepo.checkout(branchName=branchName) is None:
                 raise Exception("Failed to checkout branch {br}!".format(br=branchName))
@@ -1287,9 +1291,13 @@ class AccuRev2Git(object):
 
             # Determine the stream to which the files in this this transaction were promoted.
             dstStreamName, dstStreamNumber = trHist.toStream()
-            if dstStreamName is None:
+            if dstStreamNumber is not None:
+                dstStream = accurev.show.streams(depot=depot, stream=dstStreamNumber, timeSpec=tr.id, useCache=self.config.accurev.UseCommandCache())
+            elif dstStreamName is not None:
+                dstStream = accurev.show.streams(depot=depot, stream=dstStreamName, timeSpec=tr.id, useCache=self.config.accurev.UseCommandCache())
+            else:
                 raise Exception("Error! Could not determine the destination stream for promote {tr}.".format(tr=tr.id))
-            dstStream = accurev.show.streams(depot=depot, stream=dstStreamName, timeSpec=tr.id)
+
             if dstStream is None or dstStream.streams is None or len(dstStream.streams) == 0:
                 raise Exception("Error! accurev show streams -p {d} -s {s} -t {t} failed!".format(d=depot, s=dstStreamName, t=tr.id))
             dstStream = dstStream.streams[0]
@@ -1298,7 +1306,8 @@ class AccuRev2Git(object):
             # Determine the stream from which the files in this this transaction were promoted.
             srcStreamName, srcStreamNumber = trHist.fromStream()
             srcStream = None
-            if srcStreamName is None:
+
+            if srcStreamName is None and srcStreamNumber is None:
                 # We have failed to determine the stream from which this transaction came. Hence we now must treat this as a cherry-pick instead of a merge...
                 self.config.logger.error("Error! Could not determine the source stream for promote {tr}. Treating as a cherry-pick.".format(tr=tr.id))
 
@@ -1315,9 +1324,12 @@ class AccuRev2Git(object):
                     raise Exception("Failed to commit a `{Type}`! tr={tr}".format(Type=tr.Type, tr=tr.id))
             else:
                 # The source stream is almost always a workspace in which the transaction was generated. This is not ideal, but it is the best we can get.
-                srcStream = accurev.show.streams(depot=depot, stream=srcStreamName, timeSpec=tr.id)
+                if srcStreamNumber is not None:
+                    srcStream = accurev.show.streams(depot=depot, stream=srcStreamNumber, timeSpec=tr.id, useCache=self.config.accurev.UseCommandCache())
+                elif srcStreamName is not None:
+                    srcStream = accurev.show.streams(depot=depot, stream=srcStreamName, timeSpec=tr.id, useCache=self.config.accurev.UseCommandCache())
                 if srcStream is None or srcStream.streams is None or len(srcStream.streams) == 0:
-                    raise Exception("Error! accurev show streams -p {d} -s {s} -t {t} failed!".format(d=depot, s=srcStreamName, t=tr.id))
+                    raise Exception("Error! accurev show streams -p {d} -s {s} -t {t} failed!".format(d=depot, s=srcStreamName if srcStreamName is not None else srcStreamNumber, t=tr.id))
                 srcStream = srcStream.streams[0]
                 srcBranchName = self.SanitizeBranchName(srcStream.name)
 
@@ -1336,7 +1348,7 @@ class AccuRev2Git(object):
 
         elif tr.Type in [ "defunct", "purge" ]:
             streamName, streamNumber = tr.affectedStream()
-            stream = accurev.show.streams(depot=depot, stream=streamNumber, timeSpec=tr.id).streams[0]
+            stream = accurev.show.streams(depot=depot, stream=streamNumber, timeSpec=tr.id, useCache=self.config.accurev.UseCommandCache()).streams[0]
             branchName = self.SanitizeBranchName(stream.name)
             if self.gitRepo.checkout(branchName=branchName) is None:
                 raise Exception("Failed to checkout branch {br}!".format(br=branchName))
@@ -1569,7 +1581,7 @@ class AccuRev2Git(object):
             streamName, streamNumber = transaction.affectedStream()
             if streamNumber is not None and depot is not None:
                 try:
-                    stream = accurev.show.streams(depot=depot, stream=streamNumber, timeSpec=transaction.id).streams[0] # could be expensive
+                    stream = accurev.show.streams(depot=depot, stream=streamNumber, timeSpec=transaction.id, useCache=self.config.accurev.UseCommandCache()).streams[0] # could be expensive
                     if stream is not None and stream.name is not None:
                         return stream.name
                 except:
@@ -1590,11 +1602,11 @@ class AccuRev2Git(object):
         child = None
         if stream1 is not None and stream2 is not None:
             #print ("self.GetParentChild(stream1={0}, stream2={1}, timeSpec={2}".format(str(stream1), str(stream2), str(timeSpec)))
-            s1 = accurev.show.streams(depot=self.config.accurev.depot, stream=stream1, timeSpec=timeSpec, listChildren=False).streams[0]
-            s2 = accurev.show.streams(depot=self.config.accurev.depot, stream=stream2, timeSpec=timeSpec, listChildren=False).streams[0]
+            s1 = accurev.show.streams(depot=self.config.accurev.depot, stream=stream1, timeSpec=timeSpec, listChildren=False, useCache=self.config.accurev.UseCommandCache()).streams[0]
+            s2 = accurev.show.streams(depot=self.config.accurev.depot, stream=stream2, timeSpec=timeSpec, listChildren=False, useCache=self.config.accurev.UseCommandCache()).streams[0]
 
-            stream1Children = accurev.show.streams(depot=self.config.accurev.depot, stream=stream1, timeSpec=timeSpec, listChildren=True)
-            stream2Children = accurev.show.streams(depot=self.config.accurev.depot, stream=stream2, timeSpec=timeSpec, listChildren=True)
+            stream1Children = accurev.show.streams(depot=self.config.accurev.depot, stream=stream1, timeSpec=timeSpec, listChildren=True, useCache=self.config.accurev.UseCommandCache())
+            stream2Children = accurev.show.streams(depot=self.config.accurev.depot, stream=stream2, timeSpec=timeSpec, listChildren=True, useCache=self.config.accurev.UseCommandCache())
 
             found = False
             for stream in stream1Children.streams:
@@ -1616,7 +1628,7 @@ class AccuRev2Git(object):
     def GetMergeTarget(self, depot, stream1, stream2, timeSpec=u'now', onlyDirectChild=False):
         mergeTarget, mergeSource, message = None, None, None
 
-        hist = accurev.hist(depot=depot, timeSpec=timeSpec)
+        hist = accurev.hist(depot=depot, timeSpec=timeSpec, useCache=self.config.accurev.UseCommandCache())
         tr = hist.transactions[0]
         trStr = "tr. {id} {t}".format(id=tr.id, t=tr.Type)
 
@@ -2203,7 +2215,7 @@ def AutoConfigFile(filename, args, preserveConfig=False):
                 file.write("""
             <stream branch-name="{branch_name}">{stream_name}</stream>""".format(stream_name=stream, branch_name=config.accurev.streamMap[stream]))
 
-        streams = accurev.show.streams(depot=config.accurev.depot)
+        streams = accurev.show.streams(depot=config.accurev.depot, useCache=self.config.accurev.UseCommandCache())
         if streams is not None and streams.streams is not None:
             for stream in streams.streams:
                 if not (preserveConfig and stream in config.accurev.streamMap):
