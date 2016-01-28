@@ -1908,14 +1908,14 @@ class AccuRev2Git(object):
             with codecs.open(commitFilterPath, 'w', 'ascii') as f:
                 # http://www.tutorialspoint.com/unix/case-esac-statement.htm
                 f.write('#!/bin/sh\n\n')
-                f.write('echo -n "${GIT_COMMIT}," >> ' + str(commitMapFilePath))
+                f.write('echo -n "${GIT_COMMIT}," >> ' + str(commitMapFilePath) + '\n\n')
                 f.write('case "$GIT_COMMIT" in\n')
                 for commitHash in aliasMap:
                     if commitHash != aliasMap[commitHash]:
                         # Skip this commit
-                        f.write('    "{hash}") echo skip_commit \\$@ | tee -a {map_file};\n'.format(map_file=commitMapFilePath, hash=commitHash))
+                        f.write('    "{hash}") echo skip_commit \\$@ \\| tee -a {map_file};\n'.format(map_file=commitMapFilePath, hash=commitHash))
                         f.write('    ;;\n')
-                f.write('    *) echo git_commit_non_empty_tree \\$@ | tee -a {map_file};\n'.format(map_file=commitMapFilePath)) # If we don't want to skip this commit then just commit it...
+                f.write('    *) echo git_commit_non_empty_tree \\$@ \\| tee -a {map_file};\n'.format(map_file=commitMapFilePath)) # If we don't want to skip this commit then just commit it...
                 f.write('    ;;\n')
                 f.write('esac\n\n')
 
