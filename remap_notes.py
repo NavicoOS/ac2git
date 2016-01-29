@@ -20,6 +20,51 @@ import argparse
 
 import git
 
+def moveNote(oldHash, newHash):
+    oldDir, oldFile = oldHash[:2], oldHash[2:]
+    newDir, newFile = newHash[:2], newHash[2:]
+    oldPath = posixpath.join(oldDir, oldFile)
+    newPath = posixpath.join(newDir, newFile)
+    if os.path.exists(os.path.join(oldDir, oldFile)):
+        if not os.path.exists(os.path.join(newDir, newFile)):
+            if not os.path.exists(newDir):
+                os.mkdir(newDir)
+            if repo.raw_cmd(['git', 'mv', oldPath, newPath]) is None:
+                raise Exception("Failed to move {old} to {new}. Err: {err}".format(old=oldPath, new=newPath, err=repo.lastStderr))
+            else:
+                return True
+        else:
+            jsonList = None
+            with codecs.open(os.path.join(oldDir, oldFile)) as f:
+                contents = f.read()
+                jsonObj = json.loads(contents)
+                if not isinstance(jsonObj, list):
+                    jsonList = [ jsonObj ]
+                else:
+                    jsonList = jsonObj
+            with codecs.open(os.path.join(newDir, newFile)) as f:
+                contents = f.read()
+                jsonObj = json.loads(contents)
+                if not isinstance(jsonObj, list):
+                    jsonList.append(jsonObj)
+                else:
+                    jsonList.extend(jsonObj)
+            with codecs.open(os.path.join(newDir, newFile), 'w') as f:
+                jsonStr = json.dumps(jsonList)
+                f.write(jsonStr)
+            
+            if repo.raw_cmd(['git', 'add', newPath]) is None:
+                raise Exception("Failed to add {new}. Err: {err}".format(new=newPath, err=repo.lastStderr))
+            elif repo.raw_cmd(['git', 'rm', oldPath]) is None:
+                raise Exception("Failed to remove {old}. Err: {err}".format(old=oldPath, err=repo.lastStderr))
+            else:
+                return True
+    else:
+        #print("No note found for commit {hash}".format(hash=oldHash))
+        pass
+    
+    return False
+
 def remapNotesCommand(args):
     argparser = argparse.ArgumentParser(description='Rewrites git notes for the ac2git script on the basis of a commit map that was output by ac2git from its finalize step. Not intended to be used manually!')
     argparser.add_argument('-r', '--git-repo', required=True, dest='repoPath', metavar='<git-repo-path>', help='The path to the git repository in which the notes should be rewritten.')
@@ -65,6 +110,7 @@ def remapNotesCommand(args):
         print("  - {ref}".format(ref=ref))
 
     status = repo.status()
+    print("On branch {b}.".format(b=status.branch))
     print("Resetting {b}.".format(b=status.branch))
     repo.reset(isHard=True)
     print("Cleaning {b}.".format(b=status.branch))
@@ -89,47 +135,7 @@ def remapNotesCommand(args):
         doCommit = False
         for oldHash in commitMap:
             newHash = commitMap[oldHash]
-            oldDir, oldFile = oldHash[:2], oldHash[2:]
-            newDir, newFile = newHash[:2], newHash[2:]
-            oldPath = posixpath.join(oldDir, oldFile)
-            newPath = posixpath.join(newDir, newFile)
-            if os.path.exists(os.path.join(oldDir, oldFile)):
-                if not os.path.exists(os.path.join(newDir, newFile)):
-                    if not os.path.exists(newDir):
-                        os.mkdir(newDir)
-                    if repo.raw_cmd(['git', 'mv', oldPath, newPath]) is None:
-                        raise Exception("Failed to move {old} to {new}. Err: {err}".format(old=oldPath, new=newPath, err=repo.lastStderr))
-                    else:
-                        doCommit = True
-                else:
-                    jsonList = None
-                    with codecs.open(os.path.join(oldDir, oldFile)) as f:
-                        contents = f.read()
-                        jsonObj = json.loads(contents)
-                        if not isinstance(jsonObj, list):
-                            jsonList = [ jsonObj ]
-                        else:
-                            jsonList = jsonObj
-                    with codecs.open(os.path.join(newDir, newFile)) as f:
-                        contents = f.read()
-                        jsonObj = json.loads(contents)
-                        if not isinstance(jsonObj, list):
-                            jsonList.append(jsonObj)
-                        else:
-                            jsonList.extend(jsonObj)
-                    with codecs.open(os.path.join(newDir, newFile), 'w') as f:
-                        jsonStr = json.dumps(jsonList)
-                        f.write(jsonStr)
-                    
-                    if repo.raw_cmd(['git', 'add', newPath]) is None:
-                        raise Exception("Failed to add {new}. Err: {err}".format(new=newPath, err=repo.lastStderr))
-                    elif repo.raw_cmd(['git', 'rm', oldPath]) is None:
-                        raise Exception("Failed to remove {old}. Err: {err}".format(old=oldPath, err=repo.lastStderr))
-                    else:
-                        doCommit = True
-            else:
-                #print("No note found for commit {hash}".format(hash=oldHash))
-                pass
+            doCommit = moveNote(oldHash=oldHash, newHash=newHash)
 
         # Here we just need to make the commit.
         if doCommit:
@@ -157,6 +163,11 @@ def remapNotesCommand(args):
         else:
             print("Nothing to update for {ref}".format(ref=notesRef))
 
+    print("Checkout branch {b}.".format(b=status.branch))
+    if repo.checkout(branchName=status.branch) is None:
+        raise Exception("Failed to restore repo to the original state. Couldn't checkout {b}.".format(b=status.branch))
+
+    print("Done.".format(b=status.branch))
     return 0
 
 if __name__ == "__main__":
