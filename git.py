@@ -22,7 +22,7 @@ gitCmd = u'git'
 
 class GitStatus(object):
     # Regular expressions used in fromgitoutput classmethod for parsing the different git lines.
-    branchRe        = re.compile(pattern=r'^On branch (\S+)$')
+    branchRe        = re.compile(pattern=r'^(HEAD detached at |HEAD detached from |On branch )(\S+)$')
     blankRe         = re.compile(pattern=r'^\s*$')
     commentRe       = re.compile(pattern=r'^\s+\(.*\)$')
     # The fileRe - Has a clause at the end for possible submodule modifications where git prints 
@@ -31,12 +31,13 @@ class GitStatus(object):
     fileRe          = re.compile(pattern=r'^\s+(new file|modified|deleted|renamed):\s+(.+)\s*(\(.+\))?$')
     untrackedFileRe = re.compile(pattern=r'^\s+(\S+)\s*$')
         
-    def __init__(self, branch=None, staged=[], changed=[], untracked=[], initial_commit=None):
+    def __init__(self, branch=None, staged=[], changed=[], untracked=[], initial_commit=None, detached_head=None):
         self.branch    = branch    # Name of the branch.
         self.staged    = staged    # A list of (filename, file_status) tuples
         self.changed   = changed   # A list of (filename, file_status) tuples
         self.untracked = untracked # A list of (filename,) tuples
         self.initial_commit = initial_commit # A boolean value indicating if this is an initial commit.
+        self.detached_head = detached_head   # A boolean value indicating if we are in a detached HEAD state.
 
     def __repr__(self):
         str  = u'On branch {0}\n'.format(self.branch)
@@ -105,12 +106,32 @@ class GitStatus(object):
         # nothing added to commit but untracked files present (use "git add" to track)
         # ---------------------------
 
+        # git status output example 4
+        # ===========================
+        # HEAD detached at refs/notes/accurev/Foreman_Frazier_Development
+        # nothing to commit, working directory clean
+        # ---------------------------
+
+        # git status output example 5
+        # ===========================
+        # HEAD detached from refs/notes/accurev/Foreman_Frazier_Development
+        # nothing to commit, working directory clean
+        # ---------------------------
+
+        # git status output example 6 (not yet handled.)
+        # ===========================
+        # HEAD detached at 2b13a24
+        # nothing to commit, working directory clean
+        # ---------------------------
+
         # Parse the branch
-        branchName    = None
-        branchSpec    = lines.pop(0)
-        branchReMatch = GitStatus.branchRe.match(branchSpec)
+        branchName     = None
+        isDetachedHead = None
+        branchSpec     = lines.pop(0)
+        branchReMatch  = GitStatus.branchRe.match(branchSpec)
         if branchReMatch:
-            branchName = branchReMatch.group(1)
+            isDetachedHead = (branchReMatch.group(1) in [ "HEAD detached at ", "HEAD detached from " ])
+            branchName = branchReMatch.group(2)
         else:
             raise Exception(u'Line [{0}] did not match [{1}]'.format(branchSpec, GitStatus.branchRe.pattern))
             
@@ -177,7 +198,7 @@ class GitStatus(object):
         
         # stagedFiles and changedFiles are lists of tuples containing two items: (filename, file_status)
         # untracked is also a list of tuples containing two items but the second items is always empty: (filename,)
-        return cls(branch=branchName, staged=stagedFiles, changed=changedFiles, untracked=untrackedFiles, initial_commit=isInitialCommit)
+        return cls(branch=branchName, staged=stagedFiles, changed=changedFiles, untracked=untrackedFiles, initial_commit=isInitialCommit, detached_head=isDetachedHead)
 
 # GitBranchListItem is an object serialization of a single branch output when the git branch -vv
 # command is run.
@@ -260,7 +281,7 @@ class GitRemoteListItem(object):
 
 class GitCommit(object):
     # Regular expressions used in fromgitoutput classmethod for parsing the different git lines.
-    infoRe        = re.compile(pattern=r'^\[(?P<branch>\S+)\s(?P<root>\(root-commit\)\s)?(?P<shortHash>[A-Fa-f0-9]+)\]\s(?P<title>.*)$')
+    infoRe = re.compile(pattern=r'^\[(?P<branch>\S+|detached HEAD)\s(?P<root>\(root-commit\)\s)?(?P<shortHash>[A-Fa-f0-9]+)\]\s(?P<title>.*)$')
 
     # Git commit output examples:
     #
@@ -278,6 +299,10 @@ class GitCommit(object):
     # > git commit -m "Adding parsing of git commit output."
     # [master b712533] Adding parsing of git commit output.
     #  2 files changed, 53 insertions(+), 13 deletions(-)
+    #
+    # Example 4:
+    # > git commit -m "Notes remapped by 'remap_notes.py'"
+    # [detached HEAD deef69f] Notes remapped by 'remap_notes.py'
 
     def __init__(self, branch=None, shortHash=None, title=None, isRoot=False):
         self.branch    = branch    # Name of the branch on which the commit was made.

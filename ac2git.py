@@ -1934,6 +1934,7 @@ class AccuRev2Git(object):
                     rewriteHeads += " {branchName}".format(branchName=branch.name)
                 f.write("git filter-branch --parent-filter 'eval $({parent_filter})' --commit-filter 'eval $({commit_filter})' -- {rewrite_heads}\n".format(parent_filter=parentFilterPath, commit_filter=commitFilterPath, rewrite_heads=rewriteHeads))
                 f.write('cd -\n')
+                f.write('./remap_notes.py -r {repo_path} -c {commit_map} {rewrite_heads}\n'.format(repo_path=self.config.git.repoPath.replace('\\', '/'), commit_map=commitMapFilePath, rewrite_heads=rewriteHeads))
 
             self.config.logger.info("Branch stitching script generated: {stitch_path}".format(stitch_path=stitchScriptPath))
             self.config.logger.info("To apply execute the following command:")
