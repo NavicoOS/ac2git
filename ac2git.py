@@ -628,6 +628,11 @@ class AccuRev2Git(object):
         if stateObj is None:
             stateObj = self.GetStateForCommit(commitHash=commitHash, branchName=branchName)
         if stateObj is not None:
+            if isinstance(stateObj, list):
+                # If the branch filtering has occurred, multiple state objects are collected
+                # in a list. They should all be for the same depot and same transaction so just
+                # pick the first one...
+                stateObj = stateObj[0]
             trNum = stateObj["transaction_number"]
             depot = stateObj["depot"]
             if trNum is not None and depot is not None:
@@ -644,7 +649,7 @@ class AccuRev2Git(object):
         self.gitRepo.rm(fileList=['.'], force=True, recursive=True)
         self.ClearGitRepo()
 
-    def Commit(self, depot, stream, transaction, branchName=None, isFirstCommit=False, allowEmptyCommit=False, noNotes=False, messageOverride=None):
+    def Commit(self, depot, stream, transaction, branchName=None, isFirstCommit=False, allowEmptyCommit=False, noNotes=False, messageOverride=None, dstStream=None, srcStream=None):
         self.PreserveEmptyDirs()
 
         # Add all of the files to the index
@@ -696,7 +701,7 @@ class AccuRev2Git(object):
                             if ref is None:
                                 ref = AccuRev2Git.gitNotesRef_AccurevHistXml
                                 self.config.logger.error("Commit to an unspecified branch. Using default `git notes` ref for the script [{0}] at current time.".format(ref))
-                            stateNoteWritten = ( self.AddScriptStateNote(depotName=depot, stream=stream, transaction=transaction, commitHash=commitHash, ref=ref, committer=committer, committerDate=committerDate, committerTimezone=committerTimezone) is not None )
+                            stateNoteWritten = ( self.AddScriptStateNote(depotName=depot, stream=stream, dstStream=dstStream, srcStream=srcStream, transaction=transaction, commitHash=commitHash, ref=ref, committer=committer, committerDate=committerDate, committerTimezone=committerTimezone) is not None )
                             if stateNoteWritten:
                                 break
                             time.sleep(AccuRev2Git.commandFailureSleepSeconds)
@@ -867,7 +872,7 @@ class AccuRev2Git(object):
                     return (None, None)
                 
                 stream = accurev.show.streams(depot=depot, stream=stream.streamNumber, timeSpec=tr.id, useCache=self.config.accurev.UseCommandCache()).streams[0]
-                commitHash = self.Commit(depot=depot, stream=stream, transaction=tr, branchName=branchName, isFirstCommit=True)
+                commitHash = self.Commit(depot=depot, stream=stream, transaction=tr, branchName=branchName, isFirstCommit=True, dstStream=None, srcStream=None)
                 if not commitHash:
                     self.config.logger.dbg( "{0} first commit has failed. Is it an empty commit? Continuing...".format(stream.name) )
                 else:
@@ -995,7 +1000,7 @@ class AccuRev2Git(object):
 
                 # Commit
                 commitMessage = self.GenerateCommitMessage(transaction=tr, stream=stream, dstStream=destStream, srcStream=srcStream)
-                commitHash = self.Commit(depot=depot, stream=stream, transaction=tr, branchName=branchName, isFirstCommit=False, messageOverride=commitMessage)
+                commitHash = self.Commit(depot=depot, stream=stream, transaction=tr, branchName=branchName, isFirstCommit=False, messageOverride=commitMessage, dstStream=destStream, srcStream=srcStream)
                 if commitHash is None:
                     if"nothing to commit" in self.gitRepo.lastStdout:
                         if diff is not None:
@@ -1131,7 +1136,7 @@ class AccuRev2Git(object):
         deletedPathList = self.DeleteDiffItemsFromRepo(diff=diff)
         popResult = self.TryPop(streamName=dstStream.name, transaction=tr)
 
-        commitHash = self.Commit(depot=depot, stream=dstStream, transaction=tr, branchName=dstBranchName, allowEmptyCommit=True, noNotes=True, messageOverride=commitMessageOverride)
+        commitHash = self.Commit(depot=depot, stream=dstStream, transaction=tr, branchName=dstBranchName, allowEmptyCommit=True, noNotes=True, messageOverride=commitMessageOverride, dstStream=dstStream, srcStream=srcStream)
         if commitHash is None:
             raise Exception("Failed to commit promote {tr}!".format(tr=tr.id))
         diff = self.gitRepo.raw_cmd([u'git', u'diff', u'--stat', dstBranchName, srcBranchName, u'--' ])
@@ -1149,7 +1154,7 @@ class AccuRev2Git(object):
             deletedPathList = self.DeleteDiffItemsFromRepo(diff=diff)
             popResult = self.TryPop(streamName=dstStream.name, transaction=tr)
 
-            commitHash = self.Commit(depot=depot, stream=dstStream, transaction=tr, branchName=dstBranchName, allowEmptyCommit=True, noNotes=True, messageOverride=mergeMessageOverride)
+            commitHash = self.Commit(depot=depot, stream=dstStream, transaction=tr, branchName=dstBranchName, allowEmptyCommit=True, noNotes=True, messageOverride=mergeMessageOverride, dstStream=dstStream, srcStream=srcStream)
             if commitHash is None:
                 raise Exception("Failed to re-commit merged promote {tr}!".format(tr=tr.id))
             self.config.logger.info("Merged, branch {src} into {dst}, {commit}".format(src=srcBranchName, dst=dstBranchName, commit=commitHash))
@@ -1319,7 +1324,7 @@ class AccuRev2Git(object):
                 popResult = self.TryPop(streamName=dstStream.name, transaction=tr)
 
                 commitMessage = self.GenerateCommitMessage(transaction=tr, stream=dstStream)
-                commitHash = self.Commit(depot=depot, stream=dstStream, transaction=tr, branchName=dstBranchName, allowEmptyCommit=True, noNotes=True, messageOverride=commitMessage)
+                commitHash = self.Commit(depot=depot, stream=dstStream, transaction=tr, branchName=dstBranchName, allowEmptyCommit=True, noNotes=True, messageOverride=commitMessage, dstStream=dstStream, srcStream=srcStream)
                 if commitHash is None:
                     raise Exception("Failed to commit a `{Type}`! tr={tr}".format(Type=tr.Type, tr=tr.id))
             else:
@@ -1726,6 +1731,14 @@ class AccuRev2Git(object):
                         # Get the state information for both streams.
                         firstState = self.GetStateForCommit(commitHash=first[u'hash'], branchName=first[u'branch'].name)
                         secondState = self.GetStateForCommit(commitHash=second[u'hash'], branchName=second[u'branch'].name)
+                        if isinstance(firstState, list) or isinstance(secondState, list):
+                            # Since this commit refers to multiple "state objects" this means that it was squashed in a previous StitchBranches() call.
+                            # The remap_notes.py script can't tell which commit is the intended destination so it just collects all of the states in a list.
+                            # It is possible that we don't really need to worry about it at all and that we can simply use any of the "state objects" in the
+                            # list since AccuRev sort of ensures that squashes only happen for empty child streams. But it could also mean that we need to
+                            # iterate over each of the states and do something sensible, and I don't have the time to figure out which one it should be. So I'm
+                            # leaving this note and exception. It could be trivial so please try and fix it.
+                            raise Exception("Not yet implemented! It seems this commit has been rewritten before, this is not handled properly here. TODO: fix!")
 
                         # Store the state for later use in alias mapping.
                         commitStateMap[first[u'hash']] = firstState
