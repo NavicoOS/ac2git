@@ -458,16 +458,6 @@ class AccuRev2Git(object):
 
         return usertime, tz
     
-    def GetGitDatetimeStr(self, accurevUsername, accurevDatetime):
-        usertime, tz = self.GetGitDatetime(accurevUsername=accurevUsername, accurevDatetime=accurevDatetime)
-
-        gitDatetimeStr = None
-        if usertime is not None:
-            gitDatetimeStr = "{0}".format(usertime.isoformat())
-            if tz is not None:
-                gitDatetimeStr = "{0} {1:+05}".format(gitDatetimeStr, tz)
-        return gitDatetimeStr
-
     # Adds a JSON string respresentation of `stateDict` to the given commit using `git notes add`.
     def AddScriptStateNote(self, depotName, stream, transaction, commitHash, ref, committer=None, committerDate=None, committerTimezone=None, dstStream=None, srcStream=None):
         stateDict = { "depot": depotName, "stream": stream.name, "stream_number": stream.streamNumber, "transaction_number": transaction.id, "transaction_kind": transaction.Type }
@@ -497,36 +487,6 @@ class AccuRev2Git(object):
         else:
             self.config.logger.error( "Failed to create temporary file for script state note for {0}, tr. {1}".format(commitHash, transaction.id) )
         
-        return None
-
-    def AddAccurevHistNote(self, commitHash, ref, depot, transaction, committer=None, committerDate=None, committerTimezone=None, isXml=False):
-        # Write the commit notes consisting of the accurev hist xml output for the given transaction.
-        # Note: It is important to use the depot instead of the stream option for the accurev hist command since if the transaction
-        #       did not occur on that stream we will get the closest transaction that was a promote into the specified stream instead of an error!
-        arHistXml = accurev.raw.hist(depot=depot, timeSpec="{0}.1".format(transaction.id), isXmlOutput=isXml)
-        notesFilePath = None
-        with tempfile.NamedTemporaryFile(mode='w+', prefix='ac2git_note_', delete=False) as notesFile:
-            notesFilePath = notesFile.name
-            if arHistXml is None or len(arHistXml) == 0:
-                self.config.logger.error('accurev hist returned an empty xml for transaction {0} (commit {1})'.format(transaction.id, commitHash))
-                return False
-            else:
-                notesFile.write(arHistXml)
-        
-        if notesFilePath is not None:        
-            rv = self.gitRepo.notes.add(messageFile=notesFilePath, obj=commitHash, ref=ref, force=True, committer=committer, committerDate=committerDate, committerTimezone=committerTimezone, author=committer, authorDate=committerDate, authorTimezone=committerTimezone)
-            os.remove(notesFilePath)
-        
-            if rv is not None:
-                self.config.logger.dbg( "Added accurev hist{0} note for {1}.".format(' xml' if isXml else '', commitHash) )
-            else:
-                self.config.logger.error( "Failed to add accurev hist{0} note for {1}".format(' xml' if isXml else '', commitHash) )
-                self.config.logger.error(self.gitRepo.lastStderr)
-            
-            return rv
-        else:
-            self.config.logger.error( "Failed to create temporary file for accurev hist{0} note for {1}".format(' xml' if isXml else '', commitHash) )
-
         return None
 
     def GetFirstTransaction(self, depot, streamName, startTransaction=None, endTransaction=None):
@@ -592,16 +552,18 @@ class AccuRev2Git(object):
 
         return commitHash
 
-    def GetStateForCommit(self, commitHash, branchName=None):
-        stateObj = None
-
-        # Try and search the branch namespace.
+    def GetNotesRefForBranch(self, branchName=None):
         if branchName is None:
-            branchName = AccuRev2Git.gitNotesRef_AccurevHistXml
+            return AccuRev2Git.gitNotesRef_AccurevHistXml
+        else:
+            return "ac2git/{branch}".format(branch=branchName)
+
+    def GetStateForCommit(self, commitHash, notesRef):
+        stateObj = None
 
         stateJson = None
         for i in range(0, AccuRev2Git.commandFailureRetryCount):
-            stateJson = self.gitRepo.notes.show(obj=commitHash, ref=branchName)
+            stateJson = self.gitRepo.notes.show(obj=commitHash, ref=notesRef)
             if stateJson is not None:
                 stateJson = stateJson.strip()
                 if len(stateJson) > 0:
@@ -626,7 +588,8 @@ class AccuRev2Git(object):
     def GetHistForCommit(self, commitHash, branchName=None, stateObj=None):
         #self.config.logger.dbg("GetHistForCommit(commitHash={0}, branchName={1}, stateObj={2}".format(commitHash, branchName, stateObj))
         if stateObj is None:
-            stateObj = self.GetStateForCommit(commitHash=commitHash, branchName=branchName)
+            ref = self.GetNotesRefForBranch(branchName=branchName)
+            stateObj = self.GetStateForCommit(commitHash=commitHash, notesRef=ref)
         if stateObj is not None:
             if isinstance(stateObj, list):
                 # If the branch filtering has occurred, multiple state objects are collected
@@ -695,12 +658,11 @@ class AccuRev2Git(object):
                 if lastCommitHash != commitHash:
                     self.config.logger.dbg( "Committed {0}".format(commitHash) )
                     if not noNotes:
-                        xmlNoteWritten = False
+                        ref = self.GetNotesRefForBranch(branchName=branchName)
+                        if branchName is None:
+                            self.config.logger.error("Commit to an unspecified branch. Using default `git notes` ref for the script [{0}] at current time.".format(ref))
+                        stateNoteWritten = False
                         for i in range(0, AccuRev2Git.commandFailureRetryCount):
-                            ref = branchName
-                            if ref is None:
-                                ref = AccuRev2Git.gitNotesRef_AccurevHistXml
-                                self.config.logger.error("Commit to an unspecified branch. Using default `git notes` ref for the script [{0}] at current time.".format(ref))
                             stateNoteWritten = ( self.AddScriptStateNote(depotName=depot, stream=stream, dstStream=dstStream, srcStream=srcStream, transaction=transaction, commitHash=commitHash, ref=ref, committer=committer, committerDate=committerDate, committerTimezone=committerTimezone) is not None )
                             if stateNoteWritten:
                                 break
@@ -708,9 +670,8 @@ class AccuRev2Git(object):
                         if not stateNoteWritten:
                             # The XML output in the notes is how we track our conversion progress. It is not acceptable for it to fail.
                             # Undo the commit and print an error.
-                            branchName = 'HEAD'
-                            self.config.logger.error("Couldn't record last transaction state. Undoing the last commit {0} with `git reset --hard {1}^`".format(commitHash, branchName))
-                            self.gitRepo.raw_cmd([u'git', u'reset', u'--hard', u'{0}^'.format(branchName)])
+                            self.config.logger.error("Couldn't record last transaction state. Undoing the last commit {hash} with `git reset --hard {hash}^`".format(hash=commitHash))
+                            self.gitRepo.raw_cmd([u'git', u'reset', u'--hard', u'{0}^'.format(commitHash)])
     
                             return None
                 else:
@@ -1052,7 +1013,7 @@ class AccuRev2Git(object):
                 self.config.logger.error( "Error while processing stream {0}, branch {1}".format(stream, branch) )
 
             if self.config.git.remoteMap is not None:
-                refspec = "refs/heads/{branch}:refs/heads/{branch} refs/notes/{branch}:refs/notes/{branch}".format(branch=branch)
+                refspec = "refs/heads/{branch}:refs/heads/{branch} refs/notes/{notesRef}:refs/notes/{notesRef}".format(branch=branch, notesRef=self.GetNotesRefForBranch(branchName=branch))
                 for remoteName in self.config.git.remoteMap:
                     pushOutput = None
                     try:
@@ -1729,8 +1690,8 @@ class AccuRev2Git(object):
                         secondTime = int(second[u'committer'][u'time'])
 
                         # Get the state information for both streams.
-                        firstState = self.GetStateForCommit(commitHash=first[u'hash'], branchName=first[u'branch'].name)
-                        secondState = self.GetStateForCommit(commitHash=second[u'hash'], branchName=second[u'branch'].name)
+                        firstState = self.GetStateForCommit(commitHash=first[u'hash'], notesRef=self.GetNotesRefForBranch(branchName=first[u'branch'].name))
+                        secondState = self.GetStateForCommit(commitHash=second[u'hash'], notesRef=self.GetNotesRefForBranch(branchName=second[u'branch'].name))
                         if isinstance(firstState, list) or isinstance(secondState, list):
                             # Since this commit refers to multiple "state objects" this means that it was squashed in a previous StitchBranches() call.
                             # The remap_notes.py script can't tell which commit is the intended destination so it just collects all of the states in a list.
@@ -2365,14 +2326,6 @@ def ValidateConfig(config):
 
     return isValid
 
-def LoadConfigOrDefaults(configFilename):
-    config = Config.fromfile(configFilename)
-
-    if config is None:
-        config = Config(accurev=Config.AccuRev(None), git=Config.Git(None), usermaps=[], logFilename=None)
-        
-    return config
-
 def PrintConfigSummary(config):
     if config is not None:
         config.logger.info('Config info:')
@@ -2509,3 +2462,4 @@ def AccuRev2GitMain(argv):
 # ################################################################################################ #
 if __name__ == "__main__":
     AccuRev2GitMain(sys.argv)
+
