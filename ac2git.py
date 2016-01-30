@@ -1109,7 +1109,7 @@ class AccuRev2Git(object):
 
         raise Exception("Unrecognized git message style '{s}'".format(s=style))
 
-    def GitCommitOrMerge(self, depot, dstStream, srcStream, tr, commitMessageOverride=None, mergeMessageOverride=None):
+    def GitCommitOrMerge(self, depot, dstStream, srcStream, tr, commitMessageOverride=None, mergeMessageOverride=None, streamNumberMap=None):
         # Perform the git merge of the 'from stream' into the 'to stream' but only if they have the same contents.
         dstBranchName = self.SanitizeBranchName(dstStream.name)
         srcBranchName = self.SanitizeBranchName(srcStream.name)
@@ -1123,11 +1123,13 @@ class AccuRev2Git(object):
         commitHash = self.Commit(depot=depot, stream=dstStream, transaction=tr, branchName=dstBranchName, allowEmptyCommit=True, noNotes=True, messageOverride=commitMessageOverride, dstStream=dstStream, srcStream=srcStream)
         if commitHash is None:
             raise Exception("Failed to commit promote {tr}!".format(tr=tr.id))
-        diff = self.gitRepo.raw_cmd([u'git', u'diff', u'--stat', dstBranchName, srcBranchName, u'--' ])
-        if diff is None:
-            raise Exception("Failed to diff new branch {nBr} to old branch {oBr}! Err: {err}".format(nBr=dstBranchName, oBr=srcBranchName, err=self.gitRepo.lastStderr))
+        diff = None
+        if streamNumberMap is None or srcStream.streamNumber in streamNumberMap:
+            diff = self.gitRepo.raw_cmd([u'git', u'diff', u'--stat', dstBranchName, srcBranchName, u'--' ])
+            if diff is None:
+                raise Exception("Failed to diff new branch {nBr} to old branch {oBr}! Err: {err}".format(nBr=dstBranchName, oBr=srcBranchName, err=self.gitRepo.lastStderr))
         
-        if len(diff.strip()) == 0:
+        if diff is not None and len(diff.strip()) == 0:
             # Merge
             if self.gitRepo.reset(branch="HEAD^") is None:
                 raise Exception("Failed to undo commit! git reset HEAD^, failed with: {err}".format(err=self.gitRepo.lastStderr))
@@ -1155,7 +1157,7 @@ class AccuRev2Git(object):
         name = name.replace(' ', '_')
         return name
 
-    def ProcessTransaction(self, depot, transaction):
+    def ProcessTransaction(self, depot, transaction, streamNumberMap):
         trHist = self.TryHist(depot=depot, trNum=transaction)
         if trHist is None or len(trHist.transactions) == 0 is None:
             raise Exception("Couldn't get history for transaction {tr}. Aborting!".format(tr=transaction))
@@ -1325,15 +1327,15 @@ class AccuRev2Git(object):
                 # Perform the git merge of the 'from stream' into the 'to stream' but only if they have the same contents.
                 mergeCommitMessage = self.GenerateCommitMessage(transaction=tr, stream=dstStream, srcStream=srcStream, friendlyMessage="Merged {src} into {dst} - accurev promote.".format(src=srcBranchName, dst=dstBranchName))
                 cherryPickCommitMessage = self.GenerateCommitMessage(transaction=tr, stream=dstStream, srcStream=srcStream, friendlyMessage="Cherry-picked {src} into {dst} - accurev promote.".format(src=srcBranchName, dst=dstBranchName))
-                self.GitCommitOrMerge(depot=depot, dstStream=dstStream, srcStream=srcStream, tr=tr, commitMessageOverride=cherryPickCommitMessage, mergeMessageOverride=mergeCommitMessage)
+                self.GitCommitOrMerge(depot=depot, dstStream=dstStream, srcStream=srcStream, tr=tr, commitMessageOverride=cherryPickCommitMessage, mergeMessageOverride=mergeCommitMessage, streamNumberMap=streamNumberMap)
             
             affectedStreams = accurev.ext.affected_streams(depot=depot, transaction=tr.id, includeWorkspaces=True, ignoreTimelocks=False, doDiffs=True, useCache=self.config.accurev.UseCommandCache())
             for stream in affectedStreams:
                 branchName = self.SanitizeBranchName(stream.name)
-                if stream.streamNumber != dstStream.streamNumber and (srcStream is None or stream.streamNumber != srcStream.streamNumber):
+                if stream.streamNumber != dstStream.streamNumber and (srcStream is None or stream.streamNumber != srcStream.streamNumber) and (streamNumberMap is None or stream.streamNumber in streamNumberMap):
                     mergeCommitMessage = self.GenerateCommitMessage(transaction=tr, stream=stream, dstStream=dstStream, srcStream=srcStream, friendlyMessage="Merged {src} into {dst} - accurev parent stream inheritance.".format(src=dstBranchName, dst=branchName))
                     cherryPickCommitMessage = self.GenerateCommitMessage(transaction=tr, stream=stream, dstStream=dstStream, srcStream=srcStream, friendlyMessage="Cherry-picked {src} into {dst} - accurev parent stream inheritance.".format(src=dstBranchName, dst=branchName))
-                    self.GitCommitOrMerge(depot=depot, dstStream=stream, srcStream=dstStream, tr=tr, commitMessageOverride=cherryPickCommitMessage, mergeMessageOverride=mergeCommitMessage)
+                    self.GitCommitOrMerge(depot=depot, dstStream=stream, srcStream=dstStream, tr=tr, commitMessageOverride=cherryPickCommitMessage, mergeMessageOverride=mergeCommitMessage, streamNumberMap=streamNumberMap)
 
         elif tr.Type in [ "defunct", "purge" ]:
             streamName, streamNumber = tr.affectedStream()
@@ -1355,11 +1357,11 @@ class AccuRev2Git(object):
                 self.config.logger.info("Note: {trType} transaction {id} on stream {stream} ({streamType}). Merging down-stream. Usually defuncts occur on workspaces!".format(trType=tr.Type, id=tr.id, stream=stream.name, streamType=stream.Type))
                 affectedStreams = accurev.ext.affected_streams(depot=depot, transaction=tr.id, includeWorkspaces=True, ignoreTimelocks=False, doDiffs=True, useCache=self.config.accurev.UseCommandCache())
                 for s in affectedStreams:
-                    if s.streamNumber != stream.streamNumber:
+                    if s.streamNumber != stream.streamNumber and (streamNumberMap is None or stream.streamNumber in streamNumberMap):
                         bName = self.SanitizeBranchName(s.name)
                         mergeCommitMessage = self.GenerateCommitMessage(transaction=tr, stream=s, dstStream=stream, friendlyMessage="Merged {src} into {dst} - accurev parent stream inheritance ({trType}).".format(src=branchName, dst=bName, trType=tr.Type))
                         cherryPickCommitMessage = self.GenerateCommitMessage(transaction=tr, stream=s, dstStream=stream, friendlyMessage="Merged {src} into {dst} - accurev parent stream inheritance ({trType}).".format(src=branchName, dst=bName, trType=tr.Type))
-                        self.GitCommitOrMerge(depot=depot, dstStream=s, srcStream=stream, tr=tr, commitMessageOverride=cherryPickCommitMessage, mergeMessageOverride=commitMessage)
+                        self.GitCommitOrMerge(depot=depot, dstStream=s, srcStream=stream, tr=tr, commitMessageOverride=cherryPickCommitMessage, mergeMessageOverride=commitMessage, streamNumberMap=streamNumberMap)
                 
             
         elif tr.Type == "defcomp":
@@ -1374,7 +1376,12 @@ class AccuRev2Git(object):
         stateRefspec = u'refs/ac2git/state'
         # Determine the last processed transaction, if any.
         stateStr = self.gitRepo.raw_cmd([u'git', u'show', stateRefspec])
-        state = { "transaction": 0, "branch_list": None }
+        state = { "depot": self.config.accurev.depot,          # Static
+                  "stream_map": self.config.accurev.streamMap, # Static
+                  "stream_number_map": None,                   # Static
+                  "transaction": 0,                            # Dynamic
+                  "branch_list": None,                         # Dynamic
+                  "next_transaction_map": None }               # Dynamic
         if stateStr is not None and len(stateStr) > 0:
             state = json.loads(stateStr.strip())
             self.config.logger.dbg( "Loaded last state at transaction {tr} as:".format(tr=state["transaction"]) )
@@ -1433,12 +1440,12 @@ class AccuRev2Git(object):
         # If there is a stream map then we need to restrict this algorithm to only process those streams.
         # We will do so by getting the history for all of the streams in question and then processing the
         # transactions returned according to the selected conversion method.
-        currentTransaction = 0
+        currentTransaction = None
         deepHistMap = None
-        streamMap = self.config.accurev.streamMap
-        nextTrMap = None
+        streamMap = state["stream_map"]
+        streamNumberMap = state["stream_number_map"]
+        nextTrMap = state["next_transaction_map"]
         if streamMap is not None and len(streamMap) > 0:
-            nextTrMap = {}
             if self.config.method == "deep-hist":
                 deepHistMap = {}
                 for s in streamMap:
@@ -1449,15 +1456,43 @@ class AccuRev2Git(object):
                 pass
             else:
                 raise Exception("Unrecognized conversion method: {method}!".format(method=self.config.method))
-            for s in streamMap:
-                nextTrId, diff = self.FindNextChangeTransaction(streamName=s, startTrNumber=startTransaction, endTrNumber=endTr.id, deepHist=deepHistMap[s])
-                nextTrMap[s] = (nextTrId, diff)
-                if nextTrId is None:
-                    raise Exception("Failed to find the next transaction to process for stream {stream}. Current transaction {tr}.".format(stream=s, tr=currentTransaction))
-                if currentTransaction is None:
-                    currentTransaction = nextTrId
-                else:
-                    currentTransaction = min(currentTransaction, nextTrId)
+
+            if streamNumberMap is None or len(streamNumberMap) != len(streamMap):
+                streamNumberMap = {}
+                for s in streamMap:
+                    sInfo = accurev.show.streams(depot=self.config.accurev.depot, stream=s).streams[0]
+                    streamNumberMap[sInfo.streamNumber] = streamMap[s]
+                state["stream_number_map"] = streamNumberMap
+
+            if nextTrMap is None or len(nextTrMap) == 0: # This is true if we haven't initialized these variables before...
+                streamNumberMap = {}
+                nextTrMap = {}
+                for s in streamMap:
+                    firstTr = self.GetFirstTransaction(depot=self.config.accurev.depot, streamName=s, startTransaction=startTransaction, endTransaction=endTr.id)
+                    if firstTr is None:
+                        raise Exception("Failed to find the first transaction to process for stream {stream}. Current transaction {tr}.".format(stream=s, tr=currentTransaction))
+                    nextTrMap[s] = firstTr.id
+                    if currentTransaction is None:
+                        currentTransaction = firstTr.id
+                    else:
+                        currentTransaction = min(currentTransaction, firstTr.id)
+                firstStream = min(nextTrMap, key=lambda x: nextTrMap[x])
+                currentTransaction = nextTrMap[firstStream]
+            else:
+                for s in nextTrMap:
+                    nextTrId = nextTrMap[s]
+                    if nextTrId == currentTransaction:
+                        deepHist = deepHistMap[s] if deepHistMap is not None else None
+                        nextTrId, diff = self.FindNextChangeTransaction(streamName=s, startTrNumber=nextTrId, endTrNumber=endTr.id, deepHist=deepHist)
+                        nextTrMap[s] = nextTrId
+                        if nextTrId is None:
+                            raise Exception("Failed to find the next transaction to process for stream {stream}. Current transaction {tr}.".format(stream=s, tr=currentTransaction))
+                        # Note: Do not break here! This transaction could have affected more than one stream and ProcessTransaction() updates all of them so we need to
+                        #       get the next transaction for ALL streams that have been affected by this transaction!
+                nextStream = min(nextTrMap, key=lambda x: nextTrMap[x])
+                if currentTransaction == nextTrMap[nextStream]:
+                    raise Exception("Failed to find the next transaction to process!")
+                currentTransaction = nextTrMap[nextStream]
         else:
             currentTransaction = startTransaction
 
@@ -1465,7 +1500,7 @@ class AccuRev2Git(object):
         lastPushTime = startTime
         while currentTransaction < endTr.id:
             self.config.logger.dbg( "Started processing transaction #{tr}".format(tr=currentTransaction) )
-            self.ProcessTransaction(depot=self.config.accurev.depot, transaction=currentTransaction)
+            self.ProcessTransaction(depot=self.config.accurev.depot, transaction=currentTransaction, streamNumberMap=streamNumberMap)
             
             # Validate that there are no pending changes (i.e. everything has been committed)
             status = self.gitRepo.status()
@@ -1483,6 +1518,7 @@ class AccuRev2Git(object):
                 raise Exception("Failed to retrieve last commit hash!")
             
             state["transaction"] = currentTransaction
+            state["next_transaction_map"] = nextTrMap
             # Record the current position of all the branches.
             state["branch_list"] = []
             for br in self.gitRepo.branch_list():
@@ -1526,23 +1562,20 @@ class AccuRev2Git(object):
             self.config.logger.dbg( "Finished processing transaction #{tr}".format(tr=currentTransaction) )
             if streamMap is not None and len(streamMap) > 0:
                 # Find the stream for which we processed this transaction
-                nextTr = None
                 for s in nextTrMap:
-                    nextTrId, diff = nextTrMap[s]
+                    nextTrId = nextTrMap[s]
                     if nextTrId == currentTransaction:
-                        nextTrId, diff = self.FindNextChangeTransaction(streamName=s, startTrNumber=currentTransaction, endTrNumber=endTr.id, deepHist=deepHistMap[s])
-                        nextTrMap[s] = (nextTrId, diff)
+                        deepHist = deepHistMap[s] if deepHistMap is not None else None
+                        nextTrId, diff = self.FindNextChangeTransaction(streamName=s, startTrNumber=nextTrId, endTrNumber=endTr.id, deepHist=deepHist)
+                        nextTrMap[s] = nextTrId
                         if nextTrId is None:
                             raise Exception("Failed to find the next transaction to process for stream {stream}. Current transaction {tr}.".format(stream=s, tr=currentTransaction))
                         # Note: Do not break here! This transaction could have affected more than one stream and ProcessTransaction() updates all of them so we need to
                         #       get the next transaction for ALL streams that have been affected by this transaction!
-                    if nextTr is None:
-                        nextTr = nextTrId
-                    else:
-                        nexTr = min(nextTr, nextTrId)
-                if nextTr is None:
+                nextStream = min(nextTrMap, key=lambda x: nextTrMap[x])
+                if currentTransaction == nextTrMap[nextStream]:
                     raise Exception("Failed to find the next transaction to process!")
-                currentTransaction = nextTr
+                currentTransaction = nextTrMap[nextStream]
             else:
                 currentTransaction += 1
 
