@@ -1472,13 +1472,10 @@ class AccuRev2Git(object):
                     if firstTr is None:
                         raise Exception("Failed to find the first transaction to process for stream {stream}. Current transaction {tr}.".format(stream=s, tr=currentTransaction))
                     nextTrMap[s] = firstTr.id
-                    if currentTransaction is None:
-                        currentTransaction = firstTr.id
-                    else:
-                        currentTransaction = min(currentTransaction, firstTr.id)
                 firstStream = min(nextTrMap, key=lambda x: nextTrMap[x])
                 currentTransaction = nextTrMap[firstStream]
             else:
+                currentTransaction = state["transaction"]
                 for s in nextTrMap:
                     nextTrId = nextTrMap[s]
                     if nextTrId == currentTransaction:
