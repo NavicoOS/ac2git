@@ -148,14 +148,7 @@ class Config(object):
             if xmlElement is not None and xmlElement.tag == 'git':
                 repoPath     = xmlElement.attrib.get('repo-path')
                 messageStyle = xmlElement.attrib.get('message-style')
-                finalize     = xmlElement.attrib.get('finalize')
-                if finalize is not None:
-                    if finalize.lower() == "true":
-                        finalize = True
-                    elif finalize.lower() == "false":
-                        finalize = False
-                    else:
-                        Exception("Error, could not parse finalize attribute '{0}'. Valid values are 'true' and 'false'.".format(finalize))
+                finalize     = Config.GetBooleanAttribute(xmlElement, 'finalize')
                 
                 remoteMap = OrderedDict()
                 remoteElementList = xmlElement.findall('remote')
@@ -245,6 +238,22 @@ class Config(object):
         (root, ext) = os.path.splitext(scriptName)
         return root + '.config.xml'
 
+    @ staticmethod
+    def GetBooleanAttribute(xmlElement, attribute):
+        if xmlElement is None or attribute is None:
+            return None
+        value = xmlElement.attrib.get(attribute)
+        if value is not None:
+            if value.lower() == "true":
+                value = True
+            elif value.lower() == "false":
+                value = False
+            else:
+                Exception("Error, could not parse {attr} attribute of tag {tag}. Expected 'true' or 'false', but got '{value}'.".format(attr=attribute, tag=xmlElement.tag, value=value))
+
+        return value
+                
+
     @classmethod
     def fromxmlstring(cls, xmlString):
         # Load the XML
@@ -255,8 +264,10 @@ class Config(object):
             git     = Config.Git.fromxmlelement(xmlRoot.find('git'))
             
             method = "diff" # Defaults to diff
+            merge = False
             methodElem = xmlRoot.find('method')
             if methodElem is not None:
+                merge = Config.GetBooleanAttribute(methodElem, 'merge')
                 method = methodElem.text
 
             logFilename = None
@@ -274,7 +285,7 @@ class Config(object):
             for includeElem in xmlRoot.findall('include'):
                 includes.append(Config.Include.fromxmlelement(includeElem))
 
-            return cls(accurev=accurev, git=git, usermaps=usermaps, method=method, logFilename=logFilename, includes=includes)
+            return cls(accurev=accurev, git=git, usermaps=usermaps, method=method, merge=merge, logFilename=logFilename, includes=includes)
         else:
             # Invalid XML for an accurev2git configuration file.
             return None
@@ -290,11 +301,12 @@ class Config(object):
                 print("WARNING: Ignoring includes. Not yet implemented!", file=sys.stderr)
         return config
 
-    def __init__(self, accurev = None, git = None, usermaps = None, method = None, logFilename = None, includes = []):
+    def __init__(self, accurev = None, git = None, usermaps = None, method = None, merge = None, logFilename = None, includes = []):
         self.accurev     = accurev
         self.git         = git
         self.usermaps    = usermaps
         self.method      = method
+        self.merge       = merge
         self.logFilename = logFilename
         self.logger      = Config.Logger()
         self.includes    = includes
@@ -577,11 +589,11 @@ class AccuRev2Git(object):
             try:
                 stateObj = json.loads(stateJson)
             except:
-                self.config.logger.error("While getting state for commit {hash}, branch {branch}. Failed to parse JSON string [{json}].".format(hash=commitHash, branch=branchName, json=stateJson))
-                raise Exception("While getting state for commit {hash}, branch {branch}. Failed to parse JSON string [{json}].".format(hash=commitHash, branch=branchName, json=stateJson))
+                self.config.logger.error("While getting state for commit {hash} (notes ref {ref}). Failed to parse JSON string [{json}].".format(hash=commitHash, ref=notesRef, json=stateJson))
+                raise Exception("While getting state for commit {hash} (notes ref {ref}). Failed to parse JSON string [{json}].".format(hash=commitHash, ref=notesRef, json=stateJson))
         else:
-            self.config.logger.error("Failed to load the last transaction for commit {0} from {1} notes.".format(commitHash, branchName))
-            self.config.logger.error("  i.e git notes --ref={0} show {1}    - returned nothing.".format(branchName, commitHash))
+            self.config.logger.error("Failed to load the last transaction for commit {hash} from {ref} notes.".format(hash=commitHash, ref=ref))
+            self.config.logger.error("  i.e git notes --ref={ref} show {hash}    - returned nothing.".format(ref=notesRef, hash=commitHash))
 
         return stateObj
 
@@ -697,7 +709,16 @@ class AccuRev2Git(object):
         if diff is None:
             self.config.logger.error( "accurev diff failed! stream: {0} time-spec: {1}-{2}".format(streamName, firstTrNumber, secondTrNumber) )
         return diff
-    
+
+    def GetStreamMap(self):
+        streamMap = self.config.accurev.streamMap
+        if streamMap is None or len(streamMap) == 0:
+            # When the stream map is missing or empty we intend to process all streams
+            streams = accurev.show.streams(depot=self.config.accurev.depot)
+            for stream in streams.streams:
+                streamMap[stream.name] = stream.name
+        return streamMap
+
     def FindNextChangeTransaction(self, streamName, startTrNumber, endTrNumber, deepHist=None):
         # Iterate over transactions in order using accurev diff -a -i -v streamName -V streamName -t <lastProcessed>-<current iterator>
         if self.config.method == "diff":
@@ -993,8 +1014,10 @@ class AccuRev2Git(object):
         if self.config.accurev.commandCacheFilename is not None:
             accurev.ext.enable_command_cache(self.config.accurev.commandCacheFilename)
         
-        for stream in self.config.accurev.streamMap:
-            branch = self.config.accurev.streamMap[stream]
+        streamMap = self.GetStreamMap()
+
+        for stream in streamMap:
+            branch = streamMap[stream]
             depot  = self.config.accurev.depot
             streamInfo = None
             try:
@@ -1405,8 +1428,38 @@ class AccuRev2Git(object):
 
         # Begin processing of the transactions
         startTransaction = state["transaction"] + 1
-        currentTransaction = startTransaction
-        self.config.logger.info( "Processing transaction range #{tr_start}-{tr_end}".format(tr_start=currentTransaction, tr_end=endTr.id) )
+        self.config.logger.info( "Processing transaction range #{tr_start}-{tr_end}".format(tr_start=startTransaction, tr_end=endTr.id) )
+
+        # If there is a stream map then we need to restrict this algorithm to only process those streams.
+        # We will do so by getting the history for all of the streams in question and then processing the
+        # transactions returned according to the selected conversion method.
+        currentTransaction = 0
+        deepHistMap = None
+        streamMap = self.config.accurev.streamMap
+        nextTrMap = None
+        if streamMap is not None and len(streamMap) > 0:
+            nextTrMap = {}
+            if self.config.method == "deep-hist":
+                deepHistMap = {}
+                for s in streamMap:
+                    self.config.logger.info( "Querying deep-hist for {stream}".format(stream=s) )
+                    deepHistMap[s] = accurev.ext.deep_hist(depot=self.config.accurev.depot, stream=s, timeSpec="{0}-{1}".format(startTransaction, endTr.id), ignoreTimelocks=False)
+                    self.config.logger.info( "Deep-hist for {stream} returned {count} transactions.".format(stream=s, count=len(deepHistMap[s])) )
+            elif self.config.method in [ "diff" ]:
+                pass
+            else:
+                raise Exception("Unrecognized conversion method: {method}!".format(method=self.config.method))
+            for s in streamMap:
+                nextTrId, diff = self.FindNextChangeTransaction(streamName=s, startTrNumber=startTransaction, endTrNumber=endTr.id, deepHist=deepHistMap[s])
+                nextTrMap[s] = (nextTrId, diff)
+                if nextTrId is None:
+                    raise Exception("Failed to find the next transaction to process for stream {stream}. Current transaction {tr}.".format(stream=s, tr=currentTransaction))
+                if currentTransaction is None:
+                    currentTransaction = nextTrId
+                else:
+                    currentTransaction = min(currentTransaction, nextTrId)
+        else:
+            currentTransaction = startTransaction
 
         startTime = datetime.now()
         lastPushTime = startTime
@@ -1471,7 +1524,27 @@ class AccuRev2Git(object):
                 
 
             self.config.logger.dbg( "Finished processing transaction #{tr}".format(tr=currentTransaction) )
-            currentTransaction += 1
+            if streamMap is not None and len(streamMap) > 0:
+                # Find the stream for which we processed this transaction
+                nextTr = None
+                for s in nextTrMap:
+                    nextTrId, diff = nextTrMap[s]
+                    if nextTrId == currentTransaction:
+                        nextTrId, diff = self.FindNextChangeTransaction(streamName=s, startTrNumber=currentTransaction, endTrNumber=endTr.id, deepHist=deepHistMap[s])
+                        nextTrMap[s] = (nextTrId, diff)
+                        if nextTrId is None:
+                            raise Exception("Failed to find the next transaction to process for stream {stream}. Current transaction {tr}.".format(stream=s, tr=currentTransaction))
+                        # Note: Do not break here! This transaction could have affected more than one stream and ProcessTransaction() updates all of them so we need to
+                        #       get the next transaction for ALL streams that have been affected by this transaction!
+                    if nextTr is None:
+                        nextTr = nextTrId
+                    else:
+                        nexTr = min(nextTr, nextTrId)
+                if nextTr is None:
+                    raise Exception("Failed to find the next transaction to process!")
+                currentTransaction = nextTr
+            else:
+                currentTransaction += 1
 
             finishTime = datetime.now()
             # Do a push every 5 min or at the end of processing the transactions...
@@ -2013,7 +2086,7 @@ class AccuRev2Git(object):
                 self.StitchBranches()
             else:
                 self.gitRepo.raw_cmd([u'git', u'config', u'--local', u'gc.auto', u'0'])
-                if self.config.method == 'transactions':
+                if self.config.merge is not None and self.config.merge:
                     self.ProcessTransactions()
                 else:
                     self.ProcessStreams()
@@ -2074,7 +2147,7 @@ def DumpExampleConfigFile(outputFilename):
                                                                                                                              branches will be pushed. The push-url attribute is optional. -->
         <remote name="backup" url="https://github.com/orao/ac2git.git" />
     </git>
-    <method>deep-hist</method> <!-- The method specifies what approach is taken to perform the conversion. Allowed values are 'deep-hist', 'diff' and 'pop'.
+    <method merge="false">deep-hist</method> <!-- The method specifies what approach is taken to perform the conversion. Allowed values are 'deep-hist', 'diff' and 'pop'.
                                      - deep-hist: Works by using the accurev.ext.deep_hist() function to return a list of transactions that could have affected the stream.
                                                   It then performs a diff between the transactions and only populates the files that have changed like the 'diff' method.
                                                   It is the quickest method but is only as reliable as the information that accurev.ext.deep_hist() provides.
@@ -2087,8 +2160,8 @@ def DumpExampleConfigFile(outputFilename):
                                      - pop: This is the naive method which doesn't care about changes and always performs a full deletion of the whole tree and a complete
                                             `accurev pop` command. It is a lot slower than the other methods for streams with a lot of files but should work even with older
                                             accurev releases. This is the method originally implemented by Ryan LaNeve in his https://github.com/rlaneve/accurev2git repo.
-                                     - transactions: Works transaction by transaction and is intended to generate an accurate representation of the complete accurev history
-                                                     in git.
+                                     * merge ["true" or "false"]: When set to "true" the script Works transaction by transaction and is intended to generate an accurate
+                                              representation of the complete accurev history in git at the cost of the ability to add more streams at a later date.
                                -->
     <logfile>accurev2git.log</logfile>
     <!-- The user maps are used to convert users from AccuRev into git. Please spend the time to fill them in properly. -->
@@ -2216,9 +2289,9 @@ def AutoConfigFile(filename, args, preserveConfig=False):
                 file.write("""        <remote name="{name}" url="{url}"{push_url_string} />""".format(name=remote.name, url=name.url, push_url_string='' if name.pushUrl is None else ' push-url="{url}"'.format(url=name.pushUrl)))
         
         file.write("""    </git>
-    <method>{method}</method>
+    <method merge="{merge}">{method}</method>
     <logfile>{log_filename}<logfile>
-    <!-- The user maps are used to convert users from AccuRev into git. Please spend the time to fill them in properly. -->""".format(method=config.method, log_filename=config.logFilename))
+    <!-- The user maps are used to convert users from AccuRev into git. Please spend the time to fill them in properly. -->""".format(method=config.method, merge=str(config.merge).lower() if config.merge is not None else "false", log_filename=config.logFilename))
         file.write("""
     <usermaps>
          <!-- The timezone attribute is optional. All times are retrieved in UTC from AccuRev and will converted to the local timezone by default.
@@ -2311,6 +2384,8 @@ def SetConfigFromArgs(config, args):
         config.git.finalize     = args.finalize
     if args.conversionMethod is not None:
         config.method = args.conversionMethod
+    if args.doMerges is not None:
+        config.merge = args.doMerges
     if args.logFile is not None:
         config.logFilename      = args.logFile
 
@@ -2352,6 +2427,7 @@ def PrintConfigSummary(config):
         config.logger.info('    username: {0}'.format(config.accurev.username))
         config.logger.info('    command cache: {0}'.format(config.accurev.commandCacheFilename))
         config.logger.info('  method: {0}'.format(config.method))
+        config.logger.info('  merge:  {0}'.format(config.merge))
         config.logger.info('  usermaps: {0}'.format(len(config.usermaps)))
         config.logger.info('  log file: {0}'.format(config.logFilename))
         config.logger.info('  verbose:  {0}'.format(config.logger.isDbgEnabled))
@@ -2373,7 +2449,8 @@ def AccuRev2GitMain(argv):
     parser.add_argument('-t', '--accurev-depot', dest='accurevDepot',        metavar='<accurev-depot>',     help="The AccuRev depot in which the streams that are being converted are located. This script currently assumes only one depot is being converted at a time.")
     parser.add_argument('-g', '--git-repo-path', dest='gitRepoPath',         metavar='<git-repo-path>',     help="The system path to an existing folder where the git repository will be created.")
     parser.add_argument('-f', '--finalize',      dest='finalize', action='store_const', const=True,         help="Finalize the git repository by creating branch merge points. This flag will trigger this scripts 'branch stitching' mode and should only be used once the conversion has been completed. It won't work as expected if the repo continues to be processed after this step. The script will attempt to collapse commits which are a result of a promotion into a parent stream where the diff between the parent and the child is empty. It will also try to link promotions correctly into a merge commit from the child into the parent.")
-    parser.add_argument('-M', '--method', dest='conversionMethod', choices=['pop', 'diff', 'deep-hist', 'transactions'], metavar='<conversion-method>', help="Specifies the method which is used to perform the conversion. Can be either 'pop', 'diff' or 'deep-hist'. 'pop' specifies that every transaction is populated in full. 'diff' specifies that only the differences are populated but transactions are iterated one at a time. 'deep-hist' specifies that only the differences are populated and that only transactions that could have affected this stream are iterated. 'transactions' is a completely different type of conversion that iterates over transactions and strives to generate the most accurate representation of the accurev streams in git.")
+    parser.add_argument('-M', '--method', dest='conversionMethod', choices=['pop', 'diff', 'deep-hist'], metavar='<conversion-method>', help="Specifies the method which is used to perform the conversion. Can be either 'pop', 'diff' or 'deep-hist'. 'pop' specifies that every transaction is populated in full. 'diff' specifies that only the differences are populated but transactions are iterated one at a time. 'deep-hist' specifies that only the differences are populated and that only transactions that could have affected this stream are iterated.")
+    parser.add_argument('-j', '--merge',      dest='doMerges', action='store_const', const=True,         help="Sets the merge flag which makes the script iterate over transactions (instead of streams) for the specified streams and produce a git repository with promotes shown as merges.")
     parser.add_argument('-r', '--restart',    dest='restart', action='store_const', const=True, help="Discard any existing conversion and start over.")
     parser.add_argument('-v', '--verbose',    dest='debug',   action='store_const', const=True, help="Print the script debug information. Makes the script more verbose.")
     parser.add_argument('-L', '--log-file',   dest='logFile', metavar='<log-filename>',         help="Sets the filename to which all console output will be logged (console output is still printed).")

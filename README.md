@@ -153,14 +153,13 @@ However, there is hope because I've implemented an experimental feature, describ
 
 ### Experimental features ###
 
-#### Transactions method ####
+#### Transactions method (merge flag) ####
 
 This method attempts to iterate over the depot transaction by transaction and generate the most correct git conversion possible. It is not compatible with other methods mentioned above and is currently planned to only be capable of converting the entire depot. If this method is used the finalize step (described below) doesn't need to be performed as the repository should already have the correct merge points.
 
-It is worth noting that this approach, though sequencial _(where the previous approaches could be run in parallel)_, has an additional benefit that the git repository can be used to supplement the missing/unavailable information in order to detect additional merge points which would have been missed by the already mentioned _"finalize method"_. 
+If there are no streams listed then this method iterates over each transaction made to a depot in sequence starting at transaction 1. For each transaction type it tries to create the git representation of what has occurred in accurev. For most transactions that can occur on a workspace (i.e. `keep`, `move`, `co`) it generates a git commit on the branch which shares the same name as the workspace in which the transaction occurred. Stream operations like `mkstream` or `chstream` in turn can result in a git branch being renamed or moved, or simply a commit being created. If you are interested in what is going on the best place to look is the `ac2git.py` file and the method `AccuRev2Git.ProcessTransaction()`.
 
-This method iterates over each transaction made to a depot in sequence starting at transaction 1. For each transaction type it tries to create the git representation of what has occurred in accurev. For most transactions that can occur on a workspace (i.e. `keep`, `move`, `co`) it generates a git commit on the branch which shares the same name as the workspace in which the transaction occurred. Stream operations like `mkstream` or `chstream` in turn can result in a git branch being renamed or moved, or simply a commit being created. If you are interested in what is going on the best place to look is the `ac2git.py` file and the method `AccuRev2Git.ProcessTransaction()`.
-
+If there is a list of streams specified then this method will use the _'deep-hist'_ or _'diff'_ (_'pop'_ isn't supported yet) algorithms to generate a list of transactions for each of the streams listed and will iterate over those transactions in order (skipping transactions which don't affect these streams) and will generate a merged git repository that only has the specified streams in it. Again, finalize isn't needed if this method is used but the down-side is that streams can't be easily added to the converted repository. So if you intend to use this to continuously track an AccuRev depot, make sure to include all streams that you're interested in or you may have to restart the conversion.
 
 #### Branch merges (a.k.a. finalize step) ####
 

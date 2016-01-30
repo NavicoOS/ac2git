@@ -2370,7 +2370,7 @@ class ext(object):
     @staticmethod
     # Retrieves a list of _all transactions_ which affect the given stream, directly or indirectly (via parent promotes).
     # Returns a list of obj.Transaction(object) types.
-    def deep_hist(depot=None, stream=None, timeSpec='now', ignoreTimelocks=True, useCache=False):
+    def deep_hist(depot=None, stream=None, timeSpec='now', ignoreTimelocks=False, useCache=False):
         # Validate arguments
         # ==================
         if stream is None:
@@ -2466,7 +2466,7 @@ class ext(object):
     # Returns a list of streams which are affected by the given transaction.
     # The transaction must be of type obj.Transaction which is obtained from the obj.History.transactions
     # which is returned by the hist() function.
-    def affected_streams(depot, transaction, includeWorkspaces=True, ignoreTimelocks=True, doDiffs=False, useCache=False):
+    def affected_streams(depot, transaction, includeWorkspaces=True, ignoreTimelocks=False, doDiffs=False, useCache=False):
         if not isinstance(transaction, obj.Transaction):
             transaction = hist(depot=depot, timeSpec=str(transaction), useCache=useCache).transactions[0]
         
