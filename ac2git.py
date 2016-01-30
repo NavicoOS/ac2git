@@ -1475,10 +1475,9 @@ class AccuRev2Git(object):
                 firstStream = min(nextTrMap, key=lambda x: nextTrMap[x])
                 currentTransaction = nextTrMap[firstStream]
             else:
-                currentTransaction = state["transaction"]
                 for s in nextTrMap:
                     nextTrId = nextTrMap[s]
-                    if nextTrId == currentTransaction:
+                    if nextTrId == state["transaction"]:
                         deepHist = deepHistMap[s] if deepHistMap is not None else None
                         nextTrId, diff = self.FindNextChangeTransaction(streamName=s, startTrNumber=nextTrId, endTrNumber=endTr.id, deepHist=deepHist)
                         nextTrMap[s] = nextTrId
