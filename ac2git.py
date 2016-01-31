@@ -1400,24 +1400,67 @@ class AccuRev2Git(object):
             self.config.logger.info(message)
             raise Exception(message)
 
+    def InitialCommitStreams(self, depot, streams, stream=None, tr=None, streamNumberMap=None):
+        if stream is None:
+            for s in streams:
+                if s.basisStreamNumber is None:
+                    return self.InitialCommitStreams(depot=depot, stream=s, streams=streams, tr=tr, streamNumberMap=streamNumberMap)
+        else:
+            # Checkout basis stream (if any).
+            basisBranchName = None
+            if stream.basisStreamNumber is not None:
+                basisBranchName = self.GetBranchNameFromStreamBasis(stream, streamNumberMap)
+                if basisBranchName is not None and self.gitRepo.checkout(branchName=basisBranchName) is None:
+                    raise Exception("Failed to checkout basis stream branch {bsBr} for stream {s}".format(bsBr=basisBranchName, s=stream.name))
+            
+            # Create branch whith a single empty commit.
+            branchName = self.GetBranchNameFromStream(stream, streamNumberMap)
+            if branchName is not None:
+                if basisBranchName != branchName and self.gitRepo.checkout(branchName=branchName, isNewBranch=True) is None:
+                    raise Exception("Failed to create new branch {br}. Error: {err}".format(br=branchName, err=self.gitRepo.lastStderr))
+                self.config.logger.info("Initial commit name={name}, number={num}, basis={basis}, basis-number={basisNumber}".format(name=stream.name, num=stream.streamNumber, basis=stream.basis, basisNumber=stream.basisStreamNumber))
+                # Modify the commit message
+                commitMessage = self.GenerateCommitMessage(transaction=tr, stream=stream, title="Created {name} based on {basis}".format(name=branchName, basis='-' if stream.basis is None else basisBranchName))
+                commitHash = self.Commit(depot=depot, stream=stream, transaction=tr, branchName=branchName, isFirstCommit=True, allowEmptyCommit=True, noNotes=True, messageOverride=commitMessage)
+                if commitHash is None:
+                    raise Exception("Failed to add empty commit")
+
+            # Create all child branches.
+            for s in streams:
+                if s.basisStreamNumber == stream.streamNumber:
+                    self.InitialCommitStreams(depot=depot, stream=s, streams=streams, tr=tr, streamNumberMap=streamNumberMap)
+                
+        return False
+
     def ProcessTransactions(self):
+        # Git refspec for the state ref in which we will store a blob.
         stateRefspec = u'refs/ac2git/state'
-        # Determine the last processed transaction, if any.
+
+        # Default state
+        state = { "depot": self.config.accurev.depot,                       # Static
+                  "stream_map": self.config.accurev.streamMap,              # Static
+                  "stream_number_map": None,                                # Static
+                  "transaction": int(self.config.accurev.startTransaction), # Dynamic
+                  "branch_list": None,                                      # Dynamic
+                  "next_transaction_map": None }                            # Dynamic
+
+        # Other state variables
+        startTransaction = state["transaction"]
+        endTrHist, endTr = None, None
+        currentTransaction = None
+        deepHistMap = None
+
+        # Determine the last processed transaction, if any (loaded from the ref).
         stateStr = self.gitRepo.raw_cmd([u'git', u'show', stateRefspec])
-        state = { "depot": self.config.accurev.depot,          # Static
-                  "stream_map": self.config.accurev.streamMap, # Static
-                  "stream_number_map": None,                   # Static
-                  "transaction": 0,                            # Dynamic
-                  "branch_list": None,                         # Dynamic
-                  "next_transaction_map": None }               # Dynamic
         if stateStr is not None and len(stateStr) > 0:
             state = json.loads(stateStr.strip())
+            startTransaction = state["transaction"]
             self.config.logger.dbg( "Loaded last state at transaction {tr} as:".format(tr=state["transaction"]) )
             for br in state["branch_list"]:
                 self.config.logger.dbg( " - Branch {br} at {hash}{current}.".format(br=br["name"], hash=br["commit"], current=", current" if br["is_current"] else "") )
             
             # Determine the last processed transaction's associated branch, if any (for first transaction there is none).
-            if state["transaction"] != 0 and state["branch_list"] is not None and len(state["branch_list"]) != 0:
+            if state["transaction"] is not None and state["branch_list"] is not None and len(state["branch_list"]) != 0:
                 # Reset the repo to the last branch's tip (which should be equivalent to our last transaction).
                 self.config.logger.dbg( "Clean current branch" )
                 self.gitRepo.clean(directories=True, force=True, forceSubmodules=True, includeIgnored=True)
@@ -1450,87 +1493,119 @@ class AccuRev2Git(object):
                     raise Exception("Invalid initial state! The status command returned an invalid name for current branch. Expected {branchName} but got {statusBranch}.".format(branchName=currentBranch["name"], statusBranch=status.branch))
                 if len(status.staged) != 0 or len(status.changed) != 0 or len(status.untracked) != 0:
                     raise Exception("Invalid initial state! There are changes in the tracking repository. Staged {staged}, changed {changed}, untracked {untracked}.".format(staged=status.staged, changed=status.changed, untracked=status.untracked))
+
+                # Get the configured end transaction and convert it into a number by calling accurev hist.
+                endTrHist = self.TryHist(depot=state["depot"], trNum=self.config.accurev.endTransaction)
+                if endTrHist is None or len(endTrHist.transactions) == 0 is None:
+                    raise Exception("Couldn't determine the end transaction for the conversion. Aborting!")
+                endTr = endTrHist.transactions[0]
             else:
                 raise Exception("Invalid state! Information found for previous run but is incomplete, corrupt or incorrect.")
+
+            # Sicne the state["transaction"] represents the last processed transaction we need to increment it by one and find the next transaction that we need to process.
+            if state["stream_map"] is not None and len(state["stream_map"]) > 0:
+                if state["stream_number_map"] is None or len(state["stream_number_map"]) != len(state["stream_map"]):
+                    raise Exception("Invalid state! The stream number map needs to match the stream map!")
+                else:
+                    # Our stream number map has been loaded from JSON. Before it was stored as JSON it had integer keys but since
+                    # it was stored and then loaded again the keys have become strings. Here we convert them back to integers.
+                    snm = {}
+                    for n in state["stream_number_map"]:
+                        snm[int(n)] = state["stream_number_map"][n]
+                    state["stream_number_map"] = snm
+
+                if state["next_transaction_map"] is None or len(state["next_transaction_map"]) == 0: # This is true if we haven't initialized these variables before...
+                    raise Exception("Invalid state! We are processing a subset of streams but their individual positions have been lost!")
+                # Advance our mapping of the current positions of each stream by one iteration.
+                for s in state["next_transaction_map"]:
+                    nextTrId = state["next_transaction_map"][s]
+                    if nextTrId == state["transaction"]:
+                        deepHist = deepHistMap[s] if deepHistMap is not None else None
+                        nextTrId, diff = self.FindNextChangeTransaction(streamName=s, startTrNumber=nextTrId, endTrNumber=endTr.id, deepHist=deepHist)
+                        state["next_transaction_map"][s] = nextTrId
+                        if nextTrId is None:
+                            raise Exception("Failed to find the next transaction to process for stream {stream}. Current transaction {tr}.".format(stream=s, tr=state["transaction"]))
+                        # Note: Do not break here! This transaction could have affected more than one stream and ProcessTransaction() updates all of them so we need to
+                        #       get the next transaction for ALL streams that have been affected by this transaction!
+                nextStream = min(state["next_transaction_map"], key=lambda x: state["next_transaction_map"][x])
+                if state["transaction"] == state["next_transaction_map"][nextStream]:
+                    raise Exception("Failed to find the next transaction to process!")
+                state["transaction"] = state["next_transaction_map"][nextStream]
+            else:
+                state["transaction"] += 1
         else:
+            # Get the configured end transaction and convert it into a number by calling accurev hist.
+            endTrHist = self.TryHist(depot=state["depot"], trNum=self.config.accurev.endTransaction)
+            if endTrHist is None or len(endTrHist.transactions) == 0 is None:
+                raise Exception("Couldn't determine the end transaction for the conversion. Aborting!")
+            endTr = endTrHist.transactions[0]
+
             self.config.logger.dbg( "No last state!" )
 
-        # Get the configured end transaction and convert it into a number by calling accurev hist.
-        endTrHist = self.TryHist(depot=self.config.accurev.depot, trNum=self.config.accurev.endTransaction)
-        if endTrHist is None or len(endTrHist.transactions) == 0 is None:
-            raise Exception("Couldn't determine the end transaction for the conversion. Aborting!")
-        endTr = endTrHist.transactions[0]
+            # Get the stream_map information from the last run (effectively ignoring whatever is in the config now).
+            if state["stream_map"] is not None and len(state["stream_map"]) > 0:
+                # We need to start at the transaction that the user has specified, so let's get all the streams that we need to process and create their initial states...
+                state["next_transaction_map"] = {}
+                state["stream_number_map"] = {}
+                for s in state["stream_map"]:
+                    # Initialize stream_number_map
+                    sInfo = accurev.show.streams(depot=state["depot"], stream=s).streams[0]
+                    state["stream_number_map"][sInfo.streamNumber] = state["stream_map"][s]
+                    # Initialize next_transaction_map
+                    firstTr = self.GetFirstTransaction(depot=state["depot"], streamName=s, startTransaction=startTransaction, endTransaction=endTr.id)
+                    if firstTr is None:
+                        raise Exception("Failed to find the first transaction to process for stream {stream}. Current transaction {tr}.".format(stream=s, tr=state["transaction"]))
+                    state["next_transaction_map"][s] = firstTr.id
+                firstStream = min(state["next_transaction_map"], key=lambda x: state["next_transaction_map"][x])
+                state["transaction"] = state["next_transaction_map"][firstStream]
+            else:
+                # The state["transaction"] is exactly at the position it should be (self.config.accurev.startTransaction)
+                pass
+
+            if state["transaction"] < 1:
+                raise Exception("The minimum transaction at which you can start the conversion is 1. Found {t}".format(t=state["transaction"]))
+            elif state["transaction"] != 1:
+                self.config.logger.dbg( "Initializing known branches at transaction {tr}".format(tr=state["transaction"]) )
+                streams = accurev.show.streams(depot=state["depot"], timeSpec=state["transaction"]).streams
+
+                reachableStreamNumberMap = None
+                if state["stream_number_map"] is not None and len(state["stream_number_map"]) != 0:
+                    # Create a tree of empty commits representing the stream hierarchy.
+                    reachableStreamNumberMap = {} # This structure maps is the same as state["stream_number_map"] except that it contains all streams that are reachable (via parenting/basis) from the streams in the state["stream_number_map"] up to the root stream.
+                    size = -1
+                    while len(reachableStreamNumberMap) != size:
+                        size = len(reachableStreamNumberMap)
+                        for stream in streams:
+                            if stream.streamNumber in state["stream_number_map"]:
+                                reachableStreamNumberMap[stream.streamNumber] = state["stream_number_map"][stream.streamNumber]
+                            if stream.streamNumber in reachableStreamNumberMap and stream.basisStreamNumber not in reachableStreamNumberMap:
+                                reachableStreamNumberMap[stream.basisStreamNumber] = state["stream_number_map"][stream.streamNumber]
+                            
+                self.InitialCommitStreams(depot=state["depot"], streams=streams, tr=accurev.hist(depot=state["depot"], timeSpec=state["transaction"]).transactions[0], streamNumberMap=reachableStreamNumberMap)
+                self.config.logger.dbg( "Initializing known branches at transaction {tr}".format(tr=state["transaction"]) )
+                
 
         # Begin processing of the transactions
-        startTransaction = state["transaction"] + 1
         self.config.logger.info( "Processing transaction range #{tr_start}-{tr_end}".format(tr_start=startTransaction, tr_end=endTr.id) )
 
-        # If there is a stream map then we need to restrict this algorithm to only process those streams.
-        # We will do so by getting the history for all of the streams in question and then processing the
-        # transactions returned according to the selected conversion method.
-        currentTransaction = None
-        deepHistMap = None
-        streamMap = state["stream_map"]
-        streamNumberMap = state["stream_number_map"]
-        nextTrMap = state["next_transaction_map"]
-        if streamMap is not None and len(streamMap) > 0:
+        # Initialize the deepHistMap variables
+        if state["stream_map"] is not None and len(state["stream_map"]) > 0:
             if self.config.method == "deep-hist":
                 deepHistMap = {}
-                for s in streamMap:
+                for s in state["stream_map"]:
                     self.config.logger.info( "Querying deep-hist for {stream}".format(stream=s) )
-                    deepHistMap[s] = accurev.ext.deep_hist(depot=self.config.accurev.depot, stream=s, timeSpec="{0}-{1}".format(startTransaction, endTr.id), ignoreTimelocks=False)
+                    deepHistMap[s] = accurev.ext.deep_hist(depot=state["depot"], stream=s, timeSpec="{0}-{1}".format(startTransaction, endTr.id), ignoreTimelocks=False)
                     self.config.logger.info( "Deep-hist for {stream} returned {count} transactions.".format(stream=s, count=len(deepHistMap[s])) )
             elif self.config.method in [ "diff" ]:
                 pass
             else:
                 raise Exception("Unrecognized conversion method: {method}!".format(method=self.config.method))
 
-            if streamNumberMap is None or len(streamNumberMap) != len(streamMap):
-                streamNumberMap = {}
-                for s in streamMap:
-                    sInfo = accurev.show.streams(depot=self.config.accurev.depot, stream=s).streams[0]
-                    streamNumberMap[sInfo.streamNumber] = streamMap[s]
-                state["stream_number_map"] = streamNumberMap
-            else:
-                # Our stream number map has been loaded from JSON. Before it was stored as JSON it had integer keys but since
-                # it was stored and then loaded again the keys have become strings. Here we convert them back to integers.
-                snm = {}
-                for n in streamNumberMap:
-                    snm[int(n)] = streamNumberMap[n]
-                streamNumberMap = snm
-
-            if nextTrMap is None or len(nextTrMap) == 0: # This is true if we haven't initialized these variables before...
-                nextTrMap = {}
-                for s in streamMap:
-                    firstTr = self.GetFirstTransaction(depot=self.config.accurev.depot, streamName=s, startTransaction=startTransaction, endTransaction=endTr.id)
-                    if firstTr is None:
-                        raise Exception("Failed to find the first transaction to process for stream {stream}. Current transaction {tr}.".format(stream=s, tr=currentTransaction))
-                    nextTrMap[s] = firstTr.id
-                firstStream = min(nextTrMap, key=lambda x: nextTrMap[x])
-                currentTransaction = nextTrMap[firstStream]
-            else:
-                for s in nextTrMap:
-                    nextTrId = nextTrMap[s]
-                    if nextTrId == state["transaction"]:
-                        deepHist = deepHistMap[s] if deepHistMap is not None else None
-                        nextTrId, diff = self.FindNextChangeTransaction(streamName=s, startTrNumber=nextTrId, endTrNumber=endTr.id, deepHist=deepHist)
-                        nextTrMap[s] = nextTrId
-                        if nextTrId is None:
-                            raise Exception("Failed to find the next transaction to process for stream {stream}. Current transaction {tr}.".format(stream=s, tr=currentTransaction))
-                        # Note: Do not break here! This transaction could have affected more than one stream and ProcessTransaction() updates all of them so we need to
-                        #       get the next transaction for ALL streams that have been affected by this transaction!
-                nextStream = min(nextTrMap, key=lambda x: nextTrMap[x])
-                if currentTransaction == nextTrMap[nextStream]:
-                    raise Exception("Failed to find the next transaction to process!")
-                currentTransaction = nextTrMap[nextStream]
-        else:
-            currentTransaction = startTransaction
-
         startTime = datetime.now()
         lastPushTime = startTime
-        while currentTransaction < endTr.id:
-            self.config.logger.dbg( "Started processing transaction #{tr}".format(tr=currentTransaction) )
-            self.ProcessTransaction(depot=self.config.accurev.depot, transaction=currentTransaction, streamNumberMap=streamNumberMap)
+        while state["transaction"] < endTr.id:
+            self.config.logger.dbg( "Started processing transaction #{tr}".format(tr=state["transaction"]) )
+            self.ProcessTransaction(depot=state["depot"], transaction=state["transaction"], streamNumberMap=state["stream_number_map"])
             
             # Validate that there are no pending changes (i.e. everything has been committed)
             status = self.gitRepo.status()
@@ -1547,8 +1622,6 @@ class AccuRev2Git(object):
             if lastCommitHash is None or len(lastCommitHash) == 0:
                 raise Exception("Failed to retrieve last commit hash!")
             
-            state["transaction"] = currentTransaction
-            state["next_transaction_map"] = nextTrMap
             # Record the current position of all the branches.
             state["branch_list"] = []
             for br in self.gitRepo.branch_list():
@@ -1589,29 +1662,29 @@ class AccuRev2Git(object):
                 raise Exception("Error! Failed to record current state, aborting!")
                 
 
-            self.config.logger.dbg( "Finished processing transaction #{tr}".format(tr=currentTransaction) )
-            if streamMap is not None and len(streamMap) > 0:
+            self.config.logger.dbg( "Finished processing transaction #{tr}".format(tr=state["transaction"]) )
+            if state["stream_map"] is not None and len(state["stream_map"]) > 0:
                 # Find the stream for which we processed this transaction
-                for s in nextTrMap:
-                    nextTrId = nextTrMap[s]
-                    if nextTrId == currentTransaction:
+                for s in state["next_transaction_map"]:
+                    nextTrId = state["next_transaction_map"][s]
+                    if nextTrId == state["transaction"]:
                         deepHist = deepHistMap[s] if deepHistMap is not None else None
                         nextTrId, diff = self.FindNextChangeTransaction(streamName=s, startTrNumber=nextTrId, endTrNumber=endTr.id, deepHist=deepHist)
-                        nextTrMap[s] = nextTrId
+                        state["next_transaction_map"][s] = nextTrId
                         if nextTrId is None:
-                            raise Exception("Failed to find the next transaction to process for stream {stream}. Current transaction {tr}.".format(stream=s, tr=currentTransaction))
+                            raise Exception("Failed to find the next transaction to process for stream {stream}. Current transaction {tr}.".format(stream=s, tr=state["transaction"]))
                         # Note: Do not break here! This transaction could have affected more than one stream and ProcessTransaction() updates all of them so we need to
                         #       get the next transaction for ALL streams that have been affected by this transaction!
-                nextStream = min(nextTrMap, key=lambda x: nextTrMap[x])
-                if currentTransaction == nextTrMap[nextStream]:
+                nextStream = min(state["next_transaction_map"], key=lambda x: state["next_transaction_map"][x])
+                if state["transaction"] == state["next_transaction_map"][nextStream]:
                     raise Exception("Failed to find the next transaction to process!")
-                currentTransaction = nextTrMap[nextStream]
+                state["transaction"] = state["next_transaction_map"][nextStream]
             else:
-                currentTransaction += 1
+                state["transaction"] += 1
 
             finishTime = datetime.now()
             # Do a push every 5 min or at the end of processing the transactions...
-            if currentTransaction == endTr.id or (finishTime - lastPushTime).total_seconds() > 300:
+            if state["transaction"] == endTr.id or (finishTime - lastPushTime).total_seconds() > 300:
                 lastPushTime = finishTime
                 if self.config.git.remoteMap is not None:
                     for remoteName in self.config.git.remoteMap:
@@ -1629,12 +1702,12 @@ class AccuRev2Git(object):
                             self.config.logger.dbg("{output}".format(output=e.output.decode('utf-8')))
             
             # Print the progress message
-            processedTransactions = currentTransaction - startTransaction # Represents the number of transactions that were processed in this invokation of the script.
+            processedTransactions = state["transaction"] - startTransaction # Represents the number of transactions that were processed in this invokation of the script.
             runningTime = (finishTime - startTime).total_seconds()        # Represents the time (in seconds) that we have been running the conversion in this invokation.
             totalTransactions = endTr.id - state["transaction"]           # Represents the total number of transactions processed since we started (this invokation).
             eta = (runningTime/processedTransactions) * (totalTransactions - processedTransactions)  # Expected time until done (in seconds).
             etaDays, etaHours, etaMin, etaSec = int(eta / 60 / 60 / 24), int((eta / 60 / 60) % 24), int((eta / 60) % 60), (eta % 60)
-            self.config.logger.info("Progress {progress: >5.2f}%, {processed}/{total}, avg. {throughput:.2f} tr/s ({timeTaken:.2f} s/tr). ETA {etaDays}d {etaHours}:{etaMin:0>2d}:{etaSec:0>5.2f} (h:mm:ss.ss).".format(progress=((currentTransaction - 1)/endTr.id), processed=(currentTransaction - 1), total=endTr.id, throughput=(processedTransactions/runningTime), timeTaken=(runningTime/processedTransactions), etaDays=etaDays, etaHours=etaHours, etaMin=etaMin, etaSec=etaSec))
+            self.config.logger.info("Progress {progress: >5.2f}%, {processed}/{total}, avg. {throughput:.2f} tr/s ({timeTaken:.2f} s/tr). ETA {etaDays}d {etaHours}:{etaMin:0>2d}:{etaSec:0>5.2f} (h:mm:ss.ss).".format(progress=((state["transaction"] - 1)/endTr.id), processed=(state["transaction"] - 1), total=endTr.id, throughput=(processedTransactions/runningTime), timeTaken=(runningTime/processedTransactions), etaDays=etaDays, etaHours=etaHours, etaMin=etaMin, etaSec=etaSec))
 
             
     def InitGitRepo(self, gitRepoPath):
