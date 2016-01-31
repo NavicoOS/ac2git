@@ -592,7 +592,7 @@ class AccuRev2Git(object):
                 self.config.logger.error("While getting state for commit {hash} (notes ref {ref}). Failed to parse JSON string [{json}].".format(hash=commitHash, ref=notesRef, json=stateJson))
                 raise Exception("While getting state for commit {hash} (notes ref {ref}). Failed to parse JSON string [{json}].".format(hash=commitHash, ref=notesRef, json=stateJson))
         else:
-            self.config.logger.error("Failed to load the last transaction for commit {hash} from {ref} notes.".format(hash=commitHash, ref=ref))
+            self.config.logger.error("Failed to load the last transaction for commit {hash} from {ref} notes.".format(hash=commitHash, ref=notesRef))
             self.config.logger.error("  i.e git notes --ref={ref} show {hash}    - returned nothing.".format(ref=notesRef, hash=commitHash))
 
         return stateObj
@@ -808,6 +808,8 @@ class AccuRev2Git(object):
         # Find the matching git branch
         branch = None
         for b in self.gitBranchList:
+            if b is None:
+                raise Exception("Git's branch list contained an invalid entry. Please retry!")
             if branchName == b.name:
                 branch = b
                 break

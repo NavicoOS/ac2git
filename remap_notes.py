@@ -20,7 +20,7 @@ import argparse
 
 import git
 
-def moveNote(oldHash, newHash):
+def moveNote(repo, oldHash, newHash):
     oldDir, oldFile = oldHash[:2], oldHash[2:]
     newDir, newFile = newHash[:2], newHash[2:]
     oldPath = posixpath.join(oldDir, oldFile)
@@ -135,7 +135,7 @@ def remapNotesCommand(args):
         doCommit = False
         for oldHash in commitMap:
             newHash = commitMap[oldHash]
-            doCommit = moveNote(oldHash=oldHash, newHash=newHash)
+            doCommit = moveNote(repo=repo, oldHash=oldHash, newHash=newHash) or doCommit
 
         # Here we just need to make the commit.
         if doCommit:
