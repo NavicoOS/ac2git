@@ -1054,18 +1054,21 @@ class AccuRev2Git(object):
 
     def AppendCommitMessageSuffixStreamInfo(self, suffixList, linePrefix, stream):
         if stream is not None:
-            suffixList.append( ('{linePrefix}:'.format(linePrefix=linePrefix), '{name} (id: {id})'.format(id=stream.streamNumber, name=stream.name)) )
+            suffixList.append( ('{linePrefix}:'.format(linePrefix=linePrefix), '{name} (id: {id}; type: {Type})'.format(id=stream.streamNumber, name=stream.name, Type=stream.Type)) )
             if stream.prevName is not None:
                 suffixList.append( ('{linePrefix}-prev-name:'.format(linePrefix=linePrefix), '{name}'.format(name=stream.prevName)) )
             if stream.basis is not None:
                 suffixList.append( ('{linePrefix}-basis:'.format(linePrefix=linePrefix), '{name} (id: {id})'.format(name=stream.basis, id=stream.basisStreamNumber)) )
             if stream.prevBasis is not None and len(stream.prevBasis) > 0:
                 suffixList.append( ('{linePrefix}-prev-basis:'.format(linePrefix=linePrefix), '{name} (id: {id})'.format(name=stream.prevBasis, id=stream.prevBasisStreamNumber)) )
+            if stream.time is not None:
+                suffixList.append( ('{linePrefix}-timelock:'.format(linePrefix=linePrefix), '{time} (UTC)'.format(time=stream.time)) )
+            if stream.prevTime is not None:
+                suffixList.append( ('{linePrefix}-prev-timelock:'.format(linePrefix=linePrefix), '{prevTime} (UTC)'.format(time=stream.prevTime)) )
 
     def GenerateCommitMessageSuffix(self, transaction, stream=None, dstStream=None, srcStream=None):
         suffixList = []
-        suffixList.append( ('Accurev-transaction-id:', '{id}'.format(id=transaction.id)) )
-        suffixList.append( ('Accurev-transaction-type:', '{t}'.format(t=transaction.Type)) )
+        suffixList.append( ('Accurev-transaction:', '{id} (type: {Type})'.format(id=transaction.id, Type=transaction.Type)) )
         if stream is not None:
             self.AppendCommitMessageSuffixStreamInfo(suffixList=suffixList, linePrefix='Accurev-stream', stream=stream)
         if dstStream is not None:
@@ -1109,10 +1112,30 @@ class AccuRev2Git(object):
 
         raise Exception("Unrecognized git message style '{s}'".format(s=style))
 
+    def SanitizeBranchName(self, name):
+        name = name.replace(' ', '_').strip()
+        return name
+
+    def GetBranchNameFromStreamOrMap(self, streamName, streamNumber, streamNumberMap):
+        if streamNumberMap is None or len(streamNumberMap) == 0:
+            return self.SanitizeBranchName(streamName)
+        else:
+            return streamNumberMap.get(streamNumber)
+        raise Exception("How did you hit this exception? We should have returned!")
+
+    def GetBranchNameFromStream(self, stream, streamNumberMap=None):
+        return self.GetBranchNameFromStreamOrMap(streamName=stream.name, streamNumber=stream.streamNumber, streamNumberMap=streamNumberMap)
+
+    def GetBranchNameFromStreamBasis(self, stream, streamNumberMap=None):
+        return self.GetBranchNameFromStreamOrMap(streamName=stream.basis, streamNumber=stream.basisStreamNumber, streamNumberMap=streamNumberMap)
+
+    def GetBranchNameFromStreamPrevBasis(self, stream, streamNumberMap=None):
+        return self.GetBranchNameFromStreamOrMap(streamName=stream.prevBasis, streamNumber=stream.prevBasisStreamNumber, streamNumberMap=streamNumberMap)
+
     def GitCommitOrMerge(self, depot, dstStream, srcStream, tr, commitMessageOverride=None, mergeMessageOverride=None, streamNumberMap=None):
         # Perform the git merge of the 'from stream' into the 'to stream' but only if they have the same contents.
-        dstBranchName = self.SanitizeBranchName(dstStream.name)
-        srcBranchName = self.SanitizeBranchName(srcStream.name)
+        dstBranchName = self.GetBranchNameFromStream(dstStream, streamNumberMap)
+        srcBranchName = self.GetBranchNameFromStream(srcStream, streamNumberMap)
         if self.gitRepo.checkout(branchName=dstBranchName) is None:
             raise Exception("git checkout branch {br}, failed!".format(br=dstBranchName))
         
@@ -1153,10 +1176,6 @@ class AccuRev2Git(object):
 
         return commitHash
 
-    def SanitizeBranchName(self, name):
-        name = name.replace(' ', '_')
-        return name
-
     def ProcessTransaction(self, depot, transaction, streamNumberMap):
         trHist = self.TryHist(depot=depot, trNum=transaction)
         if trHist is None or len(trHist.transactions) == 0 is None:
@@ -1182,87 +1201,96 @@ class AccuRev2Git(object):
                     if stream.name not in streamSet:
                         newStream = stream
                         break
-                basisBranchName = self.SanitizeBranchName(newStream.basis)
-                if self.gitRepo.checkout(branchName=basisBranchName) is None:
+                basisBranchName = self.GetBranchNameFromStreamBasis(newStream, streamNumberMap)
+                if basisBranchName is not None and self.gitRepo.checkout(branchName=basisBranchName) is None:
                     raise Exception("Failed to checkout basis stream branch {bsBr} for stream {s}".format(bsBr=basisBranchName, s=newStream.name))
             
-            newBranchName = self.SanitizeBranchName(newStream.name)
-            if self.gitRepo.checkout(branchName=newBranchName, isNewBranch=True) is None:
-                raise Exception("Failed to create new branch {br}. Error: {err}".format(br=newBranchName, err=self.gitRepo.lastStderr))
-            self.config.logger.info("mkstream name={name}, number={num}, basis={basis}, basis-number={basisNumber}".format(name=newStream.name, num=newStream.streamNumber, basis=newStream.basis, basisNumber=newStream.basisStreamNumber))
-            # Modify the commit message
-            commitMessage = self.GenerateCommitMessage(transaction=tr, stream=newStream, title="Created {name} based on {basis}".format(name=newBranchName, basis='-' if newStream.basis is None else basisBranchName))
-            commitHash = self.Commit(depot=depot, stream=newStream, transaction=tr, branchName=newBranchName, isFirstCommit=True, allowEmptyCommit=True, noNotes=True, messageOverride=commitMessage)
-            if commitHash is None:
-                raise Exception("Failed to add empty mkstream commit")
+            newBranchName = self.GetBranchNameFromStream(newStream, streamNumberMap)
+            if newBranchName is not None:
+                if self.gitRepo.checkout(branchName=newBranchName, isNewBranch=True) is None:
+                    raise Exception("Failed to create new branch {br}. Error: {err}".format(br=newBranchName, err=self.gitRepo.lastStderr))
+                self.config.logger.info("mkstream name={name}, number={num}, basis={basis}, basis-number={basisNumber}".format(name=newStream.name, num=newStream.streamNumber, basis=newStream.basis, basisNumber=newStream.basisStreamNumber))
+                # Modify the commit message
+                commitMessage = self.GenerateCommitMessage(transaction=tr, stream=newStream, title="Created {name} based on {basis}".format(name=newBranchName, basis='-' if newStream.basis is None else basisBranchName))
+                commitHash = self.Commit(depot=depot, stream=newStream, transaction=tr, branchName=newBranchName, isFirstCommit=True, allowEmptyCommit=True, noNotes=True, messageOverride=commitMessage)
+                if commitHash is None:
+                    raise Exception("Failed to add empty mkstream commit")
         
         elif tr.Type == "chstream":
             #streamName, streamNumber = tr.affectedStream()
             #stream = accurev.show.streams(depot=depot, stream=streamNumber, timeSpec=tr.id, useCache=self.config.accurev.UseCommandCache()).streams[0]
             
-            branchName = self.SanitizeBranchName(tr.stream.name)
-            if tr.stream.prevName is not None and len(tr.stream.prevName.strip()) > 0:
-                # if the stream has been renamed, use its new name from now on.
-                prevBranchName = self.SanitizeBranchName(tr.stream.prevName)
-                if self.gitRepo.raw_cmd([ u'git', u'branch', u'-m', prevBranchName, branchName ]) is None:
-                    raise Exception("Failed to rename branch {old} to {new}. Err: {err}".format(old=prevBranchName, new=branchName, err=self.gitRepo.lastStderr))
-                self.config.logger.info("Renamed branch {oldName} to {newName}".format(oldName=prevBranchName, newName=branchName))
-                
-            if self.gitRepo.checkout(branchName=branchName) is None:
-                raise Exception("Failed to checkout branch {br}".format(br=branchName))
+            branchName = self.GetBranchNameFromStream(tr.stream, streamNumberMap)
+            if branchName is not None:
+                if streamNumberMap is None and tr.stream.prevName is not None and len(tr.stream.prevName.strip()) > 0:
+                    # if the stream has been renamed, use its new name from now on.
+                    prevBranchName = self.SanitizeBranchName(tr.stream.prevName)
+                    if self.gitRepo.raw_cmd([ u'git', u'branch', u'-m', prevBranchName, branchName ]) is None:
+                        raise Exception("Failed to rename branch {old} to {new}. Err: {err}".format(old=prevBranchName, new=branchName, err=self.gitRepo.lastStderr))
+                    self.config.logger.info("Renamed branch {oldName} to {newName}".format(oldName=prevBranchName, newName=branchName))
+                    
+                if self.gitRepo.checkout(branchName=branchName) is None:
+                    raise Exception("Failed to checkout branch {br}".format(br=branchName))
 
-            if tr.stream.prevBasis is not None and len(tr.stream.prevBasis) > 0:
-                # We need to change where our stream is parented, i.e. rebase it...
-                basisBranchName = self.SanitizeBranchName(tr.stream.basis)
-                prevBasisBranchName = self.SanitizeBranchName(tr.stream.prevBasis)
+                if tr.stream.prevBasis is not None and len(tr.stream.prevBasis) > 0:
+                    # We need to change where our stream is parented, i.e. rebase it...
+                    basisBranchName = self.GetBranchNameFromStreamBasis(tr.stream, streamNumberMap)
+                    prevBasisBranchName = self.GetBranchNameFromStreamPrevBasis(tr.stream, streamNumberMap)
 
-                newBasisCommitHash = self.GetLastCommitHash(branchName=basisBranchName)
-                if newBasisCommitHash is None:
-                    raise Exception("Failed to retrieve the last commit hash for new basis stream branch {bs}".format(bs=basisBranchName))
-                if self.gitRepo.raw_cmd([ u'git', u'reset', u'--hard', newBasisCommitHash ]) is None:
-                    raise Exception("Failed to rebase branch {br} from {old} to {new}. Err: {err}".format(br=branchName, old=prevBasisBranchName, new=basisBranchName, err=self.gitRepo.lastStderr))
-                self.config.logger.info("Rebased branch {name} from {oldBasis} to {newBasis}".format(name=branchName, oldBasis=prevBasisBranchName, newBasis=basisBranchName))
-                
-            diff = self.TryDiff(streamName=tr.stream.name, firstTrNumber=(tr.id - 1), secondTrNumber=tr.id)
-            deletedPathList = self.DeleteDiffItemsFromRepo(diff=diff)
-            popResult = self.TryPop(streamName=tr.stream.name, transaction=tr)
+                    if basisBranchName is not None:
+                        # If the prevBasisBranchName is None, this would mean that we haven't been tracking that stream and that this stream is potentially not rooted/merged
+                        # anywhere (i.e. it is an orphaned branch). If we just reset the branch we will likely lose all the history up until this point. But do we care?
+                        # We could drop a tag at the current point to preserve the history but is it necessary? All the relevant changes will appear on the new branch anyway,
+                        # since we are not doing a rebase. Which conveniently mentions the other option, rebase, which could be used here.
+                        newBasisCommitHash = self.GetLastCommitHash(branchName=basisBranchName)
+                        if newBasisCommitHash is None:
+                            raise Exception("Failed to retrieve the last commit hash for new basis stream branch {bs}".format(bs=basisBranchName))
+                        if self.gitRepo.raw_cmd([ u'git', u'reset', u'--hard', newBasisCommitHash ]) is None:
+                            raise Exception("Failed to rebase branch {br} from {old} to {new}. Err: {err}".format(br=branchName, old=prevBasisBranchName, new=basisBranchName, err=self.gitRepo.lastStderr))
+                        self.config.logger.info("Rebased branch {name} from {oldBasis} to {newBasis}".format(name=branchName, oldBasis=prevBasisBranchName, newBasis=basisBranchName))
+                    
+                diff = self.TryDiff(streamName=tr.stream.name, firstTrNumber=(tr.id - 1), secondTrNumber=tr.id)
+                deletedPathList = self.DeleteDiffItemsFromRepo(diff=diff)
+                popResult = self.TryPop(streamName=tr.stream.name, transaction=tr)
 
-            commitMessage = self.GenerateCommitMessage(transaction=tr, stream=tr.stream)
-            commitHash = self.Commit(depot=depot, stream=tr.stream, transaction=tr, branchName=branchName, allowEmptyCommit=True, noNotes=True, messageOverride=commitMessage)
-            if commitHash is None:
-                raise Exception("Failed to add chstream commit")
+                commitMessage = self.GenerateCommitMessage(transaction=tr, stream=tr.stream)
+                commitHash = self.Commit(depot=depot, stream=tr.stream, transaction=tr, branchName=branchName, allowEmptyCommit=True, noNotes=True, messageOverride=commitMessage)
+                if commitHash is None:
+                    raise Exception("Failed to add chstream commit")
 
         elif tr.Type == "add":
             streamName, streamNumber = tr.affectedStream()
             stream = accurev.show.streams(depot=depot, stream=streamNumber, timeSpec=tr.id, useCache=self.config.accurev.UseCommandCache()).streams[0]
-            branchName = self.SanitizeBranchName(stream.name)
-            if self.gitRepo.checkout(branchName=branchName) is None:
-                raise Exception("Failed to checkout branch {br}!".format(br=branchName))
-            elif stream.Type != "workspace":
-                raise Exception("Invariant error! Assumed that a {Type} transaction can only occur on a workspace. Stream {name}, type {streamType}".format(Type=tr.type, name=stream.name, streamType=stream.Type))
-            # The add command only introduces new files so we can safely use only `accurev pop` to get the changes.
-            self.TryPop(streamName=stream.name, transaction=tr)
-            
-            commitMessage = self.GenerateCommitMessage(transaction=tr, stream=stream)
-            self.Commit(depot=depot, stream=stream, transaction=tr, branchName=branchName, noNotes=True, messageOverride=commitMessage)
+            branchName = self.GetBranchNameFromStream(stream, streamNumberMap)
+            if branchName is not None:
+                if self.gitRepo.checkout(branchName=branchName) is None:
+                    raise Exception("Failed to checkout branch {br}!".format(br=branchName))
+                elif stream.Type != "workspace":
+                    raise Exception("Invariant error! Assumed that a {Type} transaction can only occur on a workspace. Stream {name}, type {streamType}".format(Type=tr.type, name=stream.name, streamType=stream.Type))
+                # The add command only introduces new files so we can safely use only `accurev pop` to get the changes.
+                self.TryPop(streamName=stream.name, transaction=tr)
+                
+                commitMessage = self.GenerateCommitMessage(transaction=tr, stream=stream)
+                self.Commit(depot=depot, stream=stream, transaction=tr, branchName=branchName, noNotes=True, messageOverride=commitMessage)
             
         elif tr.Type in [ "keep", "co", "move" ]:
             streamName, streamNumber = tr.affectedStream()
             stream = accurev.show.streams(depot=depot, stream=streamNumber, timeSpec=tr.id, useCache=self.config.accurev.UseCommandCache()).streams[0]
-            branchName = self.SanitizeBranchName(stream.name)
-            if self.gitRepo.checkout(branchName=branchName) is None:
-                raise Exception("Failed to checkout branch {br}!".format(br=branchName))
-            elif stream.Type != "workspace":
-                raise Exception("Invariant error! Assumed that a {Type} transaction can only occur on a workspace. Stream {name}, type {streamType}".format(Type=tr.type, name=stream.name, streamType=stream.Type))
-            
-            diff = self.TryDiff(streamName=stream.name, firstTrNumber=(tr.id - 1), secondTrNumber=tr.id)
-            deletedPathList = self.DeleteDiffItemsFromRepo(diff=diff)
-            popResult = self.TryPop(streamName=stream.name, transaction=tr)
+            branchName = self.GetBranchNameFromStream(stream, streamNumberMap)
+            if branchName is not None:
+                if self.gitRepo.checkout(branchName=branchName) is None:
+                    raise Exception("Failed to checkout branch {br}!".format(br=branchName))
+                elif stream.Type != "workspace":
+                    raise Exception("Invariant error! Assumed that a {Type} transaction can only occur on a workspace. Stream {name}, type {streamType}".format(Type=tr.type, name=stream.name, streamType=stream.Type))
+                
+                diff = self.TryDiff(streamName=stream.name, firstTrNumber=(tr.id - 1), secondTrNumber=tr.id)
+                deletedPathList = self.DeleteDiffItemsFromRepo(diff=diff)
+                popResult = self.TryPop(streamName=stream.name, transaction=tr)
 
-            commitMessage = self.GenerateCommitMessage(transaction=tr, stream=stream)
-            commitHash = self.Commit(depot=depot, stream=stream, transaction=tr, branchName=branchName, allowEmptyCommit=True, noNotes=True, messageOverride=commitMessage)
-            if commitHash is None:
-                raise Exception("Failed to commit a `{Type}`! tr={tr}".format(tr=tr.id, Type=tr.Type))
+                commitMessage = self.GenerateCommitMessage(transaction=tr, stream=stream)
+                commitHash = self.Commit(depot=depot, stream=stream, transaction=tr, branchName=branchName, allowEmptyCommit=True, noNotes=True, messageOverride=commitMessage)
+                if commitHash is None:
+                    raise Exception("Failed to commit a `{Type}`! tr={tr}".format(tr=tr.id, Type=tr.Type))
             
         elif tr.Type == "promote":
             # Promotes can be thought of as merges or cherry-picks in git and deciding which one we are dealing with
@@ -1292,7 +1320,7 @@ class AccuRev2Git(object):
             if dstStream is None or dstStream.streams is None or len(dstStream.streams) == 0:
                 raise Exception("Error! accurev show streams -p {d} -s {s} -t {t} failed!".format(d=depot, s=dstStreamName, t=tr.id))
             dstStream = dstStream.streams[0]
-            dstBranchName = self.SanitizeBranchName(dstStream.name)
+            dstBranchName = self.GetBranchNameFromStream(dstStream, streamNumberMap)
 
             # Determine the stream from which the files in this this transaction were promoted.
             srcStreamName, srcStreamNumber = trHist.fromStream()
@@ -1322,7 +1350,7 @@ class AccuRev2Git(object):
                 if srcStream is None or srcStream.streams is None or len(srcStream.streams) == 0:
                     raise Exception("Error! accurev show streams -p {d} -s {s} -t {t} failed!".format(d=depot, s=srcStreamName if srcStreamName is not None else srcStreamNumber, t=tr.id))
                 srcStream = srcStream.streams[0]
-                srcBranchName = self.SanitizeBranchName(srcStream.name)
+                srcBranchName = self.GetBranchNameFromStream(srcStream, streamNumberMap)
 
                 # Perform the git merge of the 'from stream' into the 'to stream' but only if they have the same contents.
                 mergeCommitMessage = self.GenerateCommitMessage(transaction=tr, stream=dstStream, srcStream=srcStream, friendlyMessage="Merged {src} into {dst} - accurev promote.".format(src=srcBranchName, dst=dstBranchName))
@@ -1331,7 +1359,7 @@ class AccuRev2Git(object):
             
             affectedStreams = accurev.ext.affected_streams(depot=depot, transaction=tr.id, includeWorkspaces=True, ignoreTimelocks=False, doDiffs=True, useCache=self.config.accurev.UseCommandCache())
             for stream in affectedStreams:
-                branchName = self.SanitizeBranchName(stream.name)
+                branchName = self.GetBranchNameFromStream(stream, streamNumberMap)
                 if stream.streamNumber != dstStream.streamNumber and (srcStream is None or stream.streamNumber != srcStream.streamNumber) and (streamNumberMap is None or stream.streamNumber in streamNumberMap):
                     mergeCommitMessage = self.GenerateCommitMessage(transaction=tr, stream=stream, dstStream=dstStream, srcStream=srcStream, friendlyMessage="Merged {src} into {dst} - accurev parent stream inheritance.".format(src=dstBranchName, dst=branchName))
                     cherryPickCommitMessage = self.GenerateCommitMessage(transaction=tr, stream=stream, dstStream=dstStream, srcStream=srcStream, friendlyMessage="Cherry-picked {src} into {dst} - accurev parent stream inheritance.".format(src=dstBranchName, dst=branchName))
@@ -1340,29 +1368,29 @@ class AccuRev2Git(object):
         elif tr.Type in [ "defunct", "purge" ]:
             streamName, streamNumber = tr.affectedStream()
             stream = accurev.show.streams(depot=depot, stream=streamNumber, timeSpec=tr.id, useCache=self.config.accurev.UseCommandCache()).streams[0]
-            branchName = self.SanitizeBranchName(stream.name)
-            if self.gitRepo.checkout(branchName=branchName) is None:
-                raise Exception("Failed to checkout branch {br}!".format(br=branchName))
-            
-            diff = self.TryDiff(streamName=stream.name, firstTrNumber=(tr.id - 1), secondTrNumber=tr.id)
-            deletedPathList = self.DeleteDiffItemsFromRepo(diff=diff)
-            popResult = self.TryPop(streamName=stream.name, transaction=tr)
-
-            commitMessage = self.GenerateCommitMessage(transaction=tr, stream=stream)
-            commitHash = self.Commit(depot=depot, stream=stream, transaction=tr, branchName=branchName, allowEmptyCommit=True, noNotes=True, messageOverride=commitMessage)
-            if commitHash is None:
-                raise Exception("Failed to commit a `{Type}`! tr={tr}".format(Type=tr.Type, tr=tr.id))
-            
-            if stream.Type != "workspace":
-                self.config.logger.info("Note: {trType} transaction {id} on stream {stream} ({streamType}). Merging down-stream. Usually defuncts occur on workspaces!".format(trType=tr.Type, id=tr.id, stream=stream.name, streamType=stream.Type))
-                affectedStreams = accurev.ext.affected_streams(depot=depot, transaction=tr.id, includeWorkspaces=True, ignoreTimelocks=False, doDiffs=True, useCache=self.config.accurev.UseCommandCache())
-                for s in affectedStreams:
-                    if s.streamNumber != stream.streamNumber and (streamNumberMap is None or stream.streamNumber in streamNumberMap):
-                        bName = self.SanitizeBranchName(s.name)
-                        mergeCommitMessage = self.GenerateCommitMessage(transaction=tr, stream=s, dstStream=stream, friendlyMessage="Merged {src} into {dst} - accurev parent stream inheritance ({trType}).".format(src=branchName, dst=bName, trType=tr.Type))
-                        cherryPickCommitMessage = self.GenerateCommitMessage(transaction=tr, stream=s, dstStream=stream, friendlyMessage="Merged {src} into {dst} - accurev parent stream inheritance ({trType}).".format(src=branchName, dst=bName, trType=tr.Type))
-                        self.GitCommitOrMerge(depot=depot, dstStream=s, srcStream=stream, tr=tr, commitMessageOverride=cherryPickCommitMessage, mergeMessageOverride=commitMessage, streamNumberMap=streamNumberMap)
+            branchName = self.GetBranchNameFromStream(stream, streamNumberMap)
+            if branchName is not None:
+                if self.gitRepo.checkout(branchName=branchName) is None:
+                    raise Exception("Failed to checkout branch {br}!".format(br=branchName))
                 
+                diff = self.TryDiff(streamName=stream.name, firstTrNumber=(tr.id - 1), secondTrNumber=tr.id)
+                deletedPathList = self.DeleteDiffItemsFromRepo(diff=diff)
+                popResult = self.TryPop(streamName=stream.name, transaction=tr)
+
+                commitMessage = self.GenerateCommitMessage(transaction=tr, stream=stream)
+                commitHash = self.Commit(depot=depot, stream=stream, transaction=tr, branchName=branchName, allowEmptyCommit=True, noNotes=True, messageOverride=commitMessage)
+                if commitHash is None:
+                    raise Exception("Failed to commit a `{Type}`! tr={tr}".format(Type=tr.Type, tr=tr.id))
+                
+                if stream.Type != "workspace":
+                    self.config.logger.info("Note: {trType} transaction {id} on stream {stream} ({streamType}). Merging down-stream. Usually defuncts occur on workspaces!".format(trType=tr.Type, id=tr.id, stream=stream.name, streamType=stream.Type))
+                    affectedStreams = accurev.ext.affected_streams(depot=depot, transaction=tr.id, includeWorkspaces=True, ignoreTimelocks=False, doDiffs=True, useCache=self.config.accurev.UseCommandCache())
+                    for s in affectedStreams:
+                        if s.streamNumber != stream.streamNumber and (streamNumberMap is None or stream.streamNumber in streamNumberMap):
+                            bName = self.GetBranchNameFromStream(s, streamNumberMap)
+                            mergeCommitMessage = self.GenerateCommitMessage(transaction=tr, stream=s, dstStream=stream, friendlyMessage="Merged {src} into {dst} - accurev parent stream inheritance ({trType}).".format(src=branchName, dst=bName, trType=tr.Type))
+                            cherryPickCommitMessage = self.GenerateCommitMessage(transaction=tr, stream=s, dstStream=stream, friendlyMessage="Merged {src} into {dst} - accurev parent stream inheritance ({trType}).".format(src=branchName, dst=bName, trType=tr.Type))
+                            self.GitCommitOrMerge(depot=depot, dstStream=s, srcStream=stream, tr=tr, commitMessageOverride=cherryPickCommitMessage, mergeMessageOverride=commitMessage, streamNumberMap=streamNumberMap)
             
         elif tr.Type == "defcomp":
             self.config.logger.info("Ignoring transaction #{id} - {Type}".format(id=tr.id, Type=tr.Type))
@@ -1463,9 +1491,15 @@ class AccuRev2Git(object):
                     sInfo = accurev.show.streams(depot=self.config.accurev.depot, stream=s).streams[0]
                     streamNumberMap[sInfo.streamNumber] = streamMap[s]
                 state["stream_number_map"] = streamNumberMap
+            else:
+                # Our stream number map has been loaded from JSON. Before it was stored as JSON it had integer keys but since
+                # it was stored and then loaded again the keys have become strings. Here we convert them back to integers.
+                snm = {}
+                for n in streamNumberMap:
+                    snm[int(n)] = streamNumberMap[n]
+                streamNumberMap = snm
 
             if nextTrMap is None or len(nextTrMap) == 0: # This is true if we haven't initialized these variables before...
-                streamNumberMap = {}
                 nextTrMap = {}
                 for s in streamMap:
                     firstTr = self.GetFirstTransaction(depot=self.config.accurev.depot, streamName=s, startTransaction=startTransaction, endTransaction=endTr.id)
