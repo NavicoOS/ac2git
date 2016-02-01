@@ -1282,8 +1282,6 @@ class AccuRev2Git(object):
             if branchName is not None:
                 if self.gitRepo.checkout(branchName=branchName) is None:
                     raise Exception("Failed to checkout branch {br}!".format(br=branchName))
-                elif stream.Type != "workspace":
-                    raise Exception("Invariant error! Assumed that a {Type} transaction can only occur on a workspace. Stream {name}, type {streamType}".format(Type=tr.type, name=stream.name, streamType=stream.Type))
                 
                 diff = self.TryDiff(streamName=stream.name, firstTrNumber=(tr.id - 1), secondTrNumber=tr.id)
                 deletedPathList = self.DeleteDiffItemsFromRepo(diff=diff)

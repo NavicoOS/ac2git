@@ -405,7 +405,42 @@ class obj:
         
     class Transaction(object):
         class Version(object):
-            def __init__(self, path, eid, virtual, real, virtualNamedVersion, realNamedVersion, ancestor=None, ancestorNamedVersion=None, mergedAgainst=None, mergedAgainstNamedVersion=None, elemType=None, dir=None, mtime=None, checksum=None, size=None):
+            class RevertSegment(object):
+                def __init__(self, headStream=None, headStreamName=None, headVersion=None, basisStream=None, basisStreamName=None, basisVersion=None, isTipVersion=None):
+                    self.headStream      = IntOrNone(headStream)
+                    self.headStreamName  = headStreamName
+                    self.headVersion     = IntOrNone(headVersion)
+                    self.basisStream     = IntOrNone(basisStream)
+                    self.basisStreamName = basisStreamName
+                    self.basisVersion    = IntOrNone(basisVersion)
+                    self.isTipVersion    = obj.Bool.fromstring(isTipVersion)
+
+                def __repr__(self):
+                    str = "obj.Transaction.Version.RevertSegment("
+                    str += "headStream=" + repr(self.headStream)
+                    str += ", headStreamName=" + repr(self.headStreamName)
+                    str += ", headVersion=" + repr(self.headVersion)
+                    str += ", basisStream=" + repr(self.basisStream)
+                    str += ", basisStreamName=" + repr(self.basisStreamName)
+                    str += ", basisVersion=" + repr(self.basisVersion)
+                    str += ", isTipVersion=" + repr(self.isTipVersion)
+                    return str
+
+                @classmethod
+                def fromxmlelement(cls, xmlElement):
+                    if xmlElement is not None and xmlElement.tag == 'segment':
+                        headStream      = xmlElement.attrib.get('head_stream')
+                        headStreamName  = xmlElement.attrib.get('head_stream_name')
+                        headVersion     = xmlElement.attrib.get('head_version')
+                        basisStream     = xmlElement.attrib.get('basis_stream')
+                        basisStreamName = xmlElement.attrib.get('basis_stream_name')
+                        basisVersion    = xmlElement.attrib.get('basis_version')
+                        isTipVersion    = xmlElement.attrib.get('is_tip_version')
+                        return cls(headStream=headStream, headStreamName=headStreamName, headVersion=headVersion, basisStream=basisStream, basisStreamName=basisStreamName, basisVersion=basisVersion, isTipVersion=isTipVersion)
+
+                    return None
+
+            def __init__(self, path, eid, virtual, real, virtualNamedVersion, realNamedVersion, ancestor=None, ancestorNamedVersion=None, mergedAgainst=None, mergedAgainstNamedVersion=None, elemType=None, dir=None, mtime=None, checksum=None, size=None, revertSegments=None):
                 self.path                      = path
                 self.eid                       = IntOrNone(eid)
                 self.virtual                   = obj.Version.fromstring(virtual)
@@ -421,6 +456,7 @@ class obj:
                 self.mtime                     = UTCDateTimeOrNone(mtime)
                 self.checksum                  = checksum
                 self.size                      = size
+                self.revertSegments            = revertSegments # Either None or a list of revert segments
         
             def __repr__(self):
                 str = "Transaction.Version(path="    + repr(self.path)
@@ -443,6 +479,8 @@ class obj:
                     str += ", cksum="           + repr(self.checksum)
                 if self.size is not None:
                     str += ", size="            + repr(self.size)
+                if self.revertSegments is not None:
+                    str += ", revertSegments="  + repr(self.revertSegments)
                 str += ")"
                 
                 return str
@@ -466,7 +504,15 @@ class obj:
                     cksum                     = xmlElement.attrib.get('cksum')
                     sz                        = xmlElement.attrib.get('sz')
                     
-                    return cls(path, eid, virtual, real, virtualNamedVersion, realNamedVersion, ancestor, ancestorNamedVersion, mergedAgainst, mergedAgainstNamedVersion, elemType, dir, mtime, cksum, sz)
+                    revertSegments = None
+                    revertSegmentsElem = xmlElement.find('revertSegments')
+                    if revertSegmentsElem is not None:
+                        revertSegments = []
+                        segmentsElemList = revertSegmentsElem.findall('segment')
+                        for segmentElem in segmentsElemList:
+                            revertSegments.append(obj.Transaction.Version.RevertSegment.fromxmlelement(segmentElem))
+
+                    return cls(path, eid, virtual, real, virtualNamedVersion, realNamedVersion, ancestor, ancestorNamedVersion, mergedAgainst, mergedAgainstNamedVersion, elemType, dir, mtime, cksum, sz, revertSegments)
 
                 
                 return None
