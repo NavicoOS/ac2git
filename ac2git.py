@@ -1138,6 +1138,9 @@ class AccuRev2Git(object):
         # Perform the git merge of the 'from stream' into the 'to stream' but only if they have the same contents.
         dstBranchName = self.GetBranchNameFromStream(dstStream, streamNumberMap)
         srcBranchName = self.GetBranchNameFromStream(srcStream, streamNumberMap)
+        if dstBranchName is None:
+            return None
+
         if self.gitRepo.checkout(branchName=dstBranchName) is None:
             raise Exception("git checkout branch {br}, failed!".format(br=dstBranchName))
         
@@ -1150,6 +1153,8 @@ class AccuRev2Git(object):
             raise Exception("Failed to commit promote {tr}!".format(tr=tr.id))
         diff = None
         if streamNumberMap is None or srcStream.streamNumber in streamNumberMap:
+            if srcBranchName is None:
+                raise Exception("Invariant error! Source branch should exist but was {b}. Stream {s}".format(b=srcBranchName, s=srcStream.name))
             diff = self.gitRepo.raw_cmd([u'git', u'diff', u'--stat', dstBranchName, srcBranchName, u'--' ])
             if diff is None:
                 raise Exception("Failed to diff new branch {nBr} to old branch {oBr}! Err: {err}".format(nBr=dstBranchName, oBr=srcBranchName, err=self.gitRepo.lastStderr))
@@ -1282,6 +1287,8 @@ class AccuRev2Git(object):
             if branchName is not None:
                 if self.gitRepo.checkout(branchName=branchName) is None:
                     raise Exception("Failed to checkout branch {br}!".format(br=branchName))
+                if stream.Type != "workspace":
+                    self.config.logger.info("Note: {trType} transaction {id} on stream {stream} ({streamType}). Merging down-stream. Usually {trType}s occur on workspaces!".format(trType=tr.Type, id=tr.id, stream=stream.name, streamType=stream.Type))
                 
                 diff = self.TryDiff(streamName=stream.name, firstTrNumber=(tr.id - 1), secondTrNumber=tr.id)
                 deletedPathList = self.DeleteDiffItemsFromRepo(diff=diff)
@@ -1383,7 +1390,7 @@ class AccuRev2Git(object):
                     raise Exception("Failed to commit a `{Type}`! tr={tr}".format(Type=tr.Type, tr=tr.id))
                 
                 if stream.Type != "workspace":
-                    self.config.logger.info("Note: {trType} transaction {id} on stream {stream} ({streamType}). Merging down-stream. Usually defuncts occur on workspaces!".format(trType=tr.Type, id=tr.id, stream=stream.name, streamType=stream.Type))
+                    self.config.logger.info("Note: {trType} transaction {id} on stream {stream} ({streamType}). Merging down-stream. Usually {trType}s occur on workspaces!".format(trType=tr.Type, id=tr.id, stream=stream.name, streamType=stream.Type))
                     affectedStreams = accurev.ext.affected_streams(depot=depot, transaction=tr.id, includeWorkspaces=True, ignoreTimelocks=False, doDiffs=True, useCache=self.config.accurev.UseCommandCache())
                     for s in affectedStreams:
                         if s.streamNumber != stream.streamNumber and (streamNumberMap is None or stream.streamNumber in streamNumberMap):
