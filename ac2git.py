@@ -1707,7 +1707,7 @@ class AccuRev2Git(object):
             totalTransactions = endTr.id - state["transaction"]           # Represents the total number of transactions processed since we started (this invokation).
             eta = (runningTime/processedTransactions) * (totalTransactions - processedTransactions)  # Expected time until done (in seconds).
             etaDays, etaHours, etaMin, etaSec = int(eta / 60 / 60 / 24), int((eta / 60 / 60) % 24), int((eta / 60) % 60), (eta % 60)
-            self.config.logger.info("Progress {progress: >5.2f}%, {processed}/{total}, avg. {throughput:.2f} tr/s ({timeTaken:.2f} s/tr). ETA {etaDays}d {etaHours}:{etaMin:0>2d}:{etaSec:0>5.2f} (h:mm:ss.ss).".format(progress=((state["transaction"] - 1)/endTr.id), processed=(state["transaction"] - 1), total=endTr.id, throughput=(processedTransactions/runningTime), timeTaken=(runningTime/processedTransactions), etaDays=etaDays, etaHours=etaHours, etaMin=etaMin, etaSec=etaSec))
+            self.config.logger.info("Progress {progress: >5.2f}%, {processed}/{total}, avg. {throughput:.2f} tr/s ({timeTaken:.2f} s/tr). ETA {etaDays}d {etaHours}:{etaMin:0>2d}:{etaSec:0>5.2f} (h:mm:ss.ss).".format(progress=((state["transaction"] - int(self.config.accurev.startTransaction))*100/(endTr.id - int(self.config.accurev.startTransaction))), processed=(state["transaction"] - 1), total=endTr.id, throughput=(processedTransactions/runningTime), timeTaken=(runningTime/processedTransactions), etaDays=etaDays, etaHours=etaHours, etaMin=etaMin, etaSec=etaSec))
 
             
     def InitGitRepo(self, gitRepoPath):
