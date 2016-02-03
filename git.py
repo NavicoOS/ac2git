@@ -461,7 +461,92 @@ class repo(object):
         
         return (output is not None)
     
-    def commit(self, message=None, messageFile=None, author=None, date=None, tz=None, committer=None, committer_date=None, committer_tz=None, allow_empty=False, allow_empty_message=False, gitOpts=[]):
+    def write_tree(self, missingOk=False, prefix=None):
+        cmd = [ gitCmd ]
+        
+        if gitOpts is not None and len(gitOpts) > 0:
+            cmd.extend(gitOpts)
+
+        cmd.append(u'write-tree')
+
+        if missingOk:
+            cmd.append(u'--missing-ok')
+        if prefix is not None:
+            cmd.append(u'--prefix={prefix}'.format(prefix=prefix))
+
+        # Execute the command
+        output = self._docmd(cmd, env=newEnv)
+
+        return output
+
+    def commit_tree(self, tree=None, parents=[], message=None, message_file=None, author_name=None, author_email=None, author_date=None, author_tz=None, committer_name=None, committer_email=None, committer_date=None, committer_tz=None, gpgKey=None, noGpgSign=False, gitOpts=[], allow_empty=False):
+        # git commit example output
+        # =========================
+        # git commit -m "Parameterizing hardcoded values."
+        # [master 0a0d053] Parameterizing hardcoded values.
+        #  1 file changed, 9 insertions(+), 7 deletions(-)
+        #--------------------------
+        cmd = [ gitCmd ]
+        
+        if gitOpts is not None and len(gitOpts) > 0:
+            cmd.extend(gitOpts)
+
+        cmd.append(u'commit-tree')
+
+        if parents is not None:
+            for parent in parents:
+                cmd.extend([ u'-p', parent ])
+
+        if noGpgSign:
+            cmd.append(u'--no-gpg-sign')
+        elif gpgKey is not None:
+            cmd.append(u'-S{key}'.format(key=gpgKey))
+
+        if message is not None and len(message) > 0:
+            cmd.extend([ u'-m', message ])
+        elif message_file is not None:
+            cmd.extend([ u'-F', message_file ])
+        elif not allow_empty_message:
+            raise Exception(u'Error, tried to commit with empty message')
+
+        if tree is None:
+            if allow_empty:
+                tree = '4b825dc642cb6eb9a060e54bf8d69288fbee4904' # Git's empty tree. See http://stackoverflow.com/questions/9765453/gits-semi-secret-empty-tree
+            else:
+                raise Exception("git.commit_tree() - Cannot commit empty without the allow_empty being set to true.")
+
+        cmd.append(tree)
+        
+        newEnv = os.environ.copy()
+        
+        # Set the author information
+        if author_name is not None:
+            newEnv['GIT_AUTHOR_NAME'] = committer_name
+        if author_email is not None:
+            newEnv['GIT_AUTHOR_EMAIL'] = committer_email
+        
+        if author_date is not None:
+            dateStr = getDatetimeString(author_date, author_tz)
+            if dateStr is not None:
+                newEnv['GIT_AUTHOR_DATE'] = str('{0}'.format(committer_date_str))
+        
+        # Set the committer information
+        if committer_name is not None:
+            newEnv['GIT_COMMITTER_NAME'] = committer_name
+        if committer_email is not None:
+            newEnv['GIT_COMMITTER_EMAIL'] = committer_email
+        
+        if committer_date is not None:
+            committer_date_str = getDatetimeString(committer_date, committer_tz)
+            if committer_date_str is not None:
+                newEnv['GIT_COMMITTER_DATE'] = str('{0}'.format(committer_date_str))
+        
+        # Execute the command
+        output = self._docmd(cmd, env=newEnv)
+
+        return output
+
+    def commit(self, message=None, message_file=None, author_name=None, author_email=None, author_date=None, author_tz=None, committer_name=None, committer_email=None, committer_date=None, committer_tz=None, allow_empty=False, allow_empty_message=False, gitOpts=[]):
         # git commit example output
         # =========================
         # git commit -m "Parameterizing hardcoded values."
@@ -480,31 +565,31 @@ class repo(object):
         if allow_empty_message:
             cmd.append(u'--allow-empty-message')
 
-        if author is not None:
-            cmd.append(u'--author="{0}"'.format(author))
-        
-        if date is not None:
-            dateStr = getDatetimeString(date, tz)
-            if dateStr is not None:
-                cmd.append(u'--date="{0}"'.format(dateStr))
-        
         if message is not None and len(message) > 0:
             cmd.extend([ u'-m', message ])
-        elif messageFile is not None:
-            cmd.extend([ u'-F', messageFile ])
+        elif message_file is not None:
+            cmd.extend([ u'-F', message_file ])
         elif not allow_empty_message:
             raise Exception(u'Error, tried to commit with empty message')
         
         newEnv = os.environ.copy()
         
-        # Set the new committer information
-        if committer is not None:
-            m = re.search(r'(.*?)<(.*?)>', committer)
-            if m is not None:
-                committerName = m.group(1).strip()
-                committerEmail = m.group(2).strip()
-                newEnv['GIT_COMMITTER_NAME'] = str(committerName)
-                newEnv['GIT_COMMITTER_EMAIL'] = str(committerEmail)
+        # Set the author information
+        if author_name is not None:
+            newEnv['GIT_AUTHOR_NAME'] = committer_name
+        if author_email is not None:
+            newEnv['GIT_AUTHOR_EMAIL'] = committer_email
+        
+        if author_date is not None:
+            dateStr = getDatetimeString(author_date, author_tz)
+            if dateStr is not None:
+                newEnv['GIT_AUTHOR_DATE'] = str('{0}'.format(committer_date_str))
+        
+        # Set the committer information
+        if committer_name is not None:
+            newEnv['GIT_COMMITTER_NAME'] = committer_name
+        if committer_email is not None:
+            newEnv['GIT_COMMITTER_EMAIL'] = committer_email
         
         if committer_date is not None:
             committer_date_str = getDatetimeString(committer_date, committer_tz)
