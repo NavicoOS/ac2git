@@ -1033,7 +1033,11 @@ class AccuRev2Git(object):
 
             if depot is None or len(depot) == 0:
                 depot = streamInfo.depotName
-            tr, commitHash = self.ProcessStream(depot=depot, stream=streamInfo, branchName=branch, startTransaction=self.config.accurev.startTransaction, endTransaction=self.config.accurev.endTransaction)
+
+            endTrHist = accurev.hist(depot=depot, timeSpec=self.config.accurev.endTransaction)
+            endTr = endTrHist.transactions[0]
+
+            tr, commitHash = self.ProcessStream(depot=depot, stream=streamInfo, branchName=branch, startTransaction=self.config.accurev.startTransaction, endTransaction=endTr.id)
             if tr is None or commitHash is None:
                 self.config.logger.error( "Error while processing stream {0}, branch {1}".format(stream, branch) )
 
