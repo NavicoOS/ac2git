@@ -1677,6 +1677,18 @@ CREATE TABLE IF NOT EXISTS command_cache (
             , allElementsFlag=False, elementId=None, transactionKind=None, commentString=None, username=None
             , expandedMode=False, showIssues=False, verboseMode=False, listMode=False, showStatus=False, transactionMode=False
             , isXmlOutput=False, outputFilename=None, useCache=False):
+        # Check the useCache flag for violations! It isn't safe to use the cache for commands that use the now or highest keywords!
+        if useCache:
+            if timeSpec is None:
+                ts = None
+            elif not isinstance(timeSpec, obj.TimeSpec):
+                ts = obj.TimeSpec.fromstring(timeSpec)
+            else:
+                ts = timeSpec
+                
+            useCache = ts is not None and not (isinstance(ts.start, str) or isinstance(ts.end, str)) # If both values are non-keywords, we can cache them.
+            useCache = useCache and listFile is None and outputFilename is None   # Ensure that we don't have any file operations...
+        
         cmd = [ raw._accurevCmd, "hist" ]
 
         # Interpret options
@@ -1736,6 +1748,18 @@ CREATE TABLE IF NOT EXISTS command_cache (
             , all=False, onlyDefaultGroup=False, onlyKept=False, onlyModified=False, onlyExtModified=False, onlyOverlapped=False, onlyPending=False
             , ignoreBlankLines=False, isContextDiff=False, informationOnly=False, ignoreCase=False, ignoreWhitespace=False, ignoreAmountOfWhitespace=False, useGUI=False
             , extraParams=None, isXmlOutput=False, useCache=False):
+        # Validate the useCache command. It isn't safe to use the cache for keywords highest or now.
+        if useCache:
+            if transactionRange is None:
+                ts = None
+            elif not isinstance(transactionRange, obj.TimeSpec):
+                ts = obj.TimeSpec.fromstring(transactionRange)
+            else:
+                ts = transactionRange
+                
+            useCache = ts is not None and not (isinstance(ts.start, str) or isinstance(ts.end, str)) # If both values are non-keywords, we can cache them.
+            useCache = useCache and extraParams is None # I'm not sure what the purpose of extraParams is atm so disable the cache for the unknown.
+
         cmd = [ raw._accurevCmd, "diff" ]
         
         if all:
@@ -2121,17 +2145,6 @@ def hist( depot=None, stream=None, timeSpec=None, listFile=None, isListFileXml=F
         , allElementsFlag=False, elementId=None, transactionKind=None, commentString=None, username=None
         , expandedMode=True, showIssues=False, verboseMode=False, listMode=False, showStatus=False, transactionMode=False
         , outputFilename=None, useCache=False):
-    if useCache:
-        if timeSpec is None:
-            ts = None
-        elif not isinstance(timeSpec, obj.TimeSpec):
-            ts = obj.TimeSpec.fromstring(timeSpec)
-        else:
-            ts = timeSpec
-            
-        useCache = ts is not None and not (isinstance(ts.start, str) or isinstance(ts.end, str)) # If both values are non-keywords, we can cache them.
-        useCache = useCache and listFile is None and outputFilename is None   # Ensure that we don't have any file operations...
-        
     xmlOutput = raw.hist(depot=depot, stream=stream, timeSpec=timeSpec, listFile=listFile, isListFileXml=isListFileXml, elementList=elementList
         , allElementsFlag=allElementsFlag, elementId=elementId, transactionKind=transactionKind, commentString=commentString, username=username
         , expandedMode=expandedMode, showIssues=showIssues, verboseMode=verboseMode, listMode=listMode, showStatus=showStatus, transactionMode=transactionMode
@@ -2143,17 +2156,6 @@ def diff(verSpec1=None, verSpec2=None, transactionRange=None, toBacking=False, t
         , all=False, onlyDefaultGroup=False, onlyKept=False, onlyModified=False, onlyExtModified=False, onlyOverlapped=False, onlyPending=False
         , ignoreBlankLines=False, isContextDiff=False, informationOnly=False, ignoreCase=False, ignoreWhitespace=False, ignoreAmountOfWhitespace=False, useGUI=False
         , extraParams=None, useCache=False):
-    if useCache:
-        if transactionRange is None:
-            ts = None
-        elif not isinstance(transactionRange, obj.TimeSpec):
-            ts = obj.TimeSpec.fromstring(transactionRange)
-        else:
-            ts = transactionRange
-            
-        useCache = ts is not None and not (isinstance(ts.start, str) or isinstance(ts.end, str)) # If both values are non-keywords, we can cache them.
-        useCache = useCache and extraParams is None # I'm not sure what the purpose of extraParams is atm so disable the cache for the unknown.
-
     xmlOutput = raw.diff(verSpec1=verSpec1, verSpec2=verSpec2, transactionRange=transactionRange, toBacking=toBacking, toOtherBasisVersion=toOtherBasisVersion, toPrevious=toPrevious
         , all=all, onlyDefaultGroup=onlyDefaultGroup, onlyKept=onlyKept, onlyModified=onlyModified, onlyExtModified=onlyExtModified, onlyOverlapped=onlyOverlapped, onlyPending=onlyPending
         , ignoreBlankLines=ignoreBlankLines, isContextDiff=isContextDiff, informationOnly=informationOnly, ignoreCase=ignoreCase, ignoreWhitespace=ignoreWhitespace, ignoreAmountOfWhitespace=ignoreAmountOfWhitespace, useGUI=useGUI

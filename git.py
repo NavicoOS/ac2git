@@ -29,7 +29,7 @@ class GitStatus(object):
     #                (untracked content, modified content)
     #              suffixed messages. This suffix is currently ignored.
     fileRe          = re.compile(pattern=r'^\s+(new file|modified|deleted|renamed):\s+(.+)\s*(\(.+\))?$')
-    untrackedFileRe = re.compile(pattern=r'^\s+(\S+)\s*$')
+    untrackedFileRe = re.compile(pattern=r'^\s+(.+?)\s*?$')
         
     def __init__(self, branch=None, staged=[], changed=[], untracked=[], initial_commit=None, detached_head=None):
         self.branch    = branch    # Name of the branch.
@@ -435,11 +435,11 @@ class repo(object):
         else:
             raise Exception(u'Error, tried to add empty file list')
     
-    def add(self, fileList = [], force=False, update=False, all=False, gitOpts=[]):
+    def add(self, fileList = [], force=False, update=False, all=False, git_opts=[]):
         cmd = [ gitCmd ]
         
-        if gitOpts is not None and len(gitOpts) > 0:
-            cmd.extend(gitOpts)
+        if git_opts is not None and len(git_opts) > 0:
+            cmd.extend(git_opts)
 
         cmd.append(u'add')
         
@@ -461,11 +461,11 @@ class repo(object):
         
         return (output is not None)
     
-    def write_tree(self, missingOk=False, prefix=None):
+    def write_tree(self, missingOk=False, prefix=None, git_opts=[]):
         cmd = [ gitCmd ]
         
-        if gitOpts is not None and len(gitOpts) > 0:
-            cmd.extend(gitOpts)
+        if git_opts is not None and len(git_opts) > 0:
+            cmd.extend(git_opts)
 
         cmd.append(u'write-tree')
 
@@ -475,11 +475,11 @@ class repo(object):
             cmd.append(u'--prefix={prefix}'.format(prefix=prefix))
 
         # Execute the command
-        output = self._docmd(cmd, env=newEnv)
+        output = self._docmd(cmd)
 
         return output
 
-    def commit_tree(self, tree=None, parents=[], message=None, message_file=None, author_name=None, author_email=None, author_date=None, author_tz=None, committer_name=None, committer_email=None, committer_date=None, committer_tz=None, gpgKey=None, noGpgSign=False, gitOpts=[], allow_empty=False):
+    def commit_tree(self, tree=None, parents=[], message=None, message_file=None, author_name=None, author_email=None, author_date=None, author_tz=None, committer_name=None, committer_email=None, committer_date=None, committer_tz=None, gpg_key=None, no_gpg_sign=False, git_opts=[], allow_empty=False):
         # git commit example output
         # =========================
         # git commit -m "Parameterizing hardcoded values."
@@ -488,8 +488,8 @@ class repo(object):
         #--------------------------
         cmd = [ gitCmd ]
         
-        if gitOpts is not None and len(gitOpts) > 0:
-            cmd.extend(gitOpts)
+        if git_opts is not None and len(git_opts) > 0:
+            cmd.extend(git_opts)
 
         cmd.append(u'commit-tree')
 
@@ -497,9 +497,9 @@ class repo(object):
             for parent in parents:
                 cmd.extend([ u'-p', parent ])
 
-        if noGpgSign:
+        if no_gpg_sign:
             cmd.append(u'--no-gpg-sign')
-        elif gpgKey is not None:
+        elif gpg_key is not None:
             cmd.append(u'-S{key}'.format(key=gpgKey))
 
         if message is not None and len(message) > 0:
@@ -526,9 +526,9 @@ class repo(object):
             newEnv['GIT_AUTHOR_EMAIL'] = committer_email
         
         if author_date is not None:
-            dateStr = getDatetimeString(author_date, author_tz)
-            if dateStr is not None:
-                newEnv['GIT_AUTHOR_DATE'] = str('{0}'.format(committer_date_str))
+            author_date_str = getDatetimeString(author_date, author_tz)
+            if author_date_str is not None:
+                newEnv['GIT_AUTHOR_DATE'] = str('{0}'.format(author_date_str))
         
         # Set the committer information
         if committer_name is not None:
@@ -546,7 +546,7 @@ class repo(object):
 
         return output
 
-    def commit(self, message=None, message_file=None, author_name=None, author_email=None, author_date=None, author_tz=None, committer_name=None, committer_email=None, committer_date=None, committer_tz=None, allow_empty=False, allow_empty_message=False, gitOpts=[]):
+    def commit(self, message=None, message_file=None, author_name=None, author_email=None, author_date=None, author_tz=None, committer_name=None, committer_email=None, committer_date=None, committer_tz=None, allow_empty=False, allow_empty_message=False, git_opts=[]):
         # git commit example output
         # =========================
         # git commit -m "Parameterizing hardcoded values."
@@ -555,8 +555,8 @@ class repo(object):
         #--------------------------
         cmd = [ gitCmd ]
         
-        if gitOpts is not None and len(gitOpts) > 0:
-            cmd.extend(gitOpts)
+        if git_opts is not None and len(git_opts) > 0:
+            cmd.extend(git_opts)
 
         cmd.append(u'commit')
         
@@ -581,9 +581,9 @@ class repo(object):
             newEnv['GIT_AUTHOR_EMAIL'] = committer_email
         
         if author_date is not None:
-            dateStr = getDatetimeString(author_date, author_tz)
-            if dateStr is not None:
-                newEnv['GIT_AUTHOR_DATE'] = str('{0}'.format(committer_date_str))
+            author_date_str = getDatetimeString(author_date, author_tz)
+            if author_date_str is not None:
+                newEnv['GIT_AUTHOR_DATE'] = str('{0}'.format(author_date_str))
         
         # Set the committer information
         if committer_name is not None:
