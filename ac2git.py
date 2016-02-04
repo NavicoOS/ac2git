@@ -585,8 +585,15 @@ class AccuRev2Git(object):
         commitHash = None
         if isLooseCommit:
             treeHash = self.gitRepo.write_tree()
-            if treeHash is not None and len(treeHash) > 0:
+            if treeHash is not None and len(treeHash.strip()) > 0:
+                treeHash = treeHash.strip()
                 commitHash = self.gitRepo.commit_tree(tree=treeHash, message_file=messageFilePath, committer_name=committerName, committer_email=committerEmail, committer_date=committerDate, committer_tz=committerTimezone, author_name=committerName, author_email=committerEmail, author_date=committerDate, author_tz=committerTimezone, allow_empty=allowEmptyCommit, git_opts=[u'-c', u'core.autocrlf=false'])
+                if commitHash is None:
+                    self.config.logger.error( "Failed to commit tree {0} for transaction {1}".format(treeHash, transaction.id) )
+                else:
+                    commitHash = commitHash.strip()
+            else:
+                self.config.logger.error( "Failed to write tree for transaction {0}".format(transaction.id) )
         else:
             commitResult = self.gitRepo.commit(message_file=messageFilePath, committer_name=committerName, committer_email=committerEmail, committer_date=committerDate, committer_tz=committerTimezone, author_name=committerName, author_email=committerEmail, author_date=committerDate, author_tz=committerTimezone, allow_empty_message=True, allow_empty=allowEmptyCommit, git_opts=[u'-c', u'core.autocrlf=false'])
             if commitResult is not None:
@@ -598,7 +605,6 @@ class AccuRev2Git(object):
             else:
                 self.config.logger.error( "Failed to commit transaction {0}".format(transaction.id) )
                 self.config.logger.error( "\n{0}\n{1}\n".format(self.gitRepo.lastStdout, self.gitRepo.lastStderr) )
-
 
         if commitHash is not None:
             if lastCommitHash != commitHash:
@@ -721,7 +727,7 @@ class AccuRev2Git(object):
     def TryStreams(self, depot, timeSpec):
         streams = None
         for i in range(0, AccuRev2Git.commandFailureRetryCount):
-            streamsXml = accurev.raw.show.streams(depot=depot, timeSpec=timeSpec, isXmlOutput=True, includeDeactivatedItems=True, includeHasDefaultGroupAttribute=True, useCache=useCommandCache)
+            streamsXml = accurev.raw.show.streams(depot=depot, timeSpec=timeSpec, isXmlOutput=True, includeDeactivatedItems=True, includeHasDefaultGroupAttribute=True, useCache=self.config.accurev.UseCommandCache())
             if streamsXml is not None:
                 streams = accurev.obj.Show.Streams.fromxmlstring(streamsXml)
                 if streams is not None:
@@ -847,6 +853,7 @@ class AccuRev2Git(object):
     def ProcessStream(self, depot, stream, dataRef, stateRef, mapRef, startTransaction, endTransaction):
         self.ProcessStreamInfo(depot=depot, stream=stream, stateRef=stateRef, mapRef=mapRef, startTransaction=startTransaction, endTransaction=endTransaction)
 
+        raise Exception("Not yet implemented!")
         self.config.logger.info( "Processing {0} : {1} - {2}".format(stream.name, startTransaction, endTransaction) )
 
         # Check if the ref exists!

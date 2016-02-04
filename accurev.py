@@ -1524,6 +1524,7 @@ CREATE TABLE IF NOT EXISTS command_cache (
                cc.Add(cmd=cmd, result=accurevCommand.returncode, stdout=output, stderr=error)
         
         if outputFile is None:
+            print('"{0}"'.format('" "'.join(cmd)))
             return output
         else:
             outputFile.close()
