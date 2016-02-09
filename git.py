@@ -390,7 +390,6 @@ class repo(object):
         self.lastReturnCode = process.returncode
 
         if process.returncode == 0:
-            print('"{0}"'.format('" "'.join(cmd)))
             return output
         else:
             return None

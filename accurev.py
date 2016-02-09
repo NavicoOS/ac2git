@@ -1519,12 +1519,7 @@ CREATE TABLE IF NOT EXISTS command_cache (
                     # Cache hit!
                     cmd, returncode, output, error = row
                     raw._lastCommand = None
-                    print('"{0}" cache: hit'.format(cmd))
                     return output
-                else:
-                    print('"{0}" cache: miss'.format('" "'.join(cmd)))
-        else:
-            print('"{0}" cache: ignored'.format('" "'.join(cmd)))
 
         if outputFilename is not None:
             outputFile = open(outputFilename, "w")
