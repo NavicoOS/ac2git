@@ -137,6 +137,20 @@ class obj:
             return rv
 
         @staticmethod
+        def is_keyword(obj):
+            if isinstance(obj, str):
+                try:
+                    obj = int(obj)
+                except:
+                    pass
+            if isinstance(obj, int):
+                return False
+            elif obj in [ 'highest', 'now' ]:
+                return True
+            else:
+                return None
+
+        @staticmethod
         def compare_transaction_specs(lhs, rhs):
             # Force them to be ints if they can be.
             try:
@@ -182,6 +196,12 @@ class obj:
 
         def reversed(self):
             return obj.TimeSpec.reverse(self)
+
+        def is_cacheable(self):
+            cacheable = self.start is not None and obj.TimeSpec.is_keyword(self.start) == False
+            cacheable = cacheable and (self.end is not None and obj.TimeSpec.is_keyword(self.end) == False)
+
+            return cacheable
 
         @classmethod
         def reverse(cls, timespec):
@@ -1499,7 +1519,12 @@ CREATE TABLE IF NOT EXISTS command_cache (
                     # Cache hit!
                     cmd, returncode, output, error = row
                     raw._lastCommand = None
+                    print('"{0}" cache: hit'.format(cmd))
                     return output
+                else:
+                    print('"{0}" cache: miss'.format('" "'.join(cmd)))
+        else:
+            print('"{0}" cache: ignored'.format('" "'.join(cmd)))
 
         if outputFilename is not None:
             outputFile = open(outputFilename, "w")
@@ -1524,7 +1549,6 @@ CREATE TABLE IF NOT EXISTS command_cache (
                cc.Add(cmd=cmd, result=accurevCommand.returncode, stdout=output, stderr=error)
         
         if outputFile is None:
-            print('"{0}"'.format('" "'.join(cmd)))
             return output
         else:
             outputFile.close()
@@ -2070,6 +2094,16 @@ CREATE TABLE IF NOT EXISTS command_cache (
 
         @staticmethod
         def streams(depot=None, timeSpec=None, stream=None, matchType=None, listFile=None, listPathAndChildren=False, listChildren=False, listImmediateChildren=False, nonEmptyDefaultGroupsOnly=False, isXmlOutput=False, includeDeactivatedItems=False, includeOldDefinitions=False, includeHasDefaultGroupAttribute=False, useCache=False):
+            # Analise the useCache variable and make sure that we can use the cache for this command!
+            # For commands that use the 'now' or 'highest' keywords we can't use it (which is also implied with a timeSpec of None).
+            if useCache:
+                if not isinstance(timeSpec, obj.TimeSpec):
+                    ts = obj.TimeSpec.fromstring(timeSpec)
+                else:
+                    ts = timeSpec
+
+                useCache = ts is not None and ts.is_cacheable() and listFile is None # Ensure that we don't have any file operations...
+
             cmd = raw.show._getShowBaseCommand(isXmlOutput=isXmlOutput, includeDeactivatedItems=includeDeactivatedItems, includeOldDefinitions=includeOldDefinitions, includeHasDefaultGroupAttribute=includeHasDefaultGroupAttribute)
 
             if depot is not None:
@@ -2228,15 +2262,12 @@ class show(object):
     @staticmethod
     def streams(depot=None, timeSpec=None, stream=None, matchType=None, listFile=None, listPathAndChildren=False, listChildren=False, listImmediateChildren=False, nonEmptyDefaultGroupsOnly=False, includeDeactivatedItems=False, includeOldDefinitions=False, includeHasDefaultGroupAttribute=False, useCache=False):
         if useCache:
-            if timeSpec is None:
-                ts = None
-            elif not isinstance(timeSpec, obj.TimeSpec):
+            if not isinstance(timeSpec, obj.TimeSpec):
                 ts = obj.TimeSpec.fromstring(timeSpec)
             else:
                 ts = timeSpec
 
-            useCache = ts is not None and not (isinstance(ts.start, str) or isinstance(ts.end, str)) # If both values are non-keywords, we can cache them.
-            useCache = useCache and listFile is None # Ensure that we don't have any file operations...
+            useCache = ts is not None and ts.is_cacheable() and listFile is None # Ensure that we don't have any file operations...
             
         if useCache and depot is not None and stream is not None and isinstance(stream, int):
             # At this point we know that the command is cache-able. Here we try and maximize the use of the cache for the 'stream' argument.
