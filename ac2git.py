@@ -812,7 +812,14 @@ class AccuRev2Git(object):
             if status is None:
                 raise Exception("Invalid initial state! The status command return is invalid.")
             if status.branch is None or status.branch != stateRef:
-                raise Exception("Invalid initial state! The status command returned an invalid name for current branch. Expected {stateRef} but got {statusBranch}.".format(stateRef=stateRef, statusBranch=status.branch))
+                headHash = self.gitRepo.raw_cmd(['git', 'log', '--format=%H', 'HEAD', '-1'])
+                refHash = self.gitRepo.raw_cmd(['git', 'log', '--format=%H', stateRef, '-1'])
+                if headHash is None:
+                    raise Exception("Failed to determine the hash of the HEAD commit!")
+                elif refHash is None:
+                    raise Exception("Failed to determine the hash of the {ref} commit!".format(ref=stateRef))
+                elif refHash != headHash:
+                    raise Exception("Invalid initial state! The status command returned an invalid name for current branch. Expected {stateRef} but got {statusBranch}.".format(stateRef=stateRef, statusBranch=status.branch))
             if len(status.staged) != 0 or len(status.changed) != 0 or len(status.untracked) != 0:
                 raise Exception("Invalid initial state! There are changes in the tracking repository. Staged {staged}, changed {changed}, untracked {untracked}.".format(staged=status.staged, changed=status.changed, untracked=status.untracked))
             histXml = self.gitRepo.raw_cmd(['git', 'show', '{ref}:hist.xml'.format(ref=stateRef)])
