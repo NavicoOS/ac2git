@@ -781,7 +781,7 @@ class AccuRev2Git(object):
 
 
     def ProcessStreamInfo(self, depot, stream, stateRef, mapRef, startTransaction, endTransaction):
-        self.config.logger.info( "Processing {0} : {1} - {2}".format(stream.name, startTransaction, endTransaction) )
+        self.config.logger.info( "Processing Accurev state for {0} : {1} - {2}".format(stream.name, startTransaction, endTransaction) )
 
         # Check if the ref exists!
         stateRefObj = self.gitRepo.raw_cmd(['git', 'show-ref', stateRef])
@@ -850,7 +850,7 @@ class AccuRev2Git(object):
                         self.config.logger.error( "Failed to checkout ref {stateRef} to commit {hash}".format(stateRef=stateRef, hash=commitHash) )
                         return (None, None)
                     status = self.gitRepo.status()
-                    self.config.logger.info( "stream {0}: tr. #{1} {2} into {3} -> commit {4} on {5}".format(stream.name, tr.id, tr.Type, destStream if destStream is not None else 'unknown', commitHash[:8], stateRef) )
+                    self.config.logger.info( "stream {streamName}: tr. #{trId} {trType} -> commit {hash} on {ref}".format(streamName=stream.name, trId=tr.id, trType=tr.Type, hash=commitHash[:8], ref=stateRef) )
             else:
                 self.config.logger.info( "Failed to get the first transaction for {0} from accurev. Won't process any further.".format(stream.name) )
                 return (None, None)
@@ -909,6 +909,13 @@ class AccuRev2Git(object):
                     else:
                         break # Early return from processing this stream. Restarting should clean everything up.
                 else:
+                    if self.gitRepo.raw_cmd([ u'git', u'update-ref', stateRef, commitHash ]) is None:
+                        self.config.logger.error( "Failed to update ref {stateRef} to commit {hash}".format(stateRef=stateRef, hash=commitHash) )
+                        return (None, None)
+                    if self.gitRepo.checkout(branchName=stateRef) is None:
+                        self.config.logger.error( "Failed to checkout ref {stateRef} to commit {hash}".format(stateRef=stateRef, hash=commitHash) )
+                        return (None, None)
+                    status = self.gitRepo.status()
                     self.config.logger.info( "stream {streamName}: tr. #{trId} {trType} -> commit {hash} on {ref}".format(streamName=stream.name, trId=tr.id, trType=tr.Type, hash=commitHash[:8], ref=stateRef) )
             else:
                 self.config.logger.info( "Reached end transaction #{trId} for {streamName} -> {ref}".format(trId=endTr.id, streamName=stream.name, ref=stateRef) )
