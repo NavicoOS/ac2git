@@ -1083,7 +1083,7 @@ class AccuRev2Git(object):
             diffXml = self.gitRepo.raw_cmd(['git', 'show', '{hash}:diff.xml'.format(hash=stateHash)]) # Doesn't exist for the mkstream transaction (first commit)
             if diffXml is not None:
                 diff = accurev.obj.Diff.fromxmlstring(diffXml)
-            elif len(diffXml) == 0:
+            elif diffXml is None or len(diffXml) == 0:
                 raise Exception("Command failed! git show {hash}:diff.xml".format(hash=stateHash))
 
             # Get the hist information.
