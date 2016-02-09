@@ -545,7 +545,7 @@ class AccuRev2Git(object):
 
         return commitHash
 
-    def Commit(self, transaction, isFirstCommit=False, allowEmptyCommit=False, messageOverride=None, isLooseCommit=False):
+    def Commit(self, transaction, allowEmptyCommit=False, messageOverride=None, isFirstCommit=False, isLooseCommit=False):
         self.PreserveEmptyDirs()
 
         # Add all of the files to the index
@@ -631,7 +631,7 @@ class AccuRev2Git(object):
         # Iterate over transactions in order using accurev diff -a -i -v streamName -V streamName -t <lastProcessed>-<current iterator>
         if self.config.method == "diff":
             nextTr = startTrNumber + 1
-            diff = self.TryDiff(streamName=streamName, firstTrNumber=startTrNumber, secondTrNumber=nextTr)
+            diff, diffXml = self.TryDiff(streamName=streamName, firstTrNumber=startTrNumber, secondTrNumber=nextTr)
             if diff is None:
                 return (None, None)
     
@@ -640,7 +640,7 @@ class AccuRev2Git(object):
             #       explicit knowlege of all the transactions which could affect us via some sort of deep history option...
             while nextTr <= endTrNumber and len(diff.elements) == 0:
                 nextTr += 1
-                diff = self.TryDiff(streamName=streamName, firstTrNumber=startTrNumber, secondTrNumber=nextTr)
+                diff, diffXml = self.TryDiff(streamName=streamName, firstTrNumber=startTrNumber, secondTrNumber=nextTr)
                 if diff is None:
                     return (None, None)
         
@@ -652,7 +652,7 @@ class AccuRev2Git(object):
             # Find the next transaction
             for tr in deepHist:
                 if tr.id > startTrNumber:
-                    diff = self.TryDiff(streamName=streamName, firstTrNumber=startTrNumber, secondTrNumber=tr.id)
+                    diff, diffXml = self.TryDiff(streamName=streamName, firstTrNumber=startTrNumber, secondTrNumber=tr.id)
                     if diff is None:
                         return (None, None)
                     elif len(diff.elements) > 0:
@@ -661,7 +661,7 @@ class AccuRev2Git(object):
                     else:
                         self.config.logger.dbg("FindNextChangeTransaction deep-hist skipping: {0}, diff was empty...".format(tr.id))
 
-            diff = self.TryDiff(streamName=streamName, firstTrNumber=startTrNumber, secondTrNumber=endTrNumber)
+            diff, diffXml = self.TryDiff(streamName=streamName, firstTrNumber=startTrNumber, secondTrNumber=endTrNumber)
             return (endTrNumber + 1, diff) # The end transaction number is inclusive. We need to return the one after it.
         elif self.config.method == "pop":
             self.config.logger.dbg("FindNextChangeTransaction pop: {0}".format(startTrNumber + 1))
@@ -800,6 +800,7 @@ class AccuRev2Git(object):
         self.gitRepo.clean(directories=True, force=True, forceSubmodules=True, includeIgnored=True)
 
         # Either checkout last state or make the initial commit for a new stateRef.
+        tr = None
         if stateRefObj is not None:
             # This means that the ref already exists so we should switch to it.
             self.config.logger.dbg( "Reset current branch - '{br}'".format(br=status.branch) )
@@ -814,6 +815,13 @@ class AccuRev2Git(object):
                 raise Exception("Invalid initial state! The status command returned an invalid name for current branch. Expected {stateRef} but got {statusBranch}.".format(stateRef=stateRef, statusBranch=status.branch))
             if len(status.staged) != 0 or len(status.changed) != 0 or len(status.untracked) != 0:
                 raise Exception("Invalid initial state! There are changes in the tracking repository. Staged {staged}, changed {changed}, untracked {untracked}.".format(staged=status.staged, changed=status.changed, untracked=status.untracked))
+            histXml = self.gitRepo.raw_cmd(['git', 'show', '{ref}:hist.xml'.format(ref=stateRef)])
+            if histXml is None:
+                raise Exception("Couldn't load last transaction for ref: {ref}".format(ref=stateRef))
+            elif len(histXml) == 0:
+                raise Exception("Couldn't load last transaction for ref: {ref} (empty result)".format(ref=stateRef))
+            hist = accurev.obj.History.fromxmlstring(histXml)
+            tr = hist.transactions[0]
         else:
             self.config.logger.dbg( "Ref '{br}' doesn't exist.".format(br=stateRef) )
             # We are tracking a new stream
@@ -831,7 +839,7 @@ class AccuRev2Git(object):
 
                 self.WriteInfoFiles(path=self.gitRepo.path, depot=depot, streamName=stream.name, transaction=tr.id, useCommandCache=self.config.accurev.UseCommandCache())
 
-                commitHash = self.Commit(transaction=tr, isFirstCommit=True, isLooseCommit=True)
+                commitHash = self.Commit(transaction=tr, isFirstCommit=True, isLooseCommit=True, messageOverride="transaction {trId}".format(trId=tr.id))
                 if not commitHash:
                     self.config.logger.dbg( "{0} first commit has failed. Is it an empty commit? Continuing...".format(stream.name) )
                 else:
@@ -847,11 +855,73 @@ class AccuRev2Git(object):
                 self.config.logger.info( "Failed to get the first transaction for {0} from accurev. Won't process any further.".format(stream.name) )
                 return (None, None)
 
-    def ProcessStreamData(self, depot, stream, dataRef, apRef, startTransaction, endTransaction):
-        pass
+        # Get the end transaction.
+        endTrHist, endTrHistXml = self.TryHist(depot=depot, timeSpec=endTransaction)
+        if endTrHist is None:
+            self.config.logger.dbg("accurev hist -p {0} -t {1}.1 failed.".format(depot, endTransaction))
+            return (None, None)
+        endTr = endTrHist.transactions[0]
+        self.config.logger.info("{0}: processing transaction range #{1} - #{2}".format(stream.name, tr.id, endTr.id))
+
+        # Iterate over all of the transactions that affect the stream we are interested in and maybe the "chstream" transactions (which affect the streams.xml).
+        deepHist = None
+        if self.config.method == "deep-hist":
+            ignoreTimelocks=False # The code for the timelocks is not tested fully yet. Once tested setting this to false should make the resulting set of transactions smaller
+                                 # at the cost of slightly larger number of upfront accurev commands called.
+            self.config.logger.dbg("accurev.ext.deep_hist(depot={0}, stream={1}, timeSpec='{2}-{3}', ignoreTimelocks={4})".format(depot, stream.name, tr.id, endTr.id, ignoreTimelocks))
+            deepHist = accurev.ext.deep_hist(depot=depot, stream=stream.name, timeSpec="{0}-{1}".format(tr.id, endTr.id), ignoreTimelocks=ignoreTimelocks)
+            self.config.logger.info("Deep-hist returned {count} transactions to process.".format(count=len(deepHist)))
+            if deepHist is None:
+                raise Exception("accurev.ext.deep_hist() failed to return a result!")
+        while True:
+            nextTr, diff = self.FindNextChangeTransaction(streamName=stream.name, startTrNumber=tr.id, endTrNumber=endTr.id, deepHist=deepHist)
+            if nextTr is None:
+                self.config.logger.dbg( "FindNextChangeTransaction(streamName='{0}', startTrNumber={1}, endTrNumber={2}, deepHist={3}) failed!".format(stream.name, tr.id, endTr.id, deepHist) )
+                return (None, None)
+
+            self.config.logger.dbg( "{0}: next transaction {1} (end tr. {2})".format(stream.name, nextTr, endTr.id) )
+            if nextTr <= endTr.id:
+                # Right now nextTr is an integer representation of our next transaction.
+                # Delete all of the files which are even mentioned in the diff so that we can do a quick populate (wouth the overwrite option)
+                if self.config.method == "pop":
+                    self.ClearGitRepo()
+                else:
+                    if diff is None:
+                        return (None, None)
+
+                # The accurev hist command here must be used with the depot option since the transaction that has affected us may not
+                # be a promotion into the stream we are looking at but into one of its parent streams. Hence we must query the history
+                # of the depot and not the stream itself.
+                hist, histXml = self.TryHist(depot=depot, timeSpec=nextTr)
+                if hist is None:
+                    self.config.logger.dbg("accurev hist -p {0} -t {1}.1 failed.".format(depot, endTransaction))
+                    return (None, None)
+                tr = hist.transactions[0]
+                stream = accurev.show.streams(depot=depot, stream=stream.streamNumber, timeSpec=tr.id, useCache=self.config.accurev.UseCommandCache()).streams[0]
+
+                self.WriteInfoFiles(path=self.gitRepo.path, depot=depot, streamName=stream.name, transaction=tr.id, useCommandCache=self.config.accurev.UseCommandCache())
+                    
+                # Commit
+                commitHash = self.Commit(transaction=tr, isFirstCommit=False, isLooseCommit=False, messageOverride="transaction {trId}".format(trId=tr.id))
+                if commitHash is None:
+                    if"nothing to commit" in self.gitRepo.lastStdout:
+                        self.config.logger.info("stream {streamName}: tr. #{trId} is a no-op. Potential but unlikely error. Continuing.".format(streamName=stream.name, trId=tr.id))
+                    else:
+                        break # Early return from processing this stream. Restarting should clean everything up.
+                else:
+                    self.config.logger.info( "stream {streamName}: tr. #{trId} {trType} -> commit {hash} on {ref}".format(streamName=stream.name, trId=tr.id, trType=tr.Type, hash=commitHash[:8], ref=stateRef) )
+            else:
+                self.config.logger.info( "Reached end transaction #{trId} for {streamName} -> {ref}".format(trId=endTr.id, streamName=stream.name, ref=stateRef) )
+                break
+
+        return (tr, commitHash)
+
+    def ProcessStreamData(self, depot, stream, dataRef, mapRef, startTransaction, endTransaction):
+        raise Exception("Accurev2Git.ProcessStreamData() - Not yet implemented!")
 
     def ProcessStream(self, depot, stream, dataRef, stateRef, mapRef, startTransaction, endTransaction):
         self.ProcessStreamInfo(depot=depot, stream=stream, stateRef=stateRef, mapRef=mapRef, startTransaction=startTransaction, endTransaction=endTransaction)
+        self.ProcessStreamData(depot=depot, stream=stream, dataRef=dataRef, mapRef=mapRef, startTransaction=startTransaction, endTransaction=endTransaction)
 
         raise Exception("Not yet implemented!")
         self.config.logger.info( "Processing {0} : {1} - {2}".format(stream.name, startTransaction, endTransaction) )

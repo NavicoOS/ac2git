@@ -58,7 +58,7 @@ def CatFileCommit(commit_hash):
         raise e
 
     commit_info = {}
-    commit_info[u'hash'] = commit_hash
+    commit_info[u'hash'] = commit_hash # Use git rev-parse {commit} to get the hash and ensure it's a hash.
     cat_file_lines = cat_file_output.split(u'\n')
 
     # The first line is the object to which the commit points, parse it.
