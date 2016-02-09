@@ -804,6 +804,12 @@ class AccuRev2Git(object):
         with codecs.open(histFilePath, 'w') as f:
             f.write(re.sub('TaskId="[0-9]+"', 'TaskId="0"', histXml))
 
+    def GetStreamRefs(self, depot, streamNumber):
+        if depot is not None and streamNumber is not None and isinstance(streamNumber, int):
+            dataRef  = 'refs/ac2git/{depot}/streams/stream_{stream_number}_data'.format(depot=depot, stream_number=streamNumber)
+            stateRef = 'refs/ac2git/{depot}/streams/stream_{stream_number}_info'.format(depot=depot, stream_number=streamNumber)
+            return (stateRef, dataRef)
+        return (None, None)
 
     def ProcessStreamInfo(self, depot, stream, stateRef, startTransaction, endTransaction):
         self.config.logger.info( "Processing Accurev state for {0} : {1} - {2}".format(stream.name, startTransaction, endTransaction) )
@@ -1172,233 +1178,10 @@ class AccuRev2Git(object):
 
         return (tr, commitHash)
 
-    def ProcessStream(self, depot, stream, dataRef, stateRef, mapRef, startTransaction, endTransaction):
-        self.ProcessStreamInfo(depot=depot, stream=stream, stateRef=stateRef, startTransaction=startTransaction, endTransaction=endTransaction)
-        self.ProcessStreamData(depot=depot, stream=stream, dataRef=dataRef, stateRef=stateRef, startTransaction=startTransaction, endTransaction=endTransaction)
-
-        raise Exception("Not yet implemented!")
-        self.config.logger.info( "Processing {0} : {1} - {2}".format(stream.name, startTransaction, endTransaction) )
-
-        # Check if the ref exists!
-        dataRefObj = self.gitRepo.raw_cmd(['git', 'show-ref', dataRef])
-        if dataRefObj is not None and len(dataRefObj) == 0:
-            raise Exception("Invariant error! Expected non-empty string returned by git show-ref, but got '{str}'".format(s=dataRefObj))
-
-        # Get the current state of the git repository
-        status = self.gitRepo.status()
-        if status is None:
-            raise Exception("Failed to get status of git repository!")
-
-        self.config.logger.dbg( "On branch {branch} - {staged} staged, {changed} changed, {untracked} untracked files{initial_commit}.".format(branch=status.branch, staged=len(status.staged), changed=len(status.changed), untracked=len(status.untracked), initial_commit=', initial commit' if status.initial_commit else '') )
-
-        # Reset any leftover state from previous branch or previous run.
-        self.config.logger.dbg( "Clean current branch - '{br}'".format(br=status.branch) )
-        self.gitRepo.clean(directories=True, force=True, forceSubmodules=True, includeIgnored=True)
-
-        # Either checkout last state or make the initial commit for a new dataRef.
-        if dataRefObj is not None:
-            # This means that the ref already exists so we should switch to it.
-            self.config.logger.dbg( "Reset current branch - '{br}'".format(br=status.branch) )
-            self.gitRepo.reset(isHard=True)
-            self.config.logger.dbg( "Checkout hidden data branch {dataRef}".format(dataRef=dataRef) )
-            self.gitRepo.checkout(branchName=dataRef)
-            status = self.gitRepo.status()
-            self.config.logger.dbg( "On branch {branch} - {staged} staged, {changed} changed, {untracked} untracked files{initial_commit}.".format(branch=status.branch, staged=len(status.staged), changed=len(status.changed), untracked=len(status.untracked), initial_commit=', initial commit' if status.initial_commit else '') )
-            if status is None:
-                raise Exception("Invalid initial state! The status command return is invalid.")
-            if status.branch is None or status.branch != dataRef:
-                raise Exception("Invalid initial state! The status command returned an invalid name for current branch. Expected {dataRef} but got {statusBranch}.".format(dataRef=dataRef, statusBranch=status.branch))
-            if len(status.staged) != 0 or len(status.changed) != 0 or len(status.untracked) != 0:
-                raise Exception("Invalid initial state! There are changes in the tracking repository. Staged {staged}, changed {changed}, untracked {untracked}.".format(staged=status.staged, changed=status.changed, untracked=status.untracked))
-        else:
-            self.config.logger.dbg( "Ref '{br}' doesn't exist.".format(br=dataRef) )
-            # We are tracking a new stream
-            tr = self.GetFirstTransaction(depot=depot, streamName=stream.name, startTransaction=startTransaction, endTransaction=endTransaction)
-            if tr is not None:
-                try:
-                    destStream = self.GetDestinationStreamName(history=hist, depot=None)
-                except:
-                    destStream = None
-
-                # Delete everything in the index and working directory.
-                self.gitRepo.rm(fileList=['.'], force=True, recursive=True)
-                self.ClearGitRepo()
-
-                self.config.logger.dbg( "{0} pop (init): {1} {2}{3}".format(stream.name, tr.Type, tr.id, " to {0}".format(destStream) if destStream is not None else "") )
-                popResult = self.TryPop(streamName=stream.name, transaction=tr, overwrite=True)
-                if not popResult:
-                    return (None, None)
-                
-                stream = accurev.show.streams(depot=depot, stream=stream.streamNumber, timeSpec=tr.id, useCache=self.config.accurev.UseCommandCache()).streams[0]
-                commitHash = self.Commit(transaction=tr, isFirstCommit=True, isLooseCommit=True)
-                if not commitHash:
-                    self.config.logger.dbg( "{0} first commit has failed. Is it an empty commit? Continuing...".format(stream.name) )
-                else:
-                    if self.gitRepo.raw_cmd([ u'git', u'update-ref', dataRef, commitHash ]) is None:
-                        self.config.logger.error( "Failed to update ref {dataRef} to commit {hash}".format(dataRef=dataRef, hash=commitHash) )
-                        return (None, None)
-                    if self.gitRepo.checkout(branchName=dataRef) is None:
-                        self.config.logger.error( "Failed to checkout ref {dataRef} to commit {hash}".format(dataRef=dataRef, hash=commitHash) )
-                        return (None, None)
-                    status = self.gitRepo.status()
-                    self.config.logger.info( "stream {0}: tr. #{1} {2} into {3} -> commit {4} on {5}".format(stream.name, tr.id, tr.Type, destStream if destStream is not None else 'unknown', commitHash[:8], dataRef) )
-            else:
-                self.config.logger.info( "Failed to get the first transaction for {0} from accurev. Won't process any further.".format(stream.name) )
-                return (None, None)
-
-        tr = None
-        commitHash = None
-        if status.branch != dataRef or status.initial_commit:
-            # We have failed to initialize our special ref.
-            self.config.logger.info( "Failed to initialize {dataRef}.".format(dataRef=dataRef) )
-            return (None, None)
-        else:
-            # Get the last processed transaction
-            commitHash = self.GetLastCommitHash(ref=dataRef)
-            hist = self.GetHistForCommit(commitHash=commitHash, branchName=dataRef)
-
-            # This code should probably be controlled with some flag in the configuration/command line...
-            if hist is None:
-                self.config.logger.error("Repo in invalid state. Attempting to auto-recover.")
-                resetCmd = ['git', 'reset', '--hard', '{0}^'.format(branchName)]
-                self.config.logger.error("Deleting last commit from this branch using, {0}".format(' '.join(resetCmd)))
-                try:
-                    subprocess.check_call(resetCmd)
-                except subprocess.CalledProcessError:
-                    self.config.logger.error("Failed to reset branch. Aborting!")
-                    return (None, None)
-
-                commitHash = self.GetLastCommitHash(branchName=branchName)
-                hist = self.GetHistForCommit(commitHash=commitHash, branchName=branchName)
-
-                if hist is None:
-                    self.config.logger.error("Repo in invalid state. Please reset this branch to a previous commit with valid notes.")
-                    self.config.logger.error("  e.g. git reset --hard {0}~1".format(branchName))
-                    return (None, None)
-
-            tr = hist.transactions[0]
-            stream = accurev.show.streams(depot=depot, stream=stream.streamNumber, timeSpec=tr.id, useCache=self.config.accurev.UseCommandCache()).streams[0]
-            self.config.logger.dbg("{0}: last processed transaction was #{1}".format(stream.name, tr.id))
-
-        endTrHist = self.TryHist(depot=depot, trNum=endTransaction)
-        if endTrHist is None:
-            self.config.logger.dbg("accurev hist -p {0} -t {1}.1 failed.".format(depot, endTransaction))
-            return (None, None)
-        endTr = endTrHist.transactions[0]
-        self.config.logger.info("{0}: processing transaction range #{1} - #{2}".format(stream.name, tr.id, endTr.id))
-
-        deepHist = None
-        if self.config.method == "deep-hist":
-            ignoreTimelocks=False # The code for the timelocks is not tested fully yet. Once tested setting this to false should make the resulting set of transactions smaller
-                                 # at the cost of slightly larger number of upfront accurev commands called.
-            self.config.logger.dbg("accurev.ext.deep_hist(depot={0}, stream={1}, timeSpec='{2}-{3}', ignoreTimelocks={4})".format(depot, stream.name, tr.id, endTr.id, ignoreTimelocks))
-            deepHist = accurev.ext.deep_hist(depot=depot, stream=stream.name, timeSpec="{0}-{1}".format(tr.id, endTr.id), ignoreTimelocks=ignoreTimelocks)
-            self.config.logger.info("Deep-hist returned {count} transactions to process.".format(count=len(deepHist)))
-            if deepHist is None:
-                raise Exception("accurev.ext.deep_hist() failed to return a result!")
-        while True:
-            nextTr, diff = self.FindNextChangeTransaction(streamName=stream.name, startTrNumber=tr.id, endTrNumber=endTr.id, deepHist=deepHist)
-            if nextTr is None:
-                self.config.logger.dbg( "FindNextChangeTransaction(streamName='{0}', startTrNumber={1}, endTrNumber={2}, deepHist={3}) failed!".format(stream.name, tr.id, endTr.id, deepHist) )
-                return (None, None)
-
-            self.config.logger.dbg( "{0}: next transaction {1} (end tr. {2})".format(stream.name, nextTr, endTr.id) )
-            if nextTr <= endTr.id:
-                # Right now nextTr is an integer representation of our next transaction.
-                # Delete all of the files which are even mentioned in the diff so that we can do a quick populate (wouth the overwrite option)
-                popOverwrite = (self.config.method == "pop")
-                deletedPathList = None
-                if self.config.method == "pop":
-                    self.ClearGitRepo()
-                else:
-                    if diff is None:
-                        return (None, None)
-                    
-                    try:
-                        deletedPathList = self.DeleteDiffItemsFromRepo(diff=diff)
-                    except:
-                        popOverwrite = True
-                        self.config.logger.info("Error trying to delete changed elements. Fatal, aborting!")
-                        # This might be ok only in the case when the files/directories were changed but not in the case when there
-                        # was a deletion that occurred. Abort and be safe!
-                        # TODO: This must be solved somehow since this could hinder this script from continuing at all!
-                        return (None, None)
-
-                    # Remove all the empty directories (this includes directories which contain an empty .gitignore file since that's what we is done to preserve them)
-                    try:
-                        self.DeleteEmptyDirs()
-                    except:
-                        popOverwrite = True
-                        self.config.logger.info("Error trying to delete empty directories. Fatal, aborting!")
-                        # This might be ok only in the case when the files/directories were changed but not in the case when there
-                        # was a deletion that occurred. Abort and be safe!
-                        # TODO: This must be solved somehow since this could hinder this script from continuing at all!
-                        return (None, None)
-
-                # The accurev hist command here must be used with the depot option since the transaction that has affected us may not
-                # be a promotion into the stream we are looking at but into one of its parent streams. Hence we must query the history
-                # of the depot and not the stream itself.
-                hist = self.TryHist(depot=depot, trNum=nextTr)
-                if hist is None:
-                    self.config.logger.dbg("accurev hist -p {0} -t {1}.1 failed.".format(depot, endTransaction))
-                    return (None, None)
-                tr = hist.transactions[0]
-                stream = accurev.show.streams(depot=depot, stream=stream.streamNumber, timeSpec=tr.id, useCache=self.config.accurev.UseCommandCache()).streams[0]
-
-                # Work out the source and destination streams for the promote (for the purposes of the commit message info).
-                destStreamName, destStreamNumber = hist.toStream()
-                destStream = None
-                if destStreamNumber is not None:
-                    destStream = accurev.show.streams(depot=depot, stream=destStreamNumber, timeSpec=tr.id, useCache=self.config.accurev.UseCommandCache()).streams[0]
-                elif dstStreamName is not None:
-                    destStream = accurev.show.streams(depot=depot, stream=destStreamName, timeSpec=tr.id, useCache=self.config.accurev.UseCommandCache()).streams[0]
-
-                srcStream = None
-                try:
-                    srcStreamName, srcStreamNumber = hist.fromStream()
-                    if srcStreamNumber is not None:
-                        srcStream = accurev.show.streams(depot=depot, stream=srcStreamNumber, timeSpec=tr.id, useCache=self.config.accurev.UseCommandCache()).streams[0]
-                    if srcStreamName is not None:
-                        srcStream = accurev.show.streams(depot=depot, stream=srcStreamName, timeSpec=tr.id, useCache=self.config.accurev.UseCommandCache()).streams[0]
-                except:
-                    srcStreamName, srcStreamNumber = None, None
-
-                # Populate
-                self.config.logger.dbg( "{0} pop: {1} {2}{3}".format(stream.name, tr.Type, tr.id, " to {0}".format(destStreamName) if destStreamName is not None else "") )
-
-                popResult = self.TryPop(streamName=stream.name, transaction=tr, overwrite=popOverwrite)
-                if not popResult:
-                    return (None, None)
-
-                # Commit
-                commitMessage = self.GenerateCommitMessage(transaction=tr, stream=stream, dstStream=destStream, srcStream=srcStream)
-                commitHash = self.Commit(depot=depot, stream=stream, transaction=tr, branchName=branchName, isFirstCommit=False, messageOverride=commitMessage, dstStream=destStream, srcStream=srcStream)
-                if commitHash is None:
-                    if"nothing to commit" in self.gitRepo.lastStdout:
-                        if diff is not None:
-                            self.config.logger.dbg( "diff info ({0} elements):".format(len(diff.elements)) )
-                            for element in diff.elements:
-                                for change in element.changes:
-                                    self.config.logger.dbg( "  what changed: {0}".format(change.what) )
-                                    self.config.logger.dbg( "  original: {0}".format(change.stream1) )
-                                    self.config.logger.dbg( "  new:      {0}".format(change.stream2) )
-                        if deletedPathList is not None:
-                            self.config.logger.dbg( "deleted {0} files:".format(len(deletedPathList)) )
-                            for p in deletedPathList:
-                                self.config.logger.dbg( "  {0}".format(p) )
-                            self.config.logger.dbg( "populated {0} files:".format(len(popResult.elements)) )
-                            for e in popResult.elements:
-                                self.config.logger.dbg( "  {0}".format(e.location) )
-                        self.config.logger.info("stream {0}: tr. #{1} is a no-op. Potential but unlikely error. Continuing.".format(stream.name, tr.id))
-                    else:
-                        break # Early return from processing this stream. Restarting should clean everything up.
-                else:
-                    self.config.logger.info( "stream {0}: tr. #{1} {2} into {3} -> commit {4} on {5}".format(stream.name, tr.id, tr.Type, destStreamName if destStreamName is not None else 'unknown', commitHash[:8], branchName) )
-            else:
-                self.config.logger.info( "Reached end transaction #{0} for {1} -> {2}".format(endTr.id, stream.name, branchName) )
-                break
-
-        return (tr, commitHash)
+    def ProcessStream(self, depot, stream, dataRef, stateRef, startTransaction, endTransaction):
+        stateTr, stateHash = self.ProcessStreamInfo(depot=depot, stream=stream, stateRef=stateRef, startTransaction=startTransaction, endTransaction=endTransaction)
+        dataTr,  dataHash  = self.ProcessStreamData(depot=depot, stream=stream, dataRef=dataRef, stateRef=stateRef, startTransaction=startTransaction, endTransaction=endTransaction)
+        return dataTr, dataHash
 
     def ProcessStreams(self):
         if self.config.accurev.commandCacheFilename is not None:
@@ -1406,8 +1189,11 @@ class AccuRev2Git(object):
         
         streamMap = self.GetStreamMap()
 
+        depot  = self.config.accurev.depot
+        endTrHist = accurev.hist(depot=depot, timeSpec=self.config.accurev.endTransaction)
+        endTr = endTrHist.transactions[0]
+
         for stream in streamMap:
-            depot  = self.config.accurev.depot
             streamInfo = None
             try:
                 streamInfo = accurev.show.streams(depot=depot, stream=stream, useCache=self.config.accurev.UseCommandCache()).streams[0]
@@ -1421,18 +1207,15 @@ class AccuRev2Git(object):
             if depot is None or len(depot) == 0:
                 depot = streamInfo.depotName
 
-            endTrHist = accurev.hist(depot=depot, timeSpec=self.config.accurev.endTransaction)
-            endTr = endTrHist.transactions[0]
-
-            dataRef  = 'refs/ac2git/{depot}/streams/stream_{stream_number}_data'.format(depot=depot, stream_number=streamInfo.streamNumber)
-            stateRef = 'refs/ac2git/{depot}/streams/stream_{stream_number}_info'.format(depot=depot, stream_number=streamInfo.streamNumber)
-            mapRef   = 'refs/ac2git/{depot}/map'.format(depot=depot)
-            tr, commitHash = self.ProcessStream(depot=depot, stream=streamInfo, dataRef=dataRef, stateRef=stateRef, mapRef=mapRef, startTransaction=self.config.accurev.startTransaction, endTransaction=endTr.id)
+            stateRef, dataRef  = self.GetStreamRefs(depot=depot, streamNumber=streamInfo.streamNumber)
+            if stateRef is None or dataRef is None or len(stateRef) == 0 or len(dataRef) == 0:
+                raise Exception("Invariant error! The state ({sr}) and data ({dr}) refs must not be None!".format(sr=stateRef, dr=dataRef))
+            tr, commitHash = self.ProcessStream(depot=depot, stream=streamInfo, dataRef=dataRef, stateRef=stateRef, startTransaction=self.config.accurev.startTransaction, endTransaction=endTr.id)
             if tr is None or commitHash is None:
                 self.config.logger.error( "Error while processing stream {0}, branch {1}".format(stream, dataRef) )
 
             if self.config.git.remoteMap is not None:
-                refspec = "{dataRef}:{dataRef} {stateRef}:{stateRef} {mapRef}:{mapRef}".format(dataRef=dataRef, stateRef=stateRef, mapRef=mapRef)
+                refspec = "{dataRef}:{dataRef} {stateRef}:{stateRef}".format(dataRef=dataRef, stateRef=stateRef)
                 for remoteName in self.config.git.remoteMap:
                     pushOutput = None
                     try:
