@@ -817,7 +817,7 @@ class AccuRev2Git(object):
         # Check if the ref exists!
         stateRefObj = self.gitRepo.raw_cmd(['git', 'show-ref', stateRef])
         if stateRefObj is not None and len(stateRefObj) == 0:
-            raise Exception("Invariant error! Expected non-empty string returned by git show-ref, but got '{str}'".format(s=stateRefObj))
+            raise Exception("Invariant error! Expected non-empty string returned by git show-ref, but got '{s}'".format(s=stateRefObj))
 
         # Get the current state of the git repository
         status = self.gitRepo.status()
