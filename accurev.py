@@ -2446,18 +2446,27 @@ class ext(object):
         if not isAsc:
             # Make descending
             ts = ts.reversed()
+
         # Next, we need to ensure that we don't query things before the stream existed.
-        mkstream = hist(stream=stream, transactionKind="mkstream", timeSpec="now", useCache=useCache)
-        if len(mkstream.transactions) == 0:
-            # the assumption is that the depot name matches the root stream name (for which there is no mkstream transaction)
+        if streamInfo.streamNumber == 1:
+            # Assumptions:
+            #   - The depot name matches the root stream name
+            #   - The root stream number is always 1.
+            #   - There is no mkstream transaction for the root stream.
             firstTr = hist(depot=depot, timeSpec="1", useCache=useCache)
             if firstTr is None or len(firstTr.transactions) == 0:
                 raise Exception("Error: assumption that the root stream has the same name as the depot doesn't hold. Aborting...")
             mkstreamTr = firstTr.transactions[0]
         else:
+            mkstream = hist(stream=stream, transactionKind="mkstream", timeSpec=ts.end, useCache=useCache)
+            if len(mkstream.transactions) == 0:
+                # The stream didn't exist during the requested time span.
+                return []
+
             mkstreamTr = mkstream.transactions[0]
             if len(mkstream.transactions) != 1:
                 raise Exception("There seem to be multiple mkstream transactions for the stream {0}".format(stream))
+
         if ts.start < mkstreamTr.id:
             if ts.end < mkstreamTr.id:
                 return [] # Nothing to be done here. The stream doesn't exist in the range.
