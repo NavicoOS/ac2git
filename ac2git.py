@@ -1200,7 +1200,7 @@ class AccuRev2Git(object):
         dataTr,  dataHash  = self.RetrieveStreamData(depot=depot, stream=stream, dataRef=dataRef, stateRef=stateRef, startTransaction=startTransaction, endTransaction=endTransaction)
         return dataTr, dataHash
 
-    def ProcessStreams(self):
+    def RetrieveStreams(self):
         if self.config.accurev.commandCacheFilename is not None:
             accurev.ext.enable_command_cache(self.config.accurev.commandCacheFilename)
         
@@ -1210,6 +1210,7 @@ class AccuRev2Git(object):
         endTrHist = accurev.hist(depot=depot, timeSpec=self.config.accurev.endTransaction)
         endTr = endTrHist.transactions[0]
 
+        # Retrieve stream information from Accurev and store it inside git.
         for stream in streamMap:
             streamInfo = None
             try:
@@ -2426,7 +2427,7 @@ class AccuRev2Git(object):
                 if self.config.merge is not None and self.config.merge:
                     self.ProcessTransactions()
                 else:
-                    self.ProcessStreams()
+                    self.RetrieveStreams()
                 self.gitRepo.raw_cmd([u'git', u'config', u'--local', u'--unset-all', u'gc.auto'])
               
             if doLogout:
