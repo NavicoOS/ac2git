@@ -6,7 +6,6 @@ You will find 4 main files in this repository:
   - `ac2git.py` - the main script that contains the pop, diff and deep-hist algorithms.
   - `accurev.py` - my python wrapper and extensions for accurev commands.
   - `git.py` - my git wrapper because I couldn't figure out how to use an existing one.
-  - `git_stitch.py` - the core of the _branch stitching_ functionality..
 
 ## accurev.py ##
 
@@ -63,16 +62,9 @@ This script contains 2 primary classes,`Config` and `AccuRev2Git`; an `AccuRev2G
 `AccuRev2Git` is a monstrosity that grew over time and I haven't split up yet. If you're looking at the internals of my script I would recommend having a look at the following functions:
  1. `AccuRev2GitMain()` - This is the entry point to the script and should be your first point of call. It sets up the command line options, loads the configuration into an `ac2git.Config` file, creates an instance of `AccuRev2Git` and starts the conversion.
  2. `AccuRev2Git.Start()` - This is the function that starts the conversion. It ensures a couple of things like that you have logged into accurev and then calls into `AccuRev2Git.ProcessStreams()`.
- 3. `AccuRev2Git.ProcessStreams()` - Is a very simple function that iterates over the streams specified in the configuration.
- 4. `AccuRev2Git.ProcessStream()` - This is the **workhorse**. It is where all the logic for converting a stream is located and the rest of the functions in the `AccuRev2Git` class are merely helpers for this function.
- 5. `AccuRev2Git.ProcessTransactions()` - Is the counterpart to `AccuRev2Git.ProcessStreams()` that uses a different algorithm to generate a merged git repository. It iterates over transactions in sequence generating merge points between git branches along the way.
- 6. `AccuRev2Git.ProcessTransaction()` - Is the core of the transactions method and is the workhorse of `AccuRev2Git.ProcessTransactions()` mentioned above. In this method you can see exactly how each different type of transaction is mapped to git.
+ 3. `AccuRev2Git.RetrieveStreams()` - Is a very simple function that iterates over the streams specified in the configuration, calls RetrieveStream() for each one and pushes them to any specified remotes.
+ 4. `AccuRev2Git.RetrieveStream()` - This is the **workhorse** that does most of the work in its two related functions RetrieveStreamInfo() and RetrieveStreamData().
+ 5. `AccuRev2Git.FindNextChangeTransaction()` - This function finds the next transaction that could have changed/affected the stream that we are processing. It either uses the _'pop'_, _'diff'_ or the _'deep-hist'_ method to do this depending on the user configured option for the method.
+ 6. `AccuRev2Git.RetrieveStreamInfo()` - For each transaction returned by `FindNextChangeTransaction()` This function executes 3 accurev commands, stores their XML output in 3 files: `hist.xml`, `streams.xml` and `diff.xml`; and then commits them to the `refs/ac2git/<depot_name>/streams/stream_<stream_number>_info` with the transaction number in an easy to parse commit message.
+ 7. `AccuRev2Git.RetrieveStreamData()` - For each transaction that was committed to the `refs/ac2git/<depot_name>/streams/stream_<stream_number>_info` ref but was not yet committed to `refs/ac2git/<depot_name>/streams/stream_<stream_number>_data` it does an `accurev pop` command and commits the contents of the stream at this transaction to the `refs/ac2git<depot_name>/streams/stream_<stream_number>_data`.
 
-As a bonus there is one more function that may interest you and that is the monstrosity `AccuRev2Git.StitchBranches()`. This function does all of the work required to turn many orphaned branches into a repo with branch merges (does not apply if the _"transactions method"_ was used, (5) & (6) above). It is still a work in progress and needs to be split up.
-
-### git_stitch.py ###
-
-This script is mainly a support script for the `AccuRev2Git.StitchBranches()` function, mentioned earlier. It runs a `git rev-list` command on each branch and a `git cat-file -p` command for each commit hash returned by `git rev-list`.
-The commits are then stored in a dictionary whose keys are _tree hashes_ and values _lists of commits (that point to those trees)_.
-
-This way we discover which commits have the exact same file contents from the top-level all the way down and mark them as _candidates_ for merge commits given certain criteria. That is the idea but the truth lies in `AccuRev2Git.StitchBranches()`.

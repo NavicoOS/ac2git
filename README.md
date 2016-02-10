@@ -83,6 +83,16 @@ When combined with my statement from the previous paragraph, this implies that y
 Ideally, if you have promoted all of your changes to the parent stream this should be identified as a merge commit and recorded as such. Though it would now be possible to extend this script to do so, it is not on my radar for now as it would be a reasonably large undertaking.
 However, there is hope because I've implemented an experimental feature, described below, that does just that but it operates as a post processing step. It is still a little buggy and requires iteration but it proves the concept. Patches are welcomed!
 
+----
+
+### Dear contributors ###
+
+I am not a python developer which should be evident to anyone who's seen the code. A lot of it was written late at night and was meant to be just a brain dump, to be cleaned up at a later date, but it remained. Please don't be dissuaded from contributing and helping me improve it because it will get us all closer to ditching AccuRev! I will do my best to add some notes about my method and how the code works in the sections that follow so please read them.
+
+For now it works as I need it to and that's enough.
+
+----
+
 ### How it works ###
 
 The conversion is split into two stages. The first stage retrieves the information from Accurev that is needed to construct a Git repository while the second stage processes the retrieved information and constructs Git branches for your streams from it.
@@ -190,12 +200,6 @@ Effectively this command does the heavy lifting for us so that the _diff method_
   + Delete only the files that `accurev diff` reported as changed from the git repository.
   + Populate the transaction and commit it into git. _(The populate here is done with the recursive option but without the overwrite option. Meaning that only the changed items are downloaded over the network.)_.
   + Repeat loop until done.
-
-### Dear contributors ###
-
-I am not a python developer which should be evident to anyone who's seen the code. A lot of it was written late at night and was meant to be just a brain dump, to be cleaned up at a later date, but it remained. Please don't be dissuaded from contributing and helping me improve it because it will get us all closer to ditching AccuRev! I will do my best to add some notes about my method and how the code works.
-
-For now it works as I need it to and that's enough.
 
 ---
 ---
