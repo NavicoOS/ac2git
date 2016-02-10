@@ -811,7 +811,7 @@ class AccuRev2Git(object):
             return (stateRef, dataRef)
         return (None, None)
 
-    def ProcessStreamInfo(self, depot, stream, stateRef, startTransaction, endTransaction):
+    def RetrieveStreamInfo(self, depot, stream, stateRef, startTransaction, endTransaction):
         self.config.logger.info( "Processing Accurev state for {0} : {1} - {2}".format(stream.name, startTransaction, endTransaction) )
 
         # Check if the ref exists!
@@ -953,7 +953,7 @@ class AccuRev2Git(object):
 
         return (tr, commitHash)
 
-    def ProcessStreamData(self, depot, stream, dataRef, stateRef, startTransaction, endTransaction):
+    def RetrieveStreamData(self, depot, stream, dataRef, stateRef, startTransaction, endTransaction):
         self.config.logger.info( "Processing stream data for {0} : {1} - {2}".format(stream.name, startTransaction, endTransaction) )
 
         # Check if the ref exists!
@@ -1178,24 +1178,26 @@ class AccuRev2Git(object):
             if not popResult:
                 return (None, None)
 
-            # Commit
-            commitHash = self.Commit(transaction=tr, isFirstCommit=False, isLooseCommit=False, messageOverride="transaction {trId}".format(trId=tr.id))
+            # Make the commit. Empty commits are allowed so that we match the state ref exactly (transaction for transaction).
+            # Reasoning: Empty commits are cheap and since these are not intended to be seen by the user anyway so we may as well make them to have a simpler mapping.
+            commitHash = self.Commit(transaction=tr, allowEmptyCommit=True, isFirstCommit=False, isLooseCommit=False, messageOverride="transaction {trId}".format(trId=tr.id), ref=dataRef)
             if commitHash is None:
-                if"nothing to commit" in self.gitRepo.lastStdout:
-                    self.config.logger.info("stream {streamName}: tr. #{trId} is a no-op. Potential but unlikely error. Continuing.".format(streamName=stream.name, trId=tr.id))
-                else:
-                    break # Early return from processing this stream. Restarting should clean everything up.
+                return (None, None)
             else:
-                if self.UpdateAndCheckoutRef(ref=dataRef, commitHash=commitHash) != True:
-                    return (None, None)
                 status = self.gitRepo.status()
                 self.config.logger.info( "stream {streamName}: tr. #{trId} {trType} -> commit {hash} on {ref}".format(streamName=stream.name, trId=tr.id, trType=tr.Type, hash=commitHash[:8], ref=dataRef) )
 
         return (tr, commitHash)
 
-    def ProcessStream(self, depot, stream, dataRef, stateRef, startTransaction, endTransaction):
-        stateTr, stateHash = self.ProcessStreamInfo(depot=depot, stream=stream, stateRef=stateRef, startTransaction=startTransaction, endTransaction=endTransaction)
-        dataTr,  dataHash  = self.ProcessStreamData(depot=depot, stream=stream, dataRef=dataRef, stateRef=stateRef, startTransaction=startTransaction, endTransaction=endTransaction)
+    # Retrieves all of the stream information from accurev, needed for later processing, and stores it in git using the \a dataRef and \a stateRef.
+    # The retrieval and processing of the accurev information is separated in order to optimize processing of subsets of streams in a depot. For example,
+    # if we have processed 7 streams in a depot and now wish to add an 8th we would have to start processing from the beginning because the merge points
+    # between branches will now most likely need to be reconsidered. If the retrieval of information from accurev is a part of the processing step then we
+    # have to redo a lot of the work that we have already done for the 7 streams. Instead we have the two steps decoupled so that all we need to do is
+    # download the 8th stream information from accurev (which we don't yet have) and do the reprocessing by only looking for information already in git.
+    def RetrieveStream(self, depot, stream, dataRef, stateRef, startTransaction, endTransaction):
+        stateTr, stateHash = self.RetrieveStreamInfo(depot=depot, stream=stream, stateRef=stateRef, startTransaction=startTransaction, endTransaction=endTransaction)
+        dataTr,  dataHash  = self.RetrieveStreamData(depot=depot, stream=stream, dataRef=dataRef, stateRef=stateRef, startTransaction=startTransaction, endTransaction=endTransaction)
         return dataTr, dataHash
 
     def ProcessStreams(self):
@@ -1225,7 +1227,7 @@ class AccuRev2Git(object):
             stateRef, dataRef  = self.GetStreamRefs(depot=depot, streamNumber=streamInfo.streamNumber)
             if stateRef is None or dataRef is None or len(stateRef) == 0 or len(dataRef) == 0:
                 raise Exception("Invariant error! The state ({sr}) and data ({dr}) refs must not be None!".format(sr=stateRef, dr=dataRef))
-            tr, commitHash = self.ProcessStream(depot=depot, stream=streamInfo, dataRef=dataRef, stateRef=stateRef, startTransaction=self.config.accurev.startTransaction, endTransaction=endTr.id)
+            tr, commitHash = self.RetrieveStream(depot=depot, stream=streamInfo, dataRef=dataRef, stateRef=stateRef, startTransaction=self.config.accurev.startTransaction, endTransaction=endTr.id)
             if tr is None or commitHash is None:
                 self.config.logger.error( "Error while processing stream {0}, branch {1}".format(stream, dataRef) )
 
