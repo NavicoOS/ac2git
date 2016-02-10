@@ -21,12 +21,18 @@ It should be possible to take a git branch which is branched from a tracked bran
   4. Promote the changes into the stream.
  4. Remove the timelock or just quit. Done.
 
-The continuous merge
---------------------
+Implement the following merge strategies
+----------------------------------------
 
-It should be possible to infer merge-points on the fly so long as the entire parent hierarchy of streams from accurev is available. This should make the converted repo more useful but it also prevents you from excluding large streams if they are in your parent hierarchy since they are required to propagate merges in full. For complex repositories this may be more of a hinderance.
+ - Aggressive -- Only look at the src/dst info in the accurev hist output and do the merge regardless of the state of the streams/branches.
+ - Pedantic   -- Process the transactions in order and generate some sort of unique hash for the contents of the transaction which we will use later to detect "out of order" promotes and treat them as merges also.
+ - Normal     -- Process the transactions in order and generate merge points only when the `git diff` command between the two branches returns no changes. It is important to use `git diff` in order to leverage `git attributes` to allow the user to set up files to be ignored in this process. See http://stackoverflow.com/questions/10415100/want-to-exclude-file-from-git-diff.
+ - Fractal    -- Process the streams in order (ordered by their stream id from lowest to highest) and branch them from their basis at their `mkstream` transaction or their last `chstream` transaction that changed the basis.
+ - Orphanage  -- Process the streams in the order specified in the config, making each branch an orpaned branch in git. See https://www.kernel.org/pub/software/scm/git/docs/git-branch.html.
+ - Skip       -- Do not process the merges.
 
-Merges with missing streams
----------------------------
+Using git remotes
+-----------------
 
-Currenty a merge point is only considered for direct parents. This is a simple boolean switch in the code right now but can be expanded to figure out what the _next available_ parent is instead. Which would allow streams to be left out and yet have some useful merge history. Ofcourse this would not work for all cases but would be a best effort approach.
+Add configuration options to allow us to have more flexible use of remotes. A remote could be used to fetch a subset of the needed streams before we process them ourselves or ...
+
