@@ -70,6 +70,17 @@ AccuRev2Git is a tool to convert an AccuRev depot into a git repo. A specified A
  python ac2git.py --help
  ```
 
+### The result ###
+
+What this script will spit out is a git repository with independent orphaned branches representing your streams. Meaning, that each stream is converted separately on a branch that has no merge points with any other branch.
+This is by design as it was a simpler model to begin with.
+
+Each git branch accurately depicts the stream from which it was created w.r.t. **time**. This means that at each point in time the git branch represents the state of your stream. Not only are the transactions for this stream commited to git but so are any transactions that occurred in the parent stream which automatically flowed down to us.
+When combined with my statement from the previous paragraph, this implies that you will see a number of commits on different branches with the same time, author and commit message, most often because they represent the same _promote_ transaction.
+
+Ideally, if you have promoted all of your changes to the parent stream this should be identified as a merge commit and recorded as such. Though it would now be possible to extend this script to do so, it is not on my radar for now as it would be a reasonably large undertaking.
+However, there is hope because I've implemented an experimental feature, described below, that does just that but it operates as a post processing step. It is still a little buggy and requires iteration but it proves the concept. Patches are welcomed!
+
 ### How it works ###
 
 There are three methods available for converting your accurev depot. Each is an optimization of the previous and will run quicker but may not be possible to use on an older version of accurev.
@@ -139,17 +150,6 @@ Effectively this command does the heavy lifting for us so that the _diff method_
   + Delete only the files that `accurev diff` reported as changed from the git repository.
   + Populate the transaction and commit it into git. _(The populate here is done with the recursive option but without the overwrite option. Meaning that only the changed items are downloaded over the network.)_.
   + Repeat loop until done.
-
-### The result ###
-
-What this script will spit out is a git repository with independent orphaned branches representing your streams. Meaning, that each stream is converted separately on a branch that has no merge points with any other branch.
-This is by design as it was a simpler model to begin with.
-
-Each git branch accurately depicts the stream from which it was created w.r.t. **time**. This means that at each point in time the git branch represents the state of your stream. Not only are the transactions for this stream commited to git but so are any transactions that occurred in the parent stream which automatically flowed down to us.
-When combined with my statement from the previous paragraph, this implies that you will see a number of commits on different branches with the same time, author and commit message, most often because they represent the same _promote_ transaction.
-
-Ideally, if you have promoted all of your changes to the parent stream this should be identified as a merge commit and recorded as such. Though it would now be possible to extend this script to do so, it is not on my radar for now as it would be a reasonably large undertaking.
-However, there is hope because I've implemented an experimental feature, described below, that does just that but it operates as a post processing step. It is still a little buggy and requires iteration but it proves the concept. Patches are welcomed!
 
 ### Experimental features ###
 
