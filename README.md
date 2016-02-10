@@ -85,7 +85,7 @@ However, there is hope because I've implemented an experimental feature, describ
 
 ### How it works ###
 
-The conversion is split into two stages. The first stage retrieves the information from Accurev that is needed to construct a Git history while the second stage processes the retrieved information and constructs Git branches for your streams from it.
+The conversion is split into two stages. The first stage retrieves the information from Accurev that is needed to construct a Git repository while the second stage processes the retrieved information and constructs Git branches for your streams from it.
 
 This method was developed in colaboration with [Robert Smithson](https://github.com/fatfreddie).
 
@@ -103,19 +103,19 @@ For each transaction that affects the stream that we are processing we retrieve 
 
 _Note: The TaskId field in each accurev command's XML output is set to zero in order to optimize the use of git's hashing of blobs (i.e. the same command output will always hash to the same blob if we replace this one field, saving some minimal space and processing on the git side and making diffs more useful between different commits)._
 
-The first 3 items, `hist.xml`, `streams.xml` and `diff.xml` are committed together, for each transaction, on the `ref/ac2git/<depot_name>/streams/stream_<stream_number>_info` ref with the commit message that has the following format `transaction <transaction_number>`. This is meta-data needed to make decisions about the stream w.r.t. other streams later on and is used to produce merges when processing git branches in the second stage.
+The first 3 items, `hist.xml`, `streams.xml` and `diff.xml` are committed together, for each transaction, on the `refs/ac2git/<depot_name>/streams/stream_<stream_number>_info` ref with the commit message that has the following format `transaction <transaction_number>`. This is meta-data needed to make decisions about the stream w.r.t. other streams later on and is used to produce merges when processing git branches in the second stage.
 
-The 4th item is the actual state of the stream at this transaction and will be the contents of the Git commit for this transaction while the message will come from the `hist.xml` mentioned earlier. The contents is committed on a separate ref, `ref/ac2git/<depot_name>/streams/stream_<stream_number>_data`, with the commit message also formatted as `transaction <transaction_number>`.
+The 4th item is the actual state of the stream at this transaction and will be the contents of the Git commit for this transaction while the message will come from the `hist.xml` mentioned earlier. The contents is committed on a separate ref, `refs/ac2git/<depot_name>/streams/stream_<stream_number>_data`, with the commit message also formatted as `transaction <transaction_number>`.
 
-You can inspect these 'hidden branches' with `git log ref/ac2git/<depot_name>/streams/stream_<stream_number>_data` to see their contents.
+You can inspect these 'hidden branches' with `git log refs/ac2git/<depot_name>/streams/stream_<stream_number>_data` to see the processed transaction numbers for a particular stream.
 
-To view the output of any individual file you can use `git show <commit_hash>:<filename>` so viewing what the last transaction's `hist.xml` looks like you can run the following command `git show ref/ac2git/<depot_name>/streams/stream_<stream_number>_info` where `<depot_name>` and `<stream_number>` are placeholders that you'll need to replace with information from your Accurev depot.
+To view the output of any individual file you can use `git show <commit_hash>:<filename>` so viewing what the last transaction's `hist.xml` looks like you can run the following command `git show refs/ac2git/<depot_name>/streams/stream_<stream_number>_info:hist.xml` where `<depot_name>` and `<stream_number>` are placeholders that you'll need to replace with information from your Accurev depot. So if your depot is called `MyDepot` and you are interested in the last processed transaction on the root stream you can use the following command `git show refs/ac2git/MyDepot/streams/stream_1_info:hist.xml`.
 
 Since the contents of the two refs are so different it would be inefficient to do a `git checkout` of one and then the other for each transaction so the script first processes all the transactions for the `ref/ac2git/<depot_name>/streams/stream_<stream_number>_info` and then checks out the `ref/ac2git/<depot_name>/streams/stream_<stream_number>_data` ref and processes the same transactions it just added to the `..._info` ref. Even if there are no changes the `..._data` ref is always committed to (`--allow-empty` is set for the `git commit`) so that each transaction on the `..._info` ref has a corresponding transaction on the `..._data` ref.
 
 #### Second stage: processing ####
 
-Work in progress...
+_Work in progress..._
 
 ### Converting the contents of a single stream ###
 
