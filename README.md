@@ -155,63 +155,11 @@ However, there is hope because I've implemented an experimental feature, describ
 
 #### Transactions method (merge flag) ####
 
-This method attempts to iterate over the depot transaction by transaction and generate the most correct git conversion possible. It is not compatible with other methods mentioned above and is currently planned to only be capable of converting the entire depot. If this method is used the finalize step (described below) doesn't need to be performed as the repository should already have the correct merge points.
+This method attempts to iterate over the depot transaction by transaction and generate the most correct git conversion possible. It is not compatible with other methods mentioned above and is currently planned to only be capable of converting the entire depot.
 
 If there are no streams listed then this method iterates over each transaction made to a depot in sequence starting at transaction 1. For each transaction type it tries to create the git representation of what has occurred in accurev. For most transactions that can occur on a workspace (i.e. `keep`, `move`, `co`) it generates a git commit on the branch which shares the same name as the workspace in which the transaction occurred. Stream operations like `mkstream` or `chstream` in turn can result in a git branch being renamed or moved, or simply a commit being created. If you are interested in what is going on the best place to look is the `ac2git.py` file and the method `AccuRev2Git.ProcessTransaction()`.
 
-If there is a list of streams specified then this method will use the _'deep-hist'_ or _'diff'_ (_'pop'_ isn't supported yet) algorithms to generate a list of transactions for each of the streams listed and will iterate over those transactions in order (skipping transactions which don't affect these streams) and will generate a merged git repository that only has the specified streams in it. Again, finalize isn't needed if this method is used but the down-side is that streams can't be easily added to the converted repository. So if you intend to use this to continuously track an AccuRev depot, make sure to include all streams that you're interested in or you may have to restart the conversion.
-
-#### Branch merges (a.k.a. finalize step) ####
-
-I've been working on making the converted repo more usable by creating fake merge points where possible. This is still in early stages and is experimental so I recommend running it on a copy of the converted repo.
-
-The todo list for this feature is long and I may not get around to fixing it all but here's how to take advantage of it in its current stage:
-
-Convert some set of accurev streams to a git repo as was described above.
-
-Let's say your converted repo is at `/home/repos/my_repo/`
-
-*Make a copy of it* `cp -r /home/repos/my_repo/ /home/repos/my_repo_backup/`
-
-Re-run the conversion script with the `-f` option like this:
-
-```
-python ac2git.py -f
-```
-
-And the script will do some magic and spit out a `stitch_branches.sh` file in the current directory.
-
-Run that script and your repo will end up with merge points.
-
- * Merge points are created for commits which point to the same _tree hash_ (meaning that the entire directory contents at that point is the same between two commits). _TODO: Explain how this works..._
- * This is destructive so make sure you've got a copy.
- * The script still requires a connection to Accurev to retrieve some of this information. If I get time I would like to include everything needed for this step in the conversion process...
-
-I would like to make it possible to run this step iteratively as you convert the repo but currently it is a single massive process at the end of the conversion.
-
-*Note: This part is still being tested and may or may not work as you expect.*
-
-##### How it works #####
-
-The branch merge points are identified by finding identical _trees_ in git. In git your entire directory is just another hashable item and the hash uniquely identifies its contents. This means that we can use git to figure out where our currently independent streams have identical contents. So we want to find all of the _commits_ which have the same _trees_. The `git_stitch.py` scrip is used to build up a dictionary (hash table) of all of the _tree hashes_ to the _commit hashes_ (which are kindly supplied by git itself). It uses the `git cat-file -p <hash>` command to build up the dictionary:
-
-```
-git cat-file -p efb930b495b283522be6e04673e02dfe13103f67
-tree a9ec21d1d1ddec032fba82288cfea12efa41cfde
-parent 0724e74da61cfff0c55318a7795ba18b00e09b31
-author Lazar Sumar <bugzilla@lazar.co.nz> 1442192418 +1200
-committer Lazar Sumar <bugzilla@lazar.co.nz> 1442192418 +1200
-```
-
-Once we do find two identical trees we figure out which one should be the _parent_ by comparing their respective timestamps in UTC. The earlier one will become the parent of the later one, almost always. The only time they won't is if the two streams are _siblings_. We can only perform merges on parent child relationships and can't merge siblings or any stream that is not a direct or indirect parent of the other.
-
-We could further restrict the merges to only occur in direct parent child relationships but since the script allows you to specify specific streams to track/convert it wouldn't make sense to make this restriction. This is because you wouln't get some potential merges that you would likely want because an intermediate stream was missing.
-
-This part gets pretty messy when you try to consider all the possibilities so I will leave it there.
-
-The last part, that should be considered, is the _aliased commit_ or _shadow commit_ which is a result of a promote into the parent stream that flowed down to a child stream which was empty at the time. Ideally we would want to remove one of these commits, preferably the child streams, and have it look like the child stream merged into the parent for a short period of time. An argument was made for the opposite, the parent merging into the child, but I implemented it as a merge into the parent. I would like to add a switch that controls this behavior when there is time.
-
-Finally, all of the changes are turned into 3 scripts, 2 of which are given as arguments to the `git filter-branch` command inside the 3rd script.
+If there is a list of streams specified then this method will use the _'deep-hist'_ or _'diff'_ (_'pop'_ isn't supported yet) algorithms to generate a list of transactions for each of the streams listed and will iterate over those transactions in order (skipping transactions which don't affect these streams) and will generate a merged git repository that only has the specified streams in it.
 
 ### Dear contributors ###
 
