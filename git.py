@@ -383,6 +383,14 @@ class repo(object):
             output += stdoutdata
             error  += stderrdata
             process.poll()
+
+        if len(output) + len(error) == 0:
+            try:
+                stdoutdata, stderrdata = process.communicate()
+                output += stdoutdata
+                error  += stderrdata
+            except:
+                pass
         
         self._lastCommand = process
         self.lastStderr = error

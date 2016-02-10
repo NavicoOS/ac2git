@@ -1009,20 +1009,25 @@ class AccuRev2Git(object):
             lastTrId = int(lastCommitInfo[2])
 
             # Find the commit hash on our stateRef that corresponds to our last transaction number.
-            lastStateCommitHash = self.gitRepo.raw_cmd(['git', 'log', '--format=%H', '--grep', "'^transaction {trId}$'".format(trId=lastTrId), stateRef])
+            cmd = ['git', 'log', '--format=%H', '--grep', "^transaction {trId}$".format(trId=lastTrId), stateRef]
+            lastStateCommitHash = self.gitRepo.raw_cmd(cmd)
             if lastStateCommitHash is None:
-                raise Exception("Couldn't query {stateRef} for Accurev state information at transaction {trId}".format(stateRef=stateRef, trId=lastTrId))
-            elif len(lastStateCommitHash) == 0:
-                self.config.logger.error( "Failed to load current transaction ({trId}) from Accurev state ref {ref}. 'git log --grep '^transaction {trId}$' {ref}' returned empty.".format(trId=lastTrId, ref=stateRef) )
+                raise Exception("Couldn't query {stateRef} for Accurev state information at transaction {trId}. {cmd}".format(stateRef=stateRef, trId=lastTrId, cmd=' '.join(cmd)))
+            lastStateCommitHash = lastStateCommitHash.strip()
+
+            if len(lastStateCommitHash) == 0:
+                self.config.logger.error( "Failed to load current transaction ({trId}) from Accurev state ref {ref}. '{cmd}' returned empty.".format(trId=lastTrId, ref=stateRef, cmd=' '.join(cmd)) )
                 return (None, None)
 
             # Get the list of new hashes that have been committed to the stateRef but we haven't processed on the dataRef just yet.
-            stateHashList = self.gitRepo.raw_cmd(['git', 'log', '--format=%H', stateRef, '^{lastHash}'.format(lastHash=lastStateCommitHash)])
+            cmd = ['git', 'log', '--format=%H', stateRef, '^{lastHash}'.format(lastHash=lastStateCommitHash)]
+            stateHashList = self.gitRepo.raw_cmd(cmd)
             if stateHashList is None:
-                raise Exception("Couldn't get the commit hash list to process from the Accurev state ref {stateRef}.".format(stateRef=stateRef))
+                raise Exception("Couldn't get the commit hash list to process from the Accurev state ref {stateRef}. '{cmd}'".format(stateRef=stateRef, cmd=' '.join(cmd)))
             elif len(stateHashList) == 0:
-                self.config.logger.error( "{dataRef} is upto date. Couldn't load any more transactions after tr. ({trId}) from Accurev state ref {stateRef}. git log {stateRef} ^{lastHash} returned empty.".format(trId=lastTrId, dataRef=dataRef, stateRef=stateRef, lastHash=lastStateCommitHash) )
+                self.config.logger.error( "{dataRef} is upto date. Couldn't load any more transactions after tr. ({trId}) from Accurev state ref {stateRef}. '{cmd}' returned empty.".format(trId=lastTrId, dataRef=dataRef, stateRef=stateRef, lastHash=lastStateCommitHash, cmd=' '.join(cmd)) )
                 return (None, None)
+            stateHashList = stateHashList.strip()
             stateHashList = stateHashList.split('\n')
 
         else:
@@ -1030,15 +1035,17 @@ class AccuRev2Git(object):
             stateHashList = self.gitRepo.raw_cmd(['git', 'log', '--format=%H', stateRef])
             if stateHashList is None:
                 raise Exception("Couldn't get the commit hash list to process from the Accurev state ref {stateRef}.".format(stateRef=stateRef))
-            elif len(stateHashList) == 0:
+            stateHashList = stateHashList.strip()
+            stateHashList = stateHashList.split('\n')
+
+            if len(stateHashList) == 0:
                 self.config.logger.error( "{dataRef} is upto date. No transactions available in Accurev state ref {stateRef}. git log {stateRef} returned empty.".format(dataRef=dataRef, stateRef=stateRef) )
                 return (None, None)
-            stateHashList = stateHashList.split('\n')
 
             # Remove the first hash (last item) from the processing list and process it immediately.
             stateHash = stateHashList.pop()
-            while len(stateHash) == 0:
-                stateHash = stateHashList.pop()
+            if stateHash is None or len(stateHash) == 0:
+                raise Exception("Invariant error! We shouldn't have empty strings in the stateHashList")
             self.config.logger.info( "No {dr} found. Processing {h} on {sr} first.".format(dr=dataRef, h=stateHash, sr=stateRef) )
 
             # Get the first transaction that we are about to process.
@@ -1106,7 +1113,7 @@ class AccuRev2Git(object):
             streams = None
             streamsXml = self.gitRepo.raw_cmd(['git', 'show', '{hash}:streams.xml'.format(hash=stateHash)])
             if streamsXml is not None or len(streamsXml) != 0:
-                hist = accurev.obj.Show.Streams.fromxmlstring(streamsXml)
+                streams = accurev.obj.Show.Streams.fromxmlstring(streamsXml)
             else:
                 raise Exception("Command failed! git show {hash}:streams.xml".format(hash=stateHash))
 
