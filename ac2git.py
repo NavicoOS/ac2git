@@ -2057,12 +2057,17 @@ class AccuRev2Git(object):
 
             self.gitRepo.raw_cmd([u'git', u'config', u'--local', u'gc.auto', u'0'])
 
+            self.config.logger.info("Retrieveing stream information from Accurev into hidden refs.")
             self.RetrieveStreams()
+
             if self.config.mergeStrategy in [ "normal" ]:
+                self.config.logger.info("Processing transactions from hidden refs. Merge strategy '{strategy}'.".format(strategy=self.config.mergeStrategy))
                 self.ProcessTransactions()
             elif self.config.mergeStrategy in [ "orphanage" ]:
+                self.config.logger.info("Processing streams from hidden refs. Merge strategy '{strategy}'.".format(strategy=self.config.mergeStrategy))
                 self.ProcessOrphanage()
             elif self.config.mergeStrategy in [ "skip", None ]:
+                self.config.logger.info("Skipping processing of Accurev data. No git branches will be generated/updated. Merge strategy '{strategy}'.".format(strategy=self.config.mergeStrategy))
                 pass # Skip the merge step.
             else:
                 raise Exception("Unrecognized merge strategy '{strategy}'".format(strategy=self.config.mergeStrategy))
