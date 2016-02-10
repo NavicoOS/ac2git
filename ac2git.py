@@ -259,10 +259,10 @@ class Config(object):
             git     = Config.Git.fromxmlelement(xmlRoot.find('git'))
             
             method = "diff" # Defaults to diff
-            merge = False
+            mergeStrategy = "normal"
             methodElem = xmlRoot.find('method')
             if methodElem is not None:
-                merge = Config.GetBooleanAttribute(methodElem, 'merge')
+                mergeStrategy = methodElem.attrib.get('merge-strategy')
                 method = methodElem.text
 
             logFilename = None
@@ -280,7 +280,7 @@ class Config(object):
             for includeElem in xmlRoot.findall('include'):
                 includes.append(Config.Include.fromxmlelement(includeElem))
 
-            return cls(accurev=accurev, git=git, usermaps=usermaps, method=method, merge=merge, logFilename=logFilename, includes=includes)
+            return cls(accurev=accurev, git=git, usermaps=usermaps, method=method, mergeStrategy=mergeStrategy, logFilename=logFilename, includes=includes)
         else:
             # Invalid XML for an accurev2git configuration file.
             return None
@@ -296,15 +296,15 @@ class Config(object):
                 print("WARNING: Ignoring includes. Not yet implemented!", file=sys.stderr)
         return config
 
-    def __init__(self, accurev = None, git = None, usermaps = None, method = None, merge = None, logFilename = None, includes = []):
-        self.accurev     = accurev
-        self.git         = git
-        self.usermaps    = usermaps
-        self.method      = method
-        self.merge       = merge
-        self.logFilename = logFilename
-        self.logger      = Config.Logger()
-        self.includes    = includes
+    def __init__(self, accurev = None, git = None, usermaps = None, method = None, mergeStrategy = None, logFilename = None, includes = []):
+        self.accurev       = accurev
+        self.git           = git
+        self.usermaps      = usermaps
+        self.method        = method
+        self.mergeStrategy = mergeStrategy
+        self.logFilename   = logFilename
+        self.logger        = Config.Logger()
+        self.includes      = includes
         
     def __repr__(self):
         str = "Config(accurev=" + repr(self.accurev)
@@ -2020,7 +2020,7 @@ class AccuRev2Git(object):
                         self.config.logger.info( "Added push url: {remote} ({url}).".format(remote=r.name, url=r.pushUrl) )
 
             if not isRestart:
-                #self.gitRepo.reset(isHard=True)
+                self.gitRepo.reset(isHard=True)
                 self.gitRepo.clean(force=True)
             
             acInfo = accurev.info()
@@ -2056,10 +2056,17 @@ class AccuRev2Git(object):
             accurev.replica.sync()
 
             self.gitRepo.raw_cmd([u'git', u'config', u'--local', u'gc.auto', u'0'])
-            if self.config.merge is not None and self.config.merge:
+
+            self.RetrieveStreams()
+            if self.config.mergeStrategy in [ "normal" ]:
                 self.ProcessTransactions()
+            elif self.config.mergeStrategy in [ "orphanage" ]:
+                self.ProcessOrphanage()
+            elif self.config.mergeStrategy in [ "skip", None ]:
+                pass # Skip the merge step.
             else:
-                self.RetrieveStreams()
+                raise Exception("Unrecognized merge strategy '{strategy}'".format(strategy=self.config.mergeStrategy))
+
             self.gitRepo.raw_cmd([u'git', u'config', u'--local', u'--unset-all', u'gc.auto'])
               
             if doLogout:
@@ -2113,7 +2120,7 @@ def DumpExampleConfigFile(outputFilename):
                                                                                                                              branches will be pushed. The push-url attribute is optional. -->
         <remote name="backup" url="https://github.com/orao/ac2git.git" />
     </git>
-    <method merge="false">deep-hist</method> <!-- The method specifies what approach is taken to perform the conversion. Allowed values are 'deep-hist', 'diff' and 'pop'.
+    <method merge-strategy="normal">deep-hist</method> <!-- The method specifies what approach is taken to perform the conversion. Allowed values are 'deep-hist', 'diff' and 'pop'.
                                      - deep-hist: Works by using the accurev.ext.deep_hist() function to return a list of transactions that could have affected the stream.
                                                   It then performs a diff between the transactions and only populates the files that have changed like the 'diff' method.
                                                   It is the quickest method but is only as reliable as the information that accurev.ext.deep_hist() provides.
@@ -2126,8 +2133,15 @@ def DumpExampleConfigFile(outputFilename):
                                      - pop: This is the naive method which doesn't care about changes and always performs a full deletion of the whole tree and a complete
                                             `accurev pop` command. It is a lot slower than the other methods for streams with a lot of files but should work even with older
                                             accurev releases. This is the method originally implemented by Ryan LaNeve in his https://github.com/rlaneve/accurev2git repo.
-                                     * merge ["true" or "false"]: When set to "true" the script Works transaction by transaction and is intended to generate an accurate
-                                              representation of the complete accurev history in git at the cost of the ability to add more streams at a later date.
+                                     * merge-strategy ["skip", "normal", "orphanage"]:
+                                             'skip' - Skips the merging step. The git repo won't have any visible git branches but will have hidden internal state which
+                                                      tracks the accurev depot. When a merge strategy is next set to something other than 'skip' already retrieved information
+                                                      won't be redownloaded from accurev.
+                                              'normal' - Performs merges using a straightforward but imprefect algorithm. The algorithm has the preferred balance between performance
+                                                         the resulting merges in git.
+                                              'orphanage' - Performs no merges but adds orphaned git branches which track the accurev streams. This is the old conversion method and is
+                                                            here for legacy reasons. If streams are added later the resulting git repository commit hashes do not change but it will be
+                                                            difficult to merge the branches in git at a later stage.
                                -->
     <logfile>accurev2git.log</logfile>
     <!-- The user maps are used to convert users from AccuRev into git. Please spend the time to fill them in properly. -->
@@ -2250,10 +2264,11 @@ def AutoConfigFile(filename, args, preserveConfig=False):
                 remote = remoteMap[remoteName]
                 file.write("""        <remote name="{name}" url="{url}"{push_url_string} />""".format(name=remote.name, url=name.url, push_url_string='' if name.pushUrl is None else ' push-url="{url}"'.format(url=name.pushUrl)))
         
+        mergeStrategyAttribute = ' merge-strategy="{strategy}"'.format(strategy=config.mergeStrategy) if config.mergeStrategy is not None else ''
         file.write("""    </git>
-    <method merge="{merge}">{method}</method>
+    <method{merge_strategy}>{method}</method>
     <logfile>{log_filename}<logfile>
-    <!-- The user maps are used to convert users from AccuRev into git. Please spend the time to fill them in properly. -->""".format(method=config.method, merge=str(config.merge).lower() if config.merge is not None else "false", log_filename=config.logFilename))
+    <!-- The user maps are used to convert users from AccuRev into git. Please spend the time to fill them in properly. -->""".format(method=config.method, merge_strategy=mergeStrategyAttribute, log_filename=config.logFilename))
         file.write("""
     <usermaps>
          <!-- The timezone attribute is optional. All times are retrieved in UTC from AccuRev and will converted to the local timezone by default.
@@ -2344,8 +2359,8 @@ def SetConfigFromArgs(config, args):
         config.git.repoPath     = args.gitRepoPath
     if args.conversionMethod is not None:
         config.method = args.conversionMethod
-    if args.doMerges is not None:
-        config.merge = args.doMerges
+    if args.mergeStrategy is not None:
+        config.mergeStrategy = args.mergeStrategy
     if args.logFile is not None:
         config.logFilename      = args.logFile
 
@@ -2386,7 +2401,7 @@ def PrintConfigSummary(config):
         config.logger.info('    username: {0}'.format(config.accurev.username))
         config.logger.info('    command cache: {0}'.format(config.accurev.commandCacheFilename))
         config.logger.info('  method: {0}'.format(config.method))
-        config.logger.info('  merge:  {0}'.format(config.merge))
+        config.logger.info('  merge strategy: {0}'.format(config.mergeStrategy))
         config.logger.info('  usermaps: {0}'.format(len(config.usermaps)))
         config.logger.info('  log file: {0}'.format(config.logFilename))
         config.logger.info('  verbose:  {0}'.format(config.logger.isDbgEnabled))
@@ -2408,7 +2423,7 @@ def AccuRev2GitMain(argv):
     parser.add_argument('-t', '--accurev-depot', dest='accurevDepot',        metavar='<accurev-depot>',     help="The AccuRev depot in which the streams that are being converted are located. This script currently assumes only one depot is being converted at a time.")
     parser.add_argument('-g', '--git-repo-path', dest='gitRepoPath',         metavar='<git-repo-path>',     help="The system path to an existing folder where the git repository will be created.")
     parser.add_argument('-M', '--method', dest='conversionMethod', choices=['pop', 'diff', 'deep-hist'], metavar='<conversion-method>', help="Specifies the method which is used to perform the conversion. Can be either 'pop', 'diff' or 'deep-hist'. 'pop' specifies that every transaction is populated in full. 'diff' specifies that only the differences are populated but transactions are iterated one at a time. 'deep-hist' specifies that only the differences are populated and that only transactions that could have affected this stream are iterated.")
-    parser.add_argument('-j', '--merge',      dest='doMerges', action='store_const', const=True,         help="Sets the merge flag which makes the script iterate over transactions (instead of streams) for the specified streams and produce a git repository with promotes shown as merges.")
+    parser.add_argument('-j', '--merge-strategy', dest='mergeStrategy', choices=['skip', 'normal', 'orphanage'], metavar='<merge-strategy>', help="Sets the merge strategy which dictates how the git repository branches are generated. Depending on the value chosen the branches can be orphan branches ('orphanage' strategy) or have merges where promotes have occurred with the 'normal' strategy. The 'skip' strategy forces the script to skip making the git branches and will cause it to only do the retrieving of information from accurev for use with some strategy at a later date.")
     parser.add_argument('-r', '--restart',    dest='restart', action='store_const', const=True, help="Discard any existing conversion and start over.")
     parser.add_argument('-v', '--verbose',    dest='debug',   action='store_const', const=True, help="Print the script debug information. Makes the script more verbose.")
     parser.add_argument('-L', '--log-file',   dest='logFile', metavar='<log-filename>',         help="Sets the filename to which all console output will be logged (console output is still printed).")
