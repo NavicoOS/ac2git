@@ -609,7 +609,7 @@ class AccuRev2Git(object):
             else:
                 self.config.logger.error( "Failed to write tree for transaction {0}".format(transaction.id) )
         else:
-            commitResult = self.gitRepo.commit(message_file=messageFilePath, committer_name=committerName, committer_email=committerEmail, committer_date=committerDate, committer_tz=committerTimezone, author_name=committerName, author_email=committerEmail, author_date=committerDate, author_tz=committerTimezone, allow_empty_message=True, allow_empty=allowEmptyCommit, git_opts=[u'-c', u'core.autocrlf=false'])
+            commitResult = self.gitRepo.commit(message_file=messageFilePath, committer_name=committerName, committer_email=committerEmail, committer_date=committerDate, committer_tz=committerTimezone, author_name=committerName, author_email=committerEmail, author_date=committerDate, author_tz=committerTimezone, allow_empty_message=True, allow_empty=allowEmptyCommit, cleanup='whitespace', git_opts=[u'-c', u'core.autocrlf=false'])
             if commitResult is not None:
                 commitHash = commitResult.shortHash
                 if commitHash is None:

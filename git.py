@@ -554,7 +554,7 @@ class repo(object):
 
         return output
 
-    def commit(self, message=None, message_file=None, author_name=None, author_email=None, author_date=None, author_tz=None, committer_name=None, committer_email=None, committer_date=None, committer_tz=None, allow_empty=False, allow_empty_message=False, git_opts=[]):
+    def commit(self, message=None, message_file=None, author_name=None, author_email=None, author_date=None, author_tz=None, committer_name=None, committer_email=None, committer_date=None, committer_tz=None, allow_empty=False, allow_empty_message=False, cleanup=None, git_opts=[]):
         # git commit example output
         # =========================
         # git commit -m "Parameterizing hardcoded values."
@@ -580,6 +580,19 @@ class repo(object):
         elif not allow_empty_message:
             raise Exception(u'Error, tried to commit with empty message')
         
+        if cleanup is not None:
+            # This option determines how the supplied commit message should be cleaned up before committing. The <mode> can be strip, whitespace, verbatim, scissors or default.
+            #   * strip      - Strip leading and trailing empty lines, trailing whitespace, commentary and collapse consecutive empty lines.
+            #   * whitespace - Same as strip except #commentary is not removed.
+            #   * verbatim   - Do not change the message at all.
+            #   * scissors   - Same as whitespace, except that everything from (and including) the line "# ------------------------ >8 ------------------------" is truncated if the message is to be edited. "#" can be customized with core.commentChar.
+            #   * default    - Same as strip if the message is to be edited. Otherwise whitespace.
+            # See: https://www.kernel.org/pub/software/scm/git/docs/git-commit.html
+            allowedValues = [ 'strip', 'whitespace', 'verbatim', 'scissors', 'default' ]
+            if cleanup not in allowedValues:
+                raise Exception("git.commit() unrecognized value for parameter cleanup. Got '{val}' but expected one of '{allowed}'.".format(val=cleanup, allowed="', '".join(allowedValues)))
+            cmd.append(u'--cleanup={cleanup}'.format(cleanup=cleanup))
+
         newEnv = os.environ.copy()
         
         # Set the author information
