@@ -1004,7 +1004,7 @@ class AccuRev2Git(object):
             lastTrId = int(lastCommitInfo[2])
 
             # Find the commit hash on our stateRef that corresponds to our last transaction number.
-            cmd = ['git', 'log', '--format=%H', '--grep', "^transaction {trId}$".format(trId=lastTrId), stateRef]
+            cmd = ['git', 'log', '--format=%H', '--grep', '^transaction {trId}$'.format(trId=lastTrId), stateRef]
             lastStateCommitHash = self.gitRepo.raw_cmd(cmd)
             if lastStateCommitHash is None:
                 raise Exception("Couldn't query {stateRef} for Accurev state information at transaction {trId}. {cmd}".format(stateRef=stateRef, trId=lastTrId, cmd=' '.join(cmd)))
@@ -1021,7 +1021,20 @@ class AccuRev2Git(object):
                 raise Exception("Couldn't get the commit hash list to process from the Accurev state ref {stateRef}. '{cmd}'".format(stateRef=stateRef, cmd=' '.join(cmd)))
             elif len(stateHashList) == 0:
                 self.config.logger.error( "{dataRef} is upto date. Couldn't load any more transactions after tr. ({trId}) from Accurev state ref {stateRef}. '{cmd}' returned empty.".format(trId=lastTrId, dataRef=dataRef, stateRef=stateRef, lastHash=lastStateCommitHash, cmd=' '.join(cmd)) )
-                return (None, None)
+
+                # Get the first transaction that we are about to process.
+                trHistXml = self.gitRepo.raw_cmd(['git', 'show', '{hash}:hist.xml'.format(hash=lastStateCommitHash)])
+                if trHistXml is None or len(trHistXml) == 0:
+                    raise Exception("Failed to retrieve hist.xml from commit {hash} on ref {stateRef}. Result {res}".format(hash=lastStateCommitHash, stateRef=stateRef, res=trHistXml))
+                trHist = accurev.obj.History.fromxmlstring(trHistXml)
+                tr = trHist.transactions[0]
+
+                cmd = ['git', 'log', '--format=%H', '--grep', '^transaction {trId}$'.format(trId=tr.id), dataRef]
+                commitHash = self.gitRepo.raw_cmd(cmd)
+                if commitHash is None or len(commitHash) == 0:
+                    self.config.logger.error( "Failed to get commit hash for transaction {trId} on {dataRef}. {cmd} returned [{h}]".format(trId=tr.id, dataRef=dataRef, h=commitHash, cmd=' '.join(cmd)) )
+
+                return (tr, commitHash)
             stateHashList = stateHashList.strip()
             stateHashList = stateHashList.split('\n')
 
@@ -1059,6 +1072,7 @@ class AccuRev2Git(object):
             # Populate the stream contents from accurev
             popResult = self.TryPop(streamName=stream.name, transaction=tr, overwrite=True)
             if not popResult:
+                self.config.logger.error( "accurev pop failed for {trId} on {dataRef}".format(trId=tr.id, dataRef=dataRef) )
                 return (None, None)
 
             # Make first commit.
@@ -1118,6 +1132,7 @@ class AccuRev2Git(object):
                 self.ClearGitRepo()
             else:
                 if diff is None:
+                    self.config.logger.error( "No diff available for {trId} on {dataRef}".format(trId=tr.id, dataRef=dataRef) )
                     return (None, None)
  
                 try:
@@ -1170,12 +1185,14 @@ class AccuRev2Git(object):
             self.config.logger.dbg( "{0} pop: {1} {2}{3}".format(stream.name, tr.Type, tr.id, " to {0}".format(destStreamName) if destStreamName is not None else "") )
             popResult = self.TryPop(streamName=stream.name, transaction=tr, overwrite=popOverwrite)
             if not popResult:
+                self.config.logger.error( "accurev pop failed for {trId} on {dataRef}".format(trId=tr.id, dataRef=dataRef) )
                 return (None, None)
 
             # Make the commit. Empty commits are allowed so that we match the state ref exactly (transaction for transaction).
             # Reasoning: Empty commits are cheap and since these are not intended to be seen by the user anyway so we may as well make them to have a simpler mapping.
             commitHash = self.Commit(transaction=tr, allowEmptyCommit=True, isFirstCommit=False, isLooseCommit=False, messageOverride="transaction {trId}".format(trId=tr.id), ref=dataRef)
             if commitHash is None:
+                self.config.logger.error( "Commit failed for {trId} on {dataRef}".format(trId=tr.id, dataRef=dataRef) )
                 return (None, None)
             else:
                 status = self.gitRepo.status()
@@ -1192,6 +1209,15 @@ class AccuRev2Git(object):
     def RetrieveStream(self, depot, stream, dataRef, stateRef, startTransaction, endTransaction):
         stateTr, stateHash = self.RetrieveStreamInfo(depot=depot, stream=stream, stateRef=stateRef, startTransaction=startTransaction, endTransaction=endTransaction)
         dataTr,  dataHash  = self.RetrieveStreamData(depot=depot, stream=stream, dataRef=dataRef, stateRef=stateRef, startTransaction=startTransaction, endTransaction=endTransaction)
+
+        if stateTr is not None and dataTr is not None:
+            if stateTr.id != dataTr.id:
+                self.config.logger.error( "Missmatch while processing stream {streamName} (id: streamId), the data ref ({dataRef}) is on tr. {dataTr} while the state ref ({stateRef}) is on tr. {stateTr}.".format(streamName=stream.name, streamId=stream.streamNumber, dataTr=dataTr.id, stateTr=stateTr.id, dataRef=dataRef, stateRef=stateRef) )
+        elif stateTr is not None and dataTr is None:
+            self.config.logger.error( "Missmatch while processing stream {streamName} (id: streamId), the state ref ({stateRef}) is on tr. {stateTr} but the data ref ({dataRef}) wasn't processed.".format(streamName=stream.name, streamId=stream.streamNumber, stateTr=stateTr.id, dataRef=dataRef, stateRef=stateRef) )
+        elif stateTr is None:
+            self.config.logger.error( "While processing stream {streamName} (id: streamId), the state ref ({stateRef}) failed to process.".format(streamName=stream.name, streamId=stream.streamNumber, dataRef=dataRef, stateRef=stateRef) )
+
         return dataTr, dataHash
 
     def RetrieveStreams(self):
@@ -1223,8 +1249,6 @@ class AccuRev2Git(object):
             if stateRef is None or dataRef is None or len(stateRef) == 0 or len(dataRef) == 0:
                 raise Exception("Invariant error! The state ({sr}) and data ({dr}) refs must not be None!".format(sr=stateRef, dr=dataRef))
             tr, commitHash = self.RetrieveStream(depot=depot, stream=streamInfo, dataRef=dataRef, stateRef=stateRef, startTransaction=self.config.accurev.startTransaction, endTransaction=endTr.id)
-            if tr is None or commitHash is None:
-                self.config.logger.error( "Error while processing stream {0}, branch {1}".format(stream, dataRef) )
 
             if self.config.git.remoteMap is not None:
                 refspec = "{dataRef}:{dataRef} {stateRef}:{stateRef}".format(dataRef=dataRef, stateRef=stateRef)
