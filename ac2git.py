@@ -806,6 +806,40 @@ class AccuRev2Git(object):
             return (stateRef, dataRef)
         return (None, None)
 
+    # Gets the diff.xml contents and parsed accurev.obj.Diff object from the given \a ref (git ref or hash).
+    def GetDiffInfo(self, ref):
+        # Get the diff information. (if any)
+        diff = None
+        diffXml = self.gitRepo.raw_cmd(['git', 'show', '{hash}:diff.xml'.format(hash=ref)]) # Doesn't exist for the mkstream transaction (first commit)
+        if diffXml is not None:
+            diff = accurev.obj.Diff.fromxmlstring(diffXml)
+        elif diffXml is None or len(diffXml) == 0:
+            raise Exception("Command failed! git show {hash}:diff.xml".format(hash=ref))
+        return (diffXml, diff)
+
+    # Gets the hist.xml contents and parsed accurev.obj.History object from the given \a ref (git ref or hash).
+    def GetHistInfo(self, ref):
+        # Get the hist information.
+        hist = None
+        histXml = self.gitRepo.raw_cmd(['git', 'show', '{hash}:hist.xml'.format(hash=ref)])
+        if histXml is not None or len(histXml) != 0:
+            hist = accurev.obj.History.fromxmlstring(histXml)
+        else:
+            raise Exception("Command failed! git show {hash}:hist.xml".format(hash=ref))
+        return (histXml, hist)
+
+    # Gets the streams.xml contents and parsed accurev.obj.Show.Streams object from the given \a ref (git ref or hash).
+    def GetStreamsInfo(self, ref):
+        # Get the stream information.
+        streams = None
+        streamsXml = self.gitRepo.raw_cmd(['git', 'show', '{hash}:streams.xml'.format(hash=ref)])
+        if streamsXml is not None or len(streamsXml) != 0:
+            streams = accurev.obj.Show.Streams.fromxmlstring(streamsXml)
+        else:
+            raise Exception("Command failed! git show {hash}:streams.xml".format(hash=ref))
+        return (streamsXml, streams)
+
+
     def RetrieveStreamInfo(self, depot, stream, stateRef, startTransaction, endTransaction):
         self.config.logger.info( "Processing Accurev state for {0} : {1} - {2}".format(stream.name, startTransaction, endTransaction) )
 
@@ -849,12 +883,7 @@ class AccuRev2Git(object):
                     raise Exception("Invalid initial state! The status command returned an invalid name for current branch. Expected {stateRef} but got {statusBranch}.".format(stateRef=stateRef, statusBranch=status.branch))
             if len(status.staged) != 0 or len(status.changed) != 0 or len(status.untracked) != 0:
                 raise Exception("Invalid initial state! There are changes in the tracking repository. Staged {staged}, changed {changed}, untracked {untracked}.".format(staged=status.staged, changed=status.changed, untracked=status.untracked))
-            histXml = self.gitRepo.raw_cmd(['git', 'show', '{ref}:hist.xml'.format(ref=stateRef)])
-            if histXml is None:
-                raise Exception("Couldn't load last transaction for ref: {ref}".format(ref=stateRef))
-            elif len(histXml) == 0:
-                raise Exception("Couldn't load last transaction for ref: {ref} (empty result)".format(ref=stateRef))
-            hist = accurev.obj.History.fromxmlstring(histXml)
+            histXml, hist = self.GetHistInfo(ref=stateRef)
             tr = hist.transactions[0]
         else:
             self.config.logger.dbg( "Ref '{br}' doesn't exist.".format(br=stateRef) )
@@ -1023,10 +1052,7 @@ class AccuRev2Git(object):
                 self.config.logger.error( "{dataRef} is upto date. Couldn't load any more transactions after tr. ({trId}) from Accurev state ref {stateRef}. '{cmd}' returned empty.".format(trId=lastTrId, dataRef=dataRef, stateRef=stateRef, lastHash=lastStateCommitHash, cmd=' '.join(cmd)) )
 
                 # Get the first transaction that we are about to process.
-                trHistXml = self.gitRepo.raw_cmd(['git', 'show', '{hash}:hist.xml'.format(hash=lastStateCommitHash)])
-                if trHistXml is None or len(trHistXml) == 0:
-                    raise Exception("Failed to retrieve hist.xml from commit {hash} on ref {stateRef}. Result {res}".format(hash=lastStateCommitHash, stateRef=stateRef, res=trHistXml))
-                trHist = accurev.obj.History.fromxmlstring(trHistXml)
+                trHistXml, trHist = self.GetHistInfo(ref=lastStateCommitHash)
                 tr = trHist.transactions[0]
 
                 cmd = ['git', 'log', '--format=%H', '--grep', '^transaction {trId}$'.format(trId=tr.id), dataRef]
@@ -1057,10 +1083,7 @@ class AccuRev2Git(object):
             self.config.logger.info( "No {dr} found. Processing {h} on {sr} first.".format(dr=dataRef, h=stateHash, sr=stateRef) )
 
             # Get the first transaction that we are about to process.
-            trHistXml = self.gitRepo.raw_cmd(['git', 'show', '{hash}:hist.xml'.format(hash=stateHash)])
-            if trHistXml is None or len(trHistXml) == 0:
-                raise Exception("Failed to retrieve hist.xml from commit {hash} on ref {stateRef}. Result {res}".format(hash=stateHash, stateRef=stateRef, res=trHistXml))
-            trHist = accurev.obj.History.fromxmlstring(trHistXml)
+            trHistXml, trHist = self.GetHistInfo(ref=stateHash)
             tr = trHist.transactions[0]
 
             lastTrId = tr.id
@@ -1103,28 +1126,13 @@ class AccuRev2Git(object):
                 raise Exception("Invariant error! Excess new lines returned by `git log`? Probably safe to skip but shouldn't happen.")
 
             # Get the diff information. (if any)
-            diff = None
-            diffXml = self.gitRepo.raw_cmd(['git', 'show', '{hash}:diff.xml'.format(hash=stateHash)]) # Doesn't exist for the mkstream transaction (first commit)
-            if diffXml is not None:
-                diff = accurev.obj.Diff.fromxmlstring(diffXml)
-            elif diffXml is None or len(diffXml) == 0:
-                raise Exception("Command failed! git show {hash}:diff.xml".format(hash=stateHash))
+            diffXml, diff = self.GetDiffInfo(ref=stateHash)
 
             # Get the hist information.
-            hist = None
-            histXml = self.gitRepo.raw_cmd(['git', 'show', '{hash}:hist.xml'.format(hash=stateHash)])
-            if histXml is not None or len(histXml) != 0:
-                hist = accurev.obj.History.fromxmlstring(histXml)
-            else:
-                raise Exception("Command failed! git show {hash}:hist.xml".format(hash=stateHash))
+            histXml, hist = self.GetHistInfo(ref=stateHash)
 
             # Get the stream information.
-            streams = None
-            streamsXml = self.gitRepo.raw_cmd(['git', 'show', '{hash}:streams.xml'.format(hash=stateHash)])
-            if streamsXml is not None or len(streamsXml) != 0:
-                streams = accurev.obj.Show.Streams.fromxmlstring(streamsXml)
-            else:
-                raise Exception("Command failed! git show {hash}:streams.xml".format(hash=stateHash))
+            streamsXml, streams = self.GetStreamsInfo(ref=stateHash)
 
             popOverwrite = (self.config.method == "pop")
             deletedPathList = None

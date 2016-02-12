@@ -1019,13 +1019,14 @@ class obj:
                     
         class Depots(object):
             class Depot(object):
-                def __init__(self, number=None, name=None, slice=None, exclusiveLocking=None, case=None, locWidth=None, replStatus=None):
+                def __init__(self, number=None, name=None, slice=None, exclusiveLocking=None, case=None, locWidth=None, hidden=None, replStatus=None):
                     self.number           = IntOrNone(number)
                     self.name             = name
                     self.slice            = slice
                     self.exclusiveLocking = exclusiveLocking
                     self.case             = case
                     self.locWidth         = locWidth
+                    self.hidden           = obj.Bool.fromstring(hidden)
                     self.replStatus       = replStatus
                     
                 def __repr__(self):
@@ -1035,6 +1036,8 @@ class obj:
                     str += ", exclusiveLocking=" + repr(self.exclusiveLocking)
                     str += ", case="             + repr(self.case)
                     str += ", locWidth="         + repr(self.locWidth)
+                    if self.hidden is not None:
+                        str += ", hidden="       + repr(self.hidden)
                     str += ", replStatus="       + repr(self.replStatus)
                     str += ")"
                     
@@ -1049,9 +1052,10 @@ class obj:
                         exclusiveLocking = xmlElement.attrib.get('exclusiveLocking')
                         case             = xmlElement.attrib.get('case')
                         locWidth         = xmlElement.attrib.get('locWidth')
+                        hidden           = xmlElement.attrib.get('hidden')
                         replStatus       = xmlElement.attrib.get('ReplStatus')
                         
-                        return cls(number, name, slice, exclusiveLocking, case, locWidth, replStatus)
+                        return cls(number, name, slice, exclusiveLocking, case, locWidth, hidden, replStatus)
                     
                     return None
                         
@@ -2250,8 +2254,8 @@ class show(object):
         return obj.Show.Users.fromxmlstring(xmlOutput)
     
     @staticmethod
-    def depots():
-        xmlOutput = raw.show.depots(isXmlOutput=True)
+    def depots(includeDeactivatedItems=False):
+        xmlOutput = raw.show.depots(includeDeactivatedItems=includeDeactivatedItems, isXmlOutput=True)
         return obj.Show.Depots.fromxmlstring(xmlOutput)
 
     @staticmethod
