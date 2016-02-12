@@ -977,6 +977,39 @@ class AccuRev2Git(object):
 
         return (tr, commitHash)
 
+    def GetHashForTransaction(self, ref, trNum):
+        # Find the commit hash on our ref that corresponds to the provided transaction number.
+        cmd = ['git', 'log', '--format=%H', '--grep', '^transaction {trId}$'.format(trId=trNum), ref]
+        lastCommitHash = self.gitRepo.raw_cmd(cmd)
+        if lastCommitHash is None:
+            raise Exception("Couldn't query {ref} for Accurev state information at transaction {trId}. {cmd}".format(ref=ref, trId=trNum, cmd=' '.join(cmd)))
+        lastCommitHash = lastCommitHash.strip()
+
+        if len(lastCommitHash) == 0:
+            self.config.logger.error( "Failed to load transaction ({trId}) from ref {ref}. '{cmd}' returned empty.".format(trId=trNum, ref=ref, cmd=' '.join(cmd)) )
+            return None
+        return lastCommitHash
+
+    def GetGitLogList(self, ref, afterCommitHash=None, gitLogFormat=None):
+        # Get the list of new hashes that have been committed to the stateRef but we haven't processed on the dataRef just yet.
+        cmd = ['git', 'log']
+        if gitLogFormat is not None:
+            cmd.append('--format={f}'.format(f=gitLogFormat))
+        cmd.append(ref)
+        if afterCommitHash is not None:
+            cmd.append('^{lastHash}'.format(lastHash=afterCommitHash))
+
+        hashList = self.gitRepo.raw_cmd(cmd)
+        if hashList is None:
+            self.config.logger.dbg("Couldn't get the commit hash list from the ref {ref}. '{cmd}'".format(ref=ref, cmd=' '.join(cmd)))
+            return None
+
+        hashList = hashList.strip()
+        if len(hashList) == 0:
+            return []
+
+        return hashList.split('\n')
+
     def RetrieveStreamData(self, depot, stream, dataRef, stateRef, startTransaction, endTransaction):
         self.config.logger.info( "Processing stream data for {0} : {1} - {2}".format(stream.name, startTransaction, endTransaction) )
 
@@ -1033,44 +1066,30 @@ class AccuRev2Git(object):
             lastTrId = int(lastCommitInfo[2])
 
             # Find the commit hash on our stateRef that corresponds to our last transaction number.
-            cmd = ['git', 'log', '--format=%H', '--grep', '^transaction {trId}$'.format(trId=lastTrId), stateRef]
-            lastStateCommitHash = self.gitRepo.raw_cmd(cmd)
+            lastStateCommitHash = self.GetHashForTransaction(ref=stateRef, trNum=lastTrId)
             if lastStateCommitHash is None:
-                raise Exception("Couldn't query {stateRef} for Accurev state information at transaction {trId}. {cmd}".format(stateRef=stateRef, trId=lastTrId, cmd=' '.join(cmd)))
-            lastStateCommitHash = lastStateCommitHash.strip()
-
-            if len(lastStateCommitHash) == 0:
-                self.config.logger.error( "Failed to load current transaction ({trId}) from Accurev state ref {ref}. '{cmd}' returned empty.".format(trId=lastTrId, ref=stateRef, cmd=' '.join(cmd)) )
                 return (None, None)
 
             # Get the list of new hashes that have been committed to the stateRef but we haven't processed on the dataRef just yet.
-            cmd = ['git', 'log', '--format=%H', stateRef, '^{lastHash}'.format(lastHash=lastStateCommitHash)]
-            stateHashList = self.gitRepo.raw_cmd(cmd)
+            stateHashList = self.GetGitLogList(ref=stateRef, afterCommitHash=lastStateCommitHash, gitLogFormat='%H')
             if stateHashList is None:
-                raise Exception("Couldn't get the commit hash list to process from the Accurev state ref {stateRef}. '{cmd}'".format(stateRef=stateRef, cmd=' '.join(cmd)))
+                raise Exception("Couldn't get the commit hash list to process from the Accurev state ref {stateRef}.".format(stateRef=stateRef))
             elif len(stateHashList) == 0:
-                self.config.logger.error( "{dataRef} is upto date. Couldn't load any more transactions after tr. ({trId}) from Accurev state ref {stateRef}. '{cmd}' returned empty.".format(trId=lastTrId, dataRef=dataRef, stateRef=stateRef, lastHash=lastStateCommitHash, cmd=' '.join(cmd)) )
+                self.config.logger.error( "{dataRef} is upto date. Couldn't load any more transactions after tr. ({trId}) from Accurev state ref {stateRef}.".format(trId=lastTrId, dataRef=dataRef, stateRef=stateRef, lastHash=lastStateCommitHash) )
 
                 # Get the first transaction that we are about to process.
                 trHistXml, trHist = self.GetHistInfo(ref=lastStateCommitHash)
                 tr = trHist.transactions[0]
 
-                cmd = ['git', 'log', '--format=%H', '--grep', '^transaction {trId}$'.format(trId=tr.id), dataRef]
-                commitHash = self.gitRepo.raw_cmd(cmd)
-                if commitHash is None or len(commitHash) == 0:
-                    self.config.logger.error( "Failed to get commit hash for transaction {trId} on {dataRef}. {cmd} returned [{h}]".format(trId=tr.id, dataRef=dataRef, h=commitHash, cmd=' '.join(cmd)) )
+                commitHash = self.GetHashForTransaction(ref=dataRef, trNum=tr.id)
 
                 return (tr, commitHash)
-            stateHashList = stateHashList.strip()
-            stateHashList = stateHashList.split('\n')
 
         else:
             # Get all the hashes from the stateRef since we need to process them all.
-            stateHashList = self.gitRepo.raw_cmd(['git', 'log', '--format=%H', stateRef])
+            stateHashList = self.GetGitLogList(ref=stateRef, gitLogFormat='%H')
             if stateHashList is None:
                 raise Exception("Couldn't get the commit hash list to process from the Accurev state ref {stateRef}.".format(stateRef=stateRef))
-            stateHashList = stateHashList.strip()
-            stateHashList = stateHashList.split('\n')
 
             if len(stateHashList) == 0:
                 self.config.logger.error( "{dataRef} is upto date. No transactions available in Accurev state ref {stateRef}. git log {stateRef} returned empty.".format(dataRef=dataRef, stateRef=stateRef) )
