@@ -839,7 +839,6 @@ class AccuRev2Git(object):
             raise Exception("Command failed! git show {hash}:streams.xml".format(hash=ref))
         return (streamsXml, streams)
 
-
     def RetrieveStreamInfo(self, depot, stream, stateRef, startTransaction, endTransaction):
         self.config.logger.info( "Processing Accurev state for {0} : {1} - {2}".format(stream.name, startTransaction, endTransaction) )
 
@@ -990,8 +989,21 @@ class AccuRev2Git(object):
             return None
         return lastCommitHash
 
+    def GetTransactionForRef(self, ref):
+        # Find the last transaction number that we processed.
+        lastCommitInfo = self.gitRepo.raw_cmd(['git', 'log', '--pretty=oneline', ref, '-1'])
+        if lastCommitInfo is None:
+            raise Exception("Couldn't load last transaction for ref: {ref}".format(ref=ref))
+        lastCommitInfo = lastCommitInfo.strip()
+        if len(lastCommitInfo) == 0:
+            raise Exception("Couldn't load last transaction for ref: {ref} (empty result)".format(ref=ref))
+        lastCommitInfo = lastCommitInfo.split(' ')
+        if len(lastCommitInfo) != 3:
+            raise Exception("Unexpected format for last commit message! Expected 3 space separated fields but read: {info}".format(info=' '.join(lastCommitInfo)))
+        return int(lastCommitInfo[2])
+
     def GetGitLogList(self, ref, afterCommitHash=None, gitLogFormat=None):
-        # Get the list of new hashes that have been committed to the stateRef but we haven't processed on the dataRef just yet.
+        # Get the list of new hashes that have been committed to the stateRef but we haven't processed on the ref just yet.
         cmd = ['git', 'log']
         if gitLogFormat is not None:
             cmd.append('--format={f}'.format(f=gitLogFormat))
@@ -1055,15 +1067,7 @@ class AccuRev2Git(object):
                 raise Exception("Invalid initial state! There are changes in the tracking repository. Staged {staged}, changed {changed}, untracked {untracked}.".format(staged=status.staged, changed=status.changed, untracked=status.untracked))
 
             # Find the last transaction number that we processed.
-            lastCommitInfo = self.gitRepo.raw_cmd(['git', 'log', '--pretty=oneline', dataRef, '-1'])
-            if lastCommitInfo is None:
-                raise Exception("Couldn't load last transaction for ref: {ref}".format(ref=dataRef))
-            elif len(lastCommitInfo) == 0:
-                raise Exception("Couldn't load last transaction for ref: {ref} (empty result)".format(ref=dataRef))
-            lastCommitInfo = lastCommitInfo.split(' ')
-            if len(lastCommitInfo) != 3:
-                raise Exception("Unexpected format for last commit message! Expected 3 space separated fields but read: {info}".format(info=' '.join(lastCommitInfo)))
-            lastTrId = int(lastCommitInfo[2])
+            lastTrId = self.GetTransactionForRef(ref=dataRef)
 
             # Find the commit hash on our stateRef that corresponds to our last transaction number.
             lastStateCommitHash = self.GetHashForTransaction(ref=stateRef, trNum=lastTrId)
