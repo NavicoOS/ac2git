@@ -766,27 +766,27 @@ class repo(object):
         
             newEnv = os.environ.copy()
 
-        # Set the author information
-        if author_name is not None:
-            newEnv['GIT_AUTHOR_NAME'] = author_name
-        if author_email is not None:
-            newEnv['GIT_AUTHOR_EMAIL'] = author_email
-        
-        if author_date is not None:
-            author_date_str = getDatetimeString(author_date, author_tz)
-            if author_date_str is not None:
-                newEnv['GIT_AUTHOR_DATE'] = str('{0}'.format(author_date_str))
-        
-        # Set the committer information
-        if committer_name is not None:
-            newEnv['GIT_COMMITTER_NAME'] = committer_name
-        if committer_email is not None:
-            newEnv['GIT_COMMITTER_EMAIL'] = committer_email
-        
-        if committer_date is not None:
-            committer_date_str = getDatetimeString(committer_date, committer_tz)
-            if committer_date_str is not None:
-                newEnv['GIT_COMMITTER_DATE'] = str('{0}'.format(committer_date_str))
+            # Set the author information
+            if author_name is not None:
+                newEnv['GIT_AUTHOR_NAME'] = author_name
+            if author_email is not None:
+                newEnv['GIT_AUTHOR_EMAIL'] = author_email
+            
+            if author_date is not None:
+                author_date_str = getDatetimeString(author_date, author_tz)
+                if author_date_str is not None:
+                    newEnv['GIT_AUTHOR_DATE'] = str('{0}'.format(author_date_str))
+            
+            # Set the committer information
+            if committer_name is not None:
+                newEnv['GIT_COMMITTER_NAME'] = committer_name
+            if committer_email is not None:
+                newEnv['GIT_COMMITTER_EMAIL'] = committer_email
+            
+            if committer_date is not None:
+                committer_date_str = getDatetimeString(committer_date, committer_tz)
+                if committer_date_str is not None:
+                    newEnv['GIT_COMMITTER_DATE'] = str('{0}'.format(committer_date_str))
 
             return self._docmd(cmd=cmd, ref=ref, env=newEnv)
 
