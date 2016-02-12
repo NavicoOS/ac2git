@@ -83,6 +83,16 @@ When combined with my statement from the previous paragraph, this implies that y
 Ideally, if you have promoted all of your changes to the parent stream this should be identified as a merge commit and recorded as such. Though it would now be possible to extend this script to do so, it is not on my radar for now as it would be a reasonably large undertaking.
 However, there is hope because I've implemented an experimental feature, described below, that does just that but it operates as a post processing step. It is still a little buggy and requires iteration but it proves the concept. Patches are welcomed!
 
+### Files that break history ###
+
+If you have a legacy repository it is possible that you may have some files that break history. One typical example is a version file that has different coppies accross different streams and is never promoted. This will affect the ability of the algorithm to infer merge points between branches. Hence, it would be great if we could ignore these files when determining merge points.
+
+This is possible to do but it is not a part of the script's functionality. It is a function of git that you can specify your own diff driver (see [gitattributes](https://www.kernel.org/pub/software/scm/git/docs/gitattributes.html)) for particular files. This [answer](http://stackoverflow.com/a/10421385/1667513) to the StackOverflow question titled [_Want to exclude file from "git diff"_](http://stackoverflow.com/questions/10415100/want-to-exclude-file-from-git-diff) suggests the same. It might also pay to take a look at this [answer](http://stackoverflow.com/a/1017676/1667513) on a similarly titled question from StackOverflow ([_Excluding files from git-diff_](http://stackoverflow.com/questions/1016798/excluding-files-from-git-diff)).
+
+Ignoring the whole file should be easy but ignoring only a small part of it will require you to write a script that does it. Bash or Python, it will be custom in each situation so I can't really cater for it in this script which is why this note is here.
+
+_Note: I recommend using the `.git/info/attributes` file and not making a `.gitattributes` file in the main repo since it may be deleted by the script or overwritten if it was ever promoted in Accurev._
+
 ----
 
 ### Dear contributors ###

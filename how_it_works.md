@@ -82,6 +82,10 @@ The _deep-hist method_ relies on creating a custom command for accurev that woul
 
 This command is implemented in the `accurev.py` script. Here's a sample invocation:
 
+### Adding or removing branches in a converted repository ###
+
+Adding or removing new streams for conversion in an already converted repository has potential to break things unless you're using the _orphanage_ strategy. In the case that history is rewritten I recommend looking into the `git replace` command in order to _graft_ the new commits that you probably made in git onto the new commits that came from the new conversion.
+
 ```
 import accurev
 deepHistory = accurev.ext.deep_hist(depot="MyDepot", stream="MyStream", timeSpec="50-100")
