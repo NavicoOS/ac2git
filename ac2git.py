@@ -1379,6 +1379,35 @@ class AccuRev2Git(object):
 
         return stateObj
 
+
+    def AddNote(self, transaction, commitHash, ref, note, committerName=None, committerEmail=None, committerDate=None, committerTimezone=None):
+        notesFilePath = None
+        if note is not None:
+            with tempfile.NamedTemporaryFile(mode='w+', prefix='ac2git_note_', delete=False) as notesFile:
+                notesFilePath = notesFile.name
+                notesFile.write(note)
+
+        # Get the author's and committer's name, email and timezone information.
+        if transaction is not None:
+            committerName, committerEmail = self.GetGitUserFromAccuRevUser(transaction.user)
+            committerDate, committerTimezone = self.GetGitDatetime(accurevUsername=transaction.user, accurevDatetime=transaction.time)
+
+        if notesFilePath is not None:
+            rv = self.gitRepo.notes.add(messageFile=notesFilePath, obj=commitHash, ref=ref, force=True, committerName=committerName, committerEmail=committerEmail, committerDate=committerDate, committerTimezone=committerTimezone, authorName=committerName, authorEmail=committerEmail, authorDate=committerDate, authorTimezone=committerTimezone)
+            os.remove(notesFilePath)
+
+            if rv is not None:
+                self.config.logger.dbg( "Added{ref} note for {hash}.".format(ref='' if ref is None else ' '+str(ref), hash=commitHash) )
+            else:
+                self.config.logger.error( "Failed to add{ref} note for {hash}{trStr}".format(ref='' if ref is None else ' '+str(ref), hash=commitHash, trStr='' if transaction is None else ', tr. ' + str(transaction.id)) )
+                self.config.logger.error(self.gitRepo.lastStderr)
+            
+            return rv
+        else:
+            self.config.logger.error( "Failed to create temporary file for script state note for {0}, tr. {1}".format(commitHash, transaction.id) )
+        
+        return None
+
     # Adds a JSON string respresentation of `stateDict` to the given commit using `git notes add`.
     def AddScriptStateNote(self, depotName, stream, transaction, commitHash, ref, dstStream=None, srcStream=None):
         stateDict = { "depot": depotName, "stream": stream.name, "stream_number": stream.streamNumber, "transaction_number": transaction.id, "transaction_kind": transaction.Type }
@@ -1388,30 +1417,8 @@ class AccuRev2Git(object):
         if srcStream is not None:
             stateDict["src_stream"]        = srcStream.name
             stateDict["src_stream_number"] = srcStream.streamNumber
-        notesFilePath = None
-        with tempfile.NamedTemporaryFile(mode='w+', prefix='ac2git_note_', delete=False) as notesFile:
-            notesFilePath = notesFile.name
-            notesFile.write(json.dumps(stateDict))
 
-        # Get the author's and committer's name, email and timezone information.
-        committerName, committerEmail = self.GetGitUserFromAccuRevUser(transaction.user)
-        committerDate, committerTimezone = self.GetGitDatetime(accurevUsername=transaction.user, accurevDatetime=transaction.time)
-
-        if notesFilePath is not None:
-            rv = self.gitRepo.notes.add(messageFile=notesFilePath, obj=commitHash, ref=ref, force=True, committerName=committerName, committerEmail=committerEmail, committerDate=committerDate, committerTimezone=committerTimezone, authorName=committerName, authorEmail=committerEmail, authorDate=committerDate, authorTimezone=committerTimezone)
-            os.remove(notesFilePath)
-
-            if rv is not None:
-                self.config.logger.dbg( "Added script state note for {0}.".format(commitHash) )
-            else:
-                self.config.logger.error( "Failed to add script state note for {0}, tr. {1}".format(commitHash, transaction.id) )
-                self.config.logger.error(self.gitRepo.lastStderr)
-            
-            return rv
-        else:
-            self.config.logger.error( "Failed to create temporary file for script state note for {0}, tr. {1}".format(commitHash, transaction.id) )
-        
-        return None
+        return self.AddNote(transaction=transaction, commitHash=commitHash, ref=ref, note=json.dumps(stateDict))
 
     def ProcessStream(self, stream, branchName):
         if stream is not None:
@@ -1502,7 +1509,7 @@ class AccuRev2Git(object):
                 srcStreamName, srcStreamNumber = trHist.fromStream()
                 srcStream = streams.getStream(srcStreamNumber)
 
-                commitMessage = self.GenerateCommitMessage(transaction=tr, stream=stream, dstStream=dstStream, srcStream=srcStream)
+                commitMessage, notes = self.GenerateCommitMessage(transaction=tr, stream=stream, dstStream=dstStream, srcStream=srcStream)
                 parents = []
                 if commitHash is not None:
                     parents = [ commitHash ]
@@ -1511,6 +1518,9 @@ class AccuRev2Git(object):
                     self.config.logger.error("Failed to commit transaction {trId} to {br}.".format(trId=tr.id, br=branchName))
                     return None
                 if self.AddScriptStateNote(depotName=stream.depotName, stream=stream, transaction=tr, commitHash=commitHash, ref='ac2git', dstStream=dstStream, srcStream=srcStream) is None:
+                    self.config.logger.error("Failed to add note for commit {h} (transaction {trId}) to {br}.".format(trId=tr.id, br=branchName, h=commitHash))
+                    return None
+                if notes is not None and self.AddNote(transaction=tr, commitHash=commitHash, ref='accurev') is None:
                     self.config.logger.error("Failed to add note for commit {h} (transaction {trId}) to {br}.".format(trId=tr.id, br=branchName, h=commitHash))
                     return None
 
@@ -1598,19 +1608,24 @@ class AccuRev2Git(object):
             style = self.config.git.messageStyle.lower()
 
         if style == "clean":
-            return transaction.comment
-        elif style == "normal":
+            return (transaction.comment, None)
+        elif style in [ "normal", "notes" ]:
             if title is not None:
                 messageSections.append(title)
             if transaction.comment is not None:
                 messageSections.append(transaction.comment)
             if friendlyMessage is not None:
                 messageSections.append(friendlyMessage)
+            
+            notes = None
             suffix = self.GenerateCommitMessageSuffix(transaction=transaction, stream=stream, dstStream=dstStream, srcStream=srcStream)
             if suffix is not None:
-                messageSections.append(suffix)
-        
-            return '\n\n'.join(messageSections)
+                if style == "normal":
+                    messageSections.append(suffix)
+                elif style == "notes":
+                    notes = suffix
+
+            return ('\n\n'.join(messageSections), notes)
 
         raise Exception("Unrecognized git message style '{s}'".format(s=style))
 
@@ -2428,9 +2443,10 @@ def DumpExampleConfigFile(outputFilename):
         </stream-list>
     </accurev>
     <git repo-path="/put/the/git/repo/here" message-style="normal" >  <!-- The system path where you want the git repo to be populated. Note: this folder should already exist. 
-                                                                           The message-style attribute can either be "normal" or "clean". When set to "normal" accurev transaction information is included
+                                                                           The message-style attribute can either be "normal", "clean" or "notes". When set to "normal" accurev transaction information is included
                                                                            at the end (in the footer) of each commit message. When set to "clean" the transaction comment is the commit message without any
-                                                                           additional information.
+                                                                           additional information. When set to "notes" a note is added to each commit in the "accurev" namespace (to show them use `git log --notes=accurev`),
+                                                                           with the same accurev information that would have been shown in the commit message footer in the "normal" mode.
                                                                       -->
         <remote name="origin" url="https://github.com/orao/ac2git.git" push-url="https://github.com/orao/ac2git.git" /> <!-- Optional: Specifies the remote to which the converted
                                                                                                                              branches will be pushed. The push-url attribute is optional. -->
@@ -2571,9 +2587,10 @@ def AutoConfigFile(filename, args, preserveConfig=False):
         </stream-list>
     </accurev>
     <git repo-path="{git_repo_path}" message-style="{message_style}" >  <!-- The system path where you want the git repo to be populated. Note: this folder should already exist.
-                                                                             The message-style attribute can either be "normal" or "clean". When set to "normal" accurev transaction information is included
-                                                                             at the end (in the footer) of each commit message. When set to "clean" the transaction comment is the commit message without any
-                                                                             additional information.
+                                                                             The message-style attribute can either be "normal", "clean" or "notes". When set to "normal" accurev transaction information is included
+                                                                           at the end (in the footer) of each commit message. When set to "clean" the transaction comment is the commit message without any
+                                                                           additional information. When set to "notes" a note is added to each commit in the "accurev" namespace (to show them use `git log --notes=accurev`),
+                                                                           with the same accurev information that would have been shown in the commit message footer in the "normal" mode.
                                                                         -->""".format(git_repo_path=config.git.repoPath, message_style=config.git.messageStyle if config.git.messageStyle is not None else 'normal'))
         if config.git.remoteMap is not None:
             for remoteName in remoteMap:
