@@ -621,7 +621,7 @@ class AccuRev2Git(object):
         committerName, committerEmail = self.GetGitUserFromAccuRevUser(transaction.user)
         committerDate, committerTimezone = self.GetGitDatetime(accurevUsername=transaction.user, accurevDatetime=transaction.time)
         if not isFirstCommit:
-            lastCommitHash = self.GetLastCommitHash(ref=ref)
+            lastCommitHash = self.GetLastCommitHash(ref=ref) # If ref is None, it will get the last commit hash from the HEAD ref.
             if usePlumbing and parents is None:
                 if lastCommitHash is None:
                     self.config.logger.info("No last commit hash available. Fatal error, aborting!")
@@ -645,11 +645,6 @@ class AccuRev2Git(object):
                     self.config.logger.error( "Failed to commit tree {0} for transaction {1}".format(treeHash, transaction.id) )
                 else:
                     commitHash = commitHash.strip()
-                    if ref is None:
-                        ref = 'HEAD'
-                    if self.UpdateAndCheckoutRef(ref=ref, commitHash=commitHash, checkout=(checkout and ref != 'HEAD')) != True:
-                        self.config.logger.error( "Failed to update ref {ref} with commit {h} for transaction {trId}".format(ref=ref, h=commitHash, trId=transaction.id) )
-                        commitHash = None
             else:
                 self.config.logger.error( "Failed to write tree for transaction {0}".format(transaction.id) )
         else:
@@ -663,6 +658,15 @@ class AccuRev2Git(object):
             else:
                 self.config.logger.error( "Failed to commit transaction {0}".format(transaction.id) )
                 self.config.logger.error( "\n{0}\n{1}\n".format(self.gitRepo.lastStdout, self.gitRepo.lastStderr) )
+
+        # For detached head states (which occur when you're updating a ref and not a branch, even if checked out) we need to make sure to update the HEAD. Either way it doesn't hurt to
+        # do this step whether we are using plumbing or not...
+        if commitHash is not None:
+            if ref is None:
+                ref = 'HEAD'
+            if self.UpdateAndCheckoutRef(ref=ref, commitHash=commitHash, checkout=(checkout and ref != 'HEAD')) != True:
+                self.config.logger.error( "Failed to update ref {ref} with commit {h} for transaction {trId}".format(ref=ref, h=commitHash, trId=transaction.id) )
+                commitHash = None
 
         os.remove(messageFilePath)
 
@@ -968,7 +972,7 @@ class AccuRev2Git(object):
                 self.WriteInfoFiles(path=self.gitRepo.path, depot=depot, streamName=stream.name, transaction=tr.id, useCommandCache=self.config.accurev.UseCommandCache())
                     
                 # Commit
-                commitHash = self.Commit(transaction=tr, messageOverride="transaction {trId}".format(trId=tr.id))
+                commitHash = self.Commit(transaction=tr, messageOverride="transaction {trId}".format(trId=tr.id), ref=stateRef)
                 if commitHash is None:
                     if "nothing to commit" in self.gitRepo.lastStdout:
                         self.config.logger.info("stream {streamName}: tr. #{trId} is a no-op. Potential but unlikely error. Continuing.".format(streamName=stream.name, trId=tr.id))
@@ -1038,13 +1042,6 @@ class AccuRev2Git(object):
         if dataRefObj is not None and len(dataRefObj) == 0:
             raise Exception("Invariant error! Expected non-empty string returned by git show-ref, but got '{str}'".format(s=dataRefObj))
 
-        # Get the current state of the git repository
-        status = self.gitRepo.status()
-        if status is None:
-            raise Exception("Failed to get status of git repository!")
-
-        self.config.logger.dbg( "On branch {branch} - {staged} staged, {changed} changed, {untracked} untracked files{initial_commit}.".format(branch=status.branch, staged=len(status.staged), changed=len(status.changed), untracked=len(status.untracked), initial_commit=', initial commit' if status.initial_commit else '') )
-
         # Either checkout last state or make the initial commit for a new dataRef.
         lastTrId = None
         stateHashList = None
@@ -1052,12 +1049,13 @@ class AccuRev2Git(object):
             # This means that the ref already exists so we should switch to it.
             self.SafeCheckout(ref=dataRef, doReset=True, doClean=True)
 
-            # Find the last transaction number that we processed.
+            # Find the last transaction number that we processed on the dataRef.
             lastTrId = self.GetTransactionForRef(ref=dataRef)
 
             # Find the commit hash on our stateRef that corresponds to our last transaction number.
             lastStateCommitHash = self.GetHashForTransaction(ref=stateRef, trNum=lastTrId)
             if lastStateCommitHash is None:
+                self.config.logger.error( "{dataRef} is pointing to transaction {trId} which wasn't found on the state ref {stateRef}.".format(trId=lastTrId, dataRef=dataRef, stateRef=stateRef) )
                 return (None, None)
 
             # Get the list of new hashes that have been committed to the stateRef but we haven't processed on the dataRef just yet.
@@ -1210,7 +1208,7 @@ class AccuRev2Git(object):
 
             # Make the commit. Empty commits are allowed so that we match the state ref exactly (transaction for transaction).
             # Reasoning: Empty commits are cheap and since these are not intended to be seen by the user anyway so we may as well make them to have a simpler mapping.
-            commitHash = self.Commit(transaction=tr, allowEmptyCommit=True, messageOverride="transaction {trId}".format(trId=tr.id))
+            commitHash = self.Commit(transaction=tr, allowEmptyCommit=True, messageOverride="transaction {trId}".format(trId=tr.id), ref=dataRef)
             if commitHash is None:
                 self.config.logger.error( "Commit failed for {trId} on {dataRef}".format(trId=tr.id, dataRef=dataRef) )
                 return (None, None)
@@ -1480,13 +1478,7 @@ class AccuRev2Git(object):
             elif len(dataHashList) == 0:
                 self.config.logger.error( "{b} is upto date. Couldn't load any more transactions after tr. ({trId}).".format(trId=lastTrId, b=branchName) )
 
-                # Get the first transaction that we are about to process.
-                trHistXml, trHist = self.GetHistInfo(ref=lastStateCommitHash)
-                tr = trHist.transactions[0]
-
-                commitHash = self.GetHashForTransaction(ref=dataRef, trNum=tr.id)
-
-                return commitHash
+                return self.GetLastCommitHash(branchName=branchName)
 
             # Get the stateRef map of transaction numbers to commit hashes.
             stateMap = self.GetRefMap(ref=stateRef, mapType="tr2commit")
