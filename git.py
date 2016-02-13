@@ -745,7 +745,7 @@ class repo(object):
             
             return self.repo._docmd(cmd=fullCmd, env=env)
 
-        def add(self, obj, ref=None, force=False, allowEmpty=False, messageFile=None, message=None, reuseMessage=None, reeditMessage=None, committer_name=None, committer_email=None, committerDate=None, committerTimezone=None, author_name=None, author_email=None, authorDate=None, authorTimezone=None):
+        def add(self, obj, ref=None, force=False, allowEmpty=False, messageFile=None, message=None, reuseMessage=None, reeditMessage=None, committerName=None, committerEmail=None, committerDate=None, committerTimezone=None, authorName=None, authorEmail=None, authorDate=None, authorTimezone=None):
             cmd = [ u'add' ]
 
             if force:
@@ -767,24 +767,24 @@ class repo(object):
             newEnv = os.environ.copy()
 
             # Set the author information
-            if author_name is not None:
-                newEnv['GIT_AUTHOR_NAME'] = author_name
-            if author_email is not None:
-                newEnv['GIT_AUTHOR_EMAIL'] = author_email
+            if authorName is not None:
+                newEnv['GIT_AUTHOR_NAME'] = authorName
+            if authorEmail is not None:
+                newEnv['GIT_AUTHOR_EMAIL'] = authorEmail
             
-            if author_date is not None:
-                author_date_str = getDatetimeString(author_date, author_tz)
+            if authorDate is not None:
+                author_date_str = getDatetimeString(authorDate, authorTimezone)
                 if author_date_str is not None:
                     newEnv['GIT_AUTHOR_DATE'] = str('{0}'.format(author_date_str))
             
             # Set the committer information
-            if committer_name is not None:
-                newEnv['GIT_COMMITTER_NAME'] = committer_name
-            if committer_email is not None:
-                newEnv['GIT_COMMITTER_EMAIL'] = committer_email
+            if committerName is not None:
+                newEnv['GIT_COMMITTER_NAME'] = committerName
+            if committerEmail is not None:
+                newEnv['GIT_COMMITTER_EMAIL'] = committerEmail
             
-            if committer_date is not None:
-                committer_date_str = getDatetimeString(committer_date, committer_tz)
+            if committerDate is not None:
+                committer_date_str = getDatetimeString(committerDate, committerTimezone)
                 if committer_date_str is not None:
                     newEnv['GIT_COMMITTER_DATE'] = str('{0}'.format(committer_date_str))
 
