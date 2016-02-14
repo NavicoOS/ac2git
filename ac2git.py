@@ -958,13 +958,21 @@ class AccuRev2Git(object):
 
         return None
 
-    def GetStreamRefs(self, depot, streamNumber):
+    def GetStreamRefsNamespace(self, depot):
         d = self.GetDepot(depot)
-        if d is not None and streamNumber is not None and isinstance(streamNumber, int):
-            dataRef  = '{refsNS}{depot}/streams/stream_{stream_number}_data'.format(refsNS=AccuRev2Git.gitRefsNamespace, depot=d.number, stream_number=streamNumber)
-            stateRef = '{refsNS}{depot}/streams/stream_{stream_number}_info'.format(refsNS=AccuRev2Git.gitRefsNamespace, depot=d.number, stream_number=streamNumber)
-            return (stateRef, dataRef)
-        return (None, None)
+        if d is not None:
+            return '{refsNS}{depot}/streams/'.format(refsNS=AccuRev2Git.gitRefsNamespace, depot=d.number)
+        return None
+
+    def GetStreamRefs(self, depot, streamNumber):
+        stateRef, dataRef, hwmRef = None, None, None
+        ns = self.GetStreamRefsNamespace(depot)
+        if ns is not None and streamNumber is not None and isinstance(streamNumber, int):
+            refPrefix = '{ns}stream_{streamNumber}'.format(ns=ns, streamNumber=streamNumber)
+            dataRef  = '{prefix}_data'.format(prefix=refPrefix)
+            stateRef = '{prefix}_info'.format(prefix=refPrefix)
+            hwmRef = '{prefix}_hwm'.format(prefix=refPrefix) # High-water mark ref.
+        return (stateRef, dataRef, hwmRef)
 
     # Gets the diff.xml contents and parsed accurev.obj.Diff object from the given \a ref (git ref or hash).
     def GetDiffInfo(self, ref):
@@ -1050,7 +1058,7 @@ class AccuRev2Git(object):
                 else:
                     self.config.logger.info( "stream {streamName}: tr. #{trId} {trType} -> commit {hash} on {ref}".format(streamName=stream.name, trId=tr.id, trType=tr.Type, hash=commitHash[:8], ref=stateRef) )
             else:
-                self.config.logger.info( "Failed to get the first transaction for {0} from accurev. Won't process any further.".format(stream.name) )
+                self.config.logger.info( "Failed to get the first transaction for {0} from accurev. Won't retrieve any further.".format(stream.name) )
                 return (None, None)
 
         # Get the end transaction.
@@ -1059,7 +1067,7 @@ class AccuRev2Git(object):
             self.config.logger.dbg("accurev hist -p {0} -t {1}.1 failed.".format(depot, endTransaction))
             return (None, None)
         endTr = endTrHist.transactions[0]
-        self.config.logger.info("{0}: processing transaction range #{1} - #{2}".format(stream.name, tr.id, endTr.id))
+        self.config.logger.info("{0}: retrieving transaction range #{1} - #{2}".format(stream.name, tr.id, endTr.id))
 
         # Iterate over all of the transactions that affect the stream we are interested in and maybe the "chstream" transactions (which affect the streams.xml).
         deepHist = None
@@ -1348,19 +1356,25 @@ class AccuRev2Git(object):
     # between branches will now most likely need to be reconsidered. If the retrieval of information from accurev is a part of the processing step then we
     # have to redo a lot of the work that we have already done for the 7 streams. Instead we have the two steps decoupled so that all we need to do is
     # download the 8th stream information from accurev (which we don't yet have) and do the reprocessing by only looking for information already in git.
-    def RetrieveStream(self, depot, stream, dataRef, stateRef, startTransaction, endTransaction):
-        self.config.logger.info( "Processing stream {0} info for transaction range : {1} - {2}".format(stream.name, startTransaction, endTransaction) )
+    def RetrieveStream(self, depot, stream, dataRef, stateRef, hwmRef, startTransaction, endTransaction):
+        self.config.logger.info( "Retrieving stream {0} info from Accurev for transaction range : {1} - {2}".format(stream.name, startTransaction, endTransaction) )
         stateTr, stateHash = self.RetrieveStreamInfo(depot=depot, stream=stream, stateRef=stateRef, startTransaction=startTransaction, endTransaction=endTransaction)
-        self.config.logger.info( "Processing stream {0} data for transaction range : {1} - {2}".format(stream.name, startTransaction, endTransaction) )
+        self.config.logger.info( "Retrieving stream {0} data from Accurev for transaction range : {1} - {2}".format(stream.name, startTransaction, endTransaction) )
         dataTr,  dataHash  = self.RetrieveStreamData(stream=stream, dataRef=dataRef, stateRef=stateRef)
 
         if stateTr is not None and dataTr is not None:
             if stateTr.id != dataTr.id:
-                self.config.logger.error( "Missmatch while processing stream {streamName} (id: streamId), the data ref ({dataRef}) is on tr. {dataTr} while the state ref ({stateRef}) is on tr. {stateTr}.".format(streamName=stream.name, streamId=stream.streamNumber, dataTr=dataTr.id, stateTr=stateTr.id, dataRef=dataRef, stateRef=stateRef) )
+                self.config.logger.error( "Missmatch while retrieving stream {streamName} (id: streamId), the data ref ({dataRef}) is on tr. {dataTr} while the state ref ({stateRef}) is on tr. {stateTr}.".format(streamName=stream.name, streamId=stream.streamNumber, dataTr=dataTr.id, stateTr=stateTr.id, dataRef=dataRef, stateRef=stateRef) )
+            # Success! Update the high water mark for the stream.
+            metadata = { "high-water-mark": int(endTransaction) }
+            if self.WriteFileRef(ref=hwmRef, text=json.dumps(metadata)) != True:
+                self.config.logger.error( "Failed to write the high-water-mark to ref {ref}".format(ref=hwmRef) )
+            else:
+                self.config.logger.info( "Updated the high-water-mark to ref {ref} as {trId}".format(ref=hwmRef, trId=endTransaction) )
         elif stateTr is not None and dataTr is None:
-            self.config.logger.error( "Missmatch while processing stream {streamName} (id: streamId), the state ref ({stateRef}) is on tr. {stateTr} but the data ref ({dataRef}) wasn't processed.".format(streamName=stream.name, streamId=stream.streamNumber, stateTr=stateTr.id, dataRef=dataRef, stateRef=stateRef) )
+            self.config.logger.error( "Missmatch while retrieving stream {streamName} (id: streamId), the state ref ({stateRef}) is on tr. {stateTr} but the data ref ({dataRef}) wasn't retrieved.".format(streamName=stream.name, streamId=stream.streamNumber, stateTr=stateTr.id, dataRef=dataRef, stateRef=stateRef) )
         elif stateTr is None:
-            self.config.logger.error( "While processing stream {streamName} (id: streamId), the state ref ({stateRef}) failed to process.".format(streamName=stream.name, streamId=stream.streamNumber, dataRef=dataRef, stateRef=stateRef) )
+            self.config.logger.error( "While retrieving stream {streamName} (id: streamId), the state ref ({stateRef}) failed.".format(streamName=stream.name, streamId=stream.streamNumber, dataRef=dataRef, stateRef=stateRef) )
 
         return dataTr, dataHash
 
@@ -1389,15 +1403,16 @@ class AccuRev2Git(object):
             if depot is None or len(depot) == 0:
                 depot = streamInfo.depotName
 
-            stateRef, dataRef  = self.GetStreamRefs(depot=depot, streamNumber=streamInfo.streamNumber)
+            stateRef, dataRef, hwmRef  = self.GetStreamRefs(depot=depot, streamNumber=streamInfo.streamNumber)
             if stateRef is None or dataRef is None or len(stateRef) == 0 or len(dataRef) == 0:
                 raise Exception("Invariant error! The state ({sr}) and data ({dr}) refs must not be None!".format(sr=stateRef, dr=dataRef))
-            tr, commitHash = self.RetrieveStream(depot=depot, stream=streamInfo, dataRef=dataRef, stateRef=stateRef, startTransaction=self.config.accurev.startTransaction, endTransaction=endTr.id)
+            tr, commitHash = self.RetrieveStream(depot=depot, stream=streamInfo, dataRef=dataRef, stateRef=stateRef, hwmRef=hwmRef, startTransaction=self.config.accurev.startTransaction, endTransaction=endTr.id)
 
             if self.config.git.remoteMap is not None:
                 refspec = "{dataRef}:{dataRef} {stateRef}:{stateRef}".format(dataRef=dataRef, stateRef=stateRef)
                 for remoteName in self.config.git.remoteMap:
                     pushOutput = None
+                    self.config.logger.info("Pushing '{refspec}' to '{remote}'...".format(remote=remoteName, refspec=refspec))
                     try:
                         pushCmd = "git push {remote} {refspec}".format(remote=remoteName, refspec=refspec)
                         pushOutput = subprocess.check_output(pushCmd.split(), stderr=subprocess.STDOUT).decode('utf-8')
@@ -1411,25 +1426,40 @@ class AccuRev2Git(object):
         if self.config.accurev.commandCacheFilename is not None:
             accurev.ext.disable_command_cache()
 
+    # Lists the .git/... directory that contains all the stream refs and returns the file list as its result
+    def GetAllKnownStreamRefs(self, depot):
+        refsPrefix = self.GetStreamRefsNamespace(depot)
+        if refsPrefix is not None:
+            refsPath = '.git/{prefix}'.format(prefix=refsPrefix)
+
+            repoRefsPath = os.path.join(self.gitRepo.path, refsPath)
+            if os.path.exists(repoRefsPath):
+                rv = []
+                for r in os.listdir(repoRefsPath):
+                    rv.append(refsPrefix + r)
+                return rv
+        return None
+
     # Tries to get the stream name from the data that we have stored in git.
     def GetStreamByName(self, depot, streamName):
-        refsPrefix = '{refsNS}{depot}/streams/'.format(refsNS=AccuRev2Git.gitRefsNamespace, depot=depot)
-        refsPath = '.git/{prefix}'.format(prefix=refsPrefix)
+        refsPrefix = self.GetStreamRefsNamespace(depot)
 
-        refList = os.listdir(os.path.join(self.gitRepo.path, refsPath))
+        refList = self.GetAllKnownStreamRefs(depot)
+        if refList is None:
+            refList = []
         # The stream with the lowest number is most likely to have a transaction with a streams.xml that contains
         # our stream name. Only if we are really unlucky will we have to search more than the lowest numbered stream.
         # So, parse and extract the number from the ..._info refs, and remove the ..._data refs.
         infoRefList = []
         for ref in refList:
-            match = re.match(r'^stream_(\d+)_info$', ref)
+            match = re.match(r'^.*stream_(\d+)_info$', ref)
             if match is not None:
                 infoRefList.append( (int(match.group(1)), ref) ) # The stream number is extracted and put as the first element for sorting.
         infoRefList.sort()
 
         for streamNumber, ref in infoRefList:
             # Execute a `git log -S` command with the pickaxe option to find the stream name in the streams.xml
-            cmd = [ 'git', 'log', '--format=%H', '-Sname="{n}"'.format(n=streamName), '{p}{s}'.format(p=refsPrefix, s=ref), '--', 'streams.xml' ]
+            cmd = [ 'git', 'log', '--format=%H', '-Sname="{n}"'.format(n=streamName), ref, '--', 'streams.xml' ]
             hashList = self.gitRepo.raw_cmd(cmd)
             if hashList is not None:
                 hashList = hashList.strip()
@@ -1549,7 +1579,7 @@ class AccuRev2Git(object):
 
     def ProcessStream(self, stream, branchName):
         if stream is not None:
-            stateRef, dataRef  = self.GetStreamRefs(depot=stream.depotName, streamNumber=stream.streamNumber)
+            stateRef, dataRef, hwmRef = self.GetStreamRefs(depot=stream.depotName, streamNumber=stream.streamNumber)
             if stateRef is None or dataRef is None or len(stateRef) == 0 or len(dataRef) == 0:
                 raise Exception("Invariant error! The state ({sr}) and data ({dr}) refs must not be None!".format(sr=stateRef, dr=dataRef))
 
@@ -1677,10 +1707,12 @@ class AccuRev2Git(object):
             self.ProcessStream(stream=stream, branchName=branchName)
 
             if self.config.git.remoteMap is not None:
-                stateRef, dataRef  = self.GetStreamRefs(depot=stream.depotName, streamNumber=stream.streamNumber)
-                if stateRef is None or dataRef is None:
-                    raise Exception("Invariant error! Couldn't get stateRef or dataRef names! Aborting!")
-                refspec = "{dataRef}:{dataRef} {stateRef}:{stateRef}".format(dataRef=dataRef, stateRef=stateRef)
+                formatOptions = { "accurevNotes": AccuRev2Git.gitNotesRef_accurevInfo, "ac2gitNotes": AccuRev2Git.gitNotesRef_state, "branchName": branchName }
+                refspec = "{branchName}".format(**formatOptions)
+                if self.gitRepo.raw_cmd(['git', 'show-ref', '--hash', 'refs/notes/{accurevNotes}'.format(**formatOptions)]) is not None:
+                    refspec += " refs/notes/{accurevNotes}:refs/notes/{accurevNotes}".format(**formatOptions)
+                if self.gitRepo.raw_cmd(['git', 'show-ref', '--hash', 'refs/notes/{ac2gitNotes}'.format(**formatOptions)]) is not None:
+                    refspec += " refs/notes/{ac2gitNotes}:refs/notes/{ac2gitNotes}".format(**formatOptions)
                 for remoteName in self.config.git.remoteMap:
                     pushOutput = None
                     try:
@@ -2083,282 +2115,95 @@ class AccuRev2Git(object):
                 
         return False
 
+    def ReadFileRef(self, ref):
+        rv = None
+        for i in range(0, AccuRev2Git.commandFailureRetryCount):
+            rv = self.gitRepo.raw_cmd([u'git', u'show', ref])
+            if rv is None:
+                return None # Non-zero return code means that the ref likely doesn't exist.
+            elif len(rv) > 0: # The processes sometimes return empty strings via Popen.communicate()... Need to retry.
+                return rv
+        return rv
+
+    def WriteFileRef(self, ref, text):
+        if ref is not None and text is not None and len(text) > 0:
+            filePath = None
+            with tempfile.NamedTemporaryFile(mode='w+', prefix='ac2git_ref_file_', delete=False) as f:
+                filePath = f.name
+                f.write(text)
+            if filePath is not None:
+                cmd = [ u'git', u'hash-object', u'-w', u'{0}'.format(filePath) ]
+                objHash = ''
+                tryCount = 0
+                while objHash is not None and len(objHash) == 0 and tryCount < AccuRev2Git.commandFailureRetryCount:
+                    objHash = self.gitRepo.raw_cmd(cmd)
+                    objHash = objHash.strip()
+                    tryCount += 1
+                os.remove(filePath)
+                updateRefRetr = None
+                if objHash is not None:
+                    cmd = [ u'git', u'update-ref', ref, objHash ]
+                    updateRefRetr = self.gitRepo.raw_cmd(cmd)
+                if objHash is None or updateRefRetr is None:
+                    self.config.logger.dbg("Error! Command {cmd}".format(cmd=' '.join(str(x) for x in cmd)))
+                    self.config.logger.dbg("  Failed with: {err}".format(err=self.gitRepo.lastStderr))
+                    self.config.logger.error("Failed to record text for ref {r}, aborting!".format(r=ref))
+                    raise Exception("Error! Failed to record text for ref {r}, aborting!".format(r=ref))
+            else:
+                self.config.logger.error("Failed to create temporary file for writing text to {r}".format(r=ref))
+                raise Exception("Error! Failed to record current state, aborting!")
+            return True
+        return False
+
+    def GetDepotHighWaterMark(self, depot):
+        streamRefs = self.GetAllKnownStreamRefs(depot)
+        lowestHwm = None
+        for sRef in streamRefs:
+            match = re.match(r'.*/stream_(\d+)_hwm$', sRef)
+            if match is not None:
+                text = self.ReadFileRef(ref=sRef)
+                if text is None:
+                    self.config.logger.error("Failed to read ref {r}!".format(r=sRef))
+                hwm = json.loads(text)
+                if lowestHwm is None or hwm["high-water-mark"] < lowestHwm:
+                    lowestHwm = hwm["high-water-mark"]
+        return lowestHwm
+
     def ProcessTransactions(self):
         # Git refspec for the state ref in which we will store a blob.
-        stateRefspec = u'refs/ac2git/state'
+        stateRefspec = u'{refsNS}processing_state'.format(refsNS=AccuRev2Git.gitRefsNamespace)
 
-        # Default state
-        state = { "depot": self.config.accurev.depot,                       # Static
-                  "stream_map": self.config.accurev.streamMap,              # Static
-                  "stream_number_map": None,                                # Static
-                  "transaction": int(self.config.accurev.startTransaction), # Dynamic
-                  "branch_list": None,                                      # Dynamic
-                  "next_transaction_map": None }                            # Dynamic
+        stateText = self.ReadFileRef(ref=stateRefspec)
+        if stateText is not None:
+            state = json.loads(stateText)
+        else:
+            depot = self.GetDepot(self.config.accurev.depot)
+            if depot is None:
+                raise Exception("Failed to get depot {depot}!".format(depot=self.config.accurev.depot))
+
+            streamMap = OrderedDict()
+            for configStream in self.config.accurev.streamMap:
+                branchName = self.config.accurev.streamMap[configStream]
+                stream = self.GetStreamByName(depot.number, streamName)
+                streamMap[str(stream.streamNumber)] = { "stream_name": configStream, "branch_name": branchName }
+
+            # Default state
+            state = { "depot": depot,
+                      "stream_map": streamMap,
+                      "transaction": int(self.config.accurev.startTransaction), # Dynamic
+                      "branch_list": None,                                      # Dynamic
+                      "next_transaction_map": None }                            # Dynamic
 
         # Other state variables
         startTransaction = state["transaction"]
-        endTrHist, endTr = None, None
+        endTransaction = self.GetDepotHighWaterMark(self.config.accurev.depot)
+        try:
+            endTransaction = min(endTransaction, int(self.config.accurev.endTransaction))
+        except:
+            pass # keywords highest, now or date time are ignored. We only read the config in case
+                 # that the configured end transaction is lower than the lowest high-water-mark we
+                 # have for the depot.
         currentTransaction = None
-        deepHistMap = None
-
-        # Determine the last processed transaction, if any (loaded from the ref).
-        stateStr = self.gitRepo.raw_cmd([u'git', u'show', stateRefspec])
-        if stateStr is not None and len(stateStr) > 0:
-            state = json.loads(stateStr.strip())
-            startTransaction = state["transaction"]
-            self.config.logger.dbg( "Loaded last state at transaction {tr} as:".format(tr=state["transaction"]) )
-            for br in state["branch_list"]:
-                self.config.logger.dbg( " - Branch {br} at {hash}{current}.".format(br=br["name"], hash=br["commit"], current=", current" if br["is_current"] else "") )
-            
-            # Determine the last processed transaction's associated branch, if any (for first transaction there is none).
-            if state["transaction"] is not None and state["branch_list"] is not None and len(state["branch_list"]) != 0:
-                # Reset the repo to the last branch's tip (which should be equivalent to our last transaction).
-                self.config.logger.dbg( "Clean current branch" )
-                self.gitRepo.clean(directories=True, force=True, forceSubmodules=True, includeIgnored=True)
-                self.config.logger.dbg( "Reset current branch" )
-                self.gitRepo.reset(isHard=True)
-                
-                # Restore all branches to the last saved state but do the branch that was current at the time last.
-                currentBranch = None
-                for br in state["branch_list"]:
-                    if not br["is_current"]:
-                        self.config.logger.dbg( "Restore branch {branchName} at commit {commit}".format(branchName=br["name"], commit=br["commit"]) )
-                        result = self.gitRepo.raw_cmd([u'git', u'checkout', u'-B', br["name"], br["commit"]])
-                        if result is None:
-                            raise Exception("Failed to restore last state. git checkout -B {br} {c}; failed.".format(br=br["name"], c=br["commit"]))
-                    else:
-                        currentBranch = br
-                if currentBranch is None:
-                    raise Exception("Invariant error! There must have been at least one current branch saved.")
-                self.config.logger.dbg( "Checkout last processed transaction #{tr} on branch {branchName} at commit {commit}".format(tr=state["transaction"], branchName=currentBranch["name"], commit=currentBranch["commit"]) )
-                result = self.gitRepo.raw_cmd([u'git', u'checkout', u'-B', currentBranch["name"], currentBranch["commit"]])
-                if result is None:
-                    raise Exception("Failed to restore last state. git checkout -B {br} {c}; failed.".format(br=currentBranch["name"], c=currentBranch["commit"]))
-
-                # Print out and validate current state as clean.
-                status = self.gitRepo.status()
-                self.config.logger.dbg( "Status of {branch} - {staged} staged, {changed} changed, {untracked} untracked files{initial_commit}.".format(branch=status.branch, staged=len(status.staged), changed=len(status.changed), untracked=len(status.untracked), initial_commit=', initial commit' if status.initial_commit else '') )
-                if status is None:
-                    raise Exception("Invalid initial state! The status command return is invalid.")
-                if status.branch is None or status.branch != currentBranch["name"]:
-                    raise Exception("Invalid initial state! The status command returned an invalid name for current branch. Expected {branchName} but got {statusBranch}.".format(branchName=currentBranch["name"], statusBranch=status.branch))
-                if len(status.staged) != 0 or len(status.changed) != 0 or len(status.untracked) != 0:
-                    raise Exception("Invalid initial state! There are changes in the tracking repository. Staged {staged}, changed {changed}, untracked {untracked}.".format(staged=status.staged, changed=status.changed, untracked=status.untracked))
-
-                # Get the configured end transaction and convert it into a number by calling accurev hist.
-                endTrHist = self.TryHist(depot=state["depot"], trNum=self.config.accurev.endTransaction)
-                if endTrHist is None or len(endTrHist.transactions) == 0 is None:
-                    raise Exception("Couldn't determine the end transaction for the conversion. Aborting!")
-                endTr = endTrHist.transactions[0]
-            else:
-                raise Exception("Invalid state! Information found for previous run but is incomplete, corrupt or incorrect.")
-
-            # Sicne the state["transaction"] represents the last processed transaction we need to increment it by one and find the next transaction that we need to process.
-            if state["stream_map"] is not None and len(state["stream_map"]) > 0:
-                if state["stream_number_map"] is None or len(state["stream_number_map"]) != len(state["stream_map"]):
-                    raise Exception("Invalid state! The stream number map needs to match the stream map!")
-                else:
-                    # Our stream number map has been loaded from JSON. Before it was stored as JSON it had integer keys but since
-                    # it was stored and then loaded again the keys have become strings. Here we convert them back to integers.
-                    snm = {}
-                    for n in state["stream_number_map"]:
-                        snm[int(n)] = state["stream_number_map"][n]
-                    state["stream_number_map"] = snm
-
-                if state["next_transaction_map"] is None or len(state["next_transaction_map"]) == 0: # This is true if we haven't initialized these variables before...
-                    raise Exception("Invalid state! We are processing a subset of streams but their individual positions have been lost!")
-                # Advance our mapping of the current positions of each stream by one iteration.
-                for s in state["next_transaction_map"]:
-                    nextTrId = state["next_transaction_map"][s]
-                    if nextTrId == state["transaction"]:
-                        deepHist = deepHistMap[s] if deepHistMap is not None else None
-                        nextTrId, diff = self.FindNextChangeTransaction(streamName=s, startTrNumber=nextTrId, endTrNumber=endTr.id, deepHist=deepHist)
-                        state["next_transaction_map"][s] = nextTrId
-                        if nextTrId is None:
-                            raise Exception("Failed to find the next transaction to process for stream {stream}. Current transaction {tr}.".format(stream=s, tr=state["transaction"]))
-                        # Note: Do not break here! This transaction could have affected more than one stream and ProcessTransaction() updates all of them so we need to
-                        #       get the next transaction for ALL streams that have been affected by this transaction!
-                nextStream = min(state["next_transaction_map"], key=lambda x: state["next_transaction_map"][x])
-                if state["transaction"] == state["next_transaction_map"][nextStream]:
-                    raise Exception("Failed to find the next transaction to process!")
-                state["transaction"] = state["next_transaction_map"][nextStream]
-            else:
-                state["transaction"] += 1
-        else:
-            # Get the configured end transaction and convert it into a number by calling accurev hist.
-            endTrHist = self.TryHist(depot=state["depot"], trNum=self.config.accurev.endTransaction)
-            if endTrHist is None or len(endTrHist.transactions) == 0 is None:
-                raise Exception("Couldn't determine the end transaction for the conversion. Aborting!")
-            endTr = endTrHist.transactions[0]
-
-            self.config.logger.dbg( "No last state!" )
-
-            # Get the stream_map information from the last run (effectively ignoring whatever is in the config now).
-            if state["stream_map"] is not None and len(state["stream_map"]) > 0:
-                # We need to start at the transaction that the user has specified, so let's get all the streams that we need to process and create their initial states...
-                state["next_transaction_map"] = {}
-                state["stream_number_map"] = {}
-                for s in state["stream_map"]:
-                    # Initialize stream_number_map
-                    sInfo = accurev.show.streams(depot=state["depot"], stream=s).streams[0]
-                    state["stream_number_map"][sInfo.streamNumber] = state["stream_map"][s]
-                    # Initialize next_transaction_map
-                    firstTr = self.GetFirstTransaction(depot=state["depot"], streamName=s, startTransaction=startTransaction, endTransaction=endTr.id)
-                    if firstTr is None:
-                        raise Exception("Failed to find the first transaction to process for stream {stream}. Current transaction {tr}.".format(stream=s, tr=state["transaction"]))
-                    state["next_transaction_map"][s] = firstTr.id
-                firstStream = min(state["next_transaction_map"], key=lambda x: state["next_transaction_map"][x])
-                state["transaction"] = state["next_transaction_map"][firstStream]
-            else:
-                # The state["transaction"] is exactly at the position it should be (self.config.accurev.startTransaction)
-                pass
-
-            if state["transaction"] < 1:
-                raise Exception("The minimum transaction at which you can start the conversion is 1. Found {t}".format(t=state["transaction"]))
-            elif state["transaction"] != 1:
-                self.config.logger.dbg( "Initializing known branches at transaction {tr}".format(tr=state["transaction"]) )
-                streams = accurev.show.streams(depot=state["depot"], timeSpec=state["transaction"]).streams
-
-                reachableStreamNumberMap = None
-                if state["stream_number_map"] is not None and len(state["stream_number_map"]) != 0:
-                    # Create a tree of empty commits representing the stream hierarchy.
-                    reachableStreamNumberMap = {} # This structure maps is the same as state["stream_number_map"] except that it contains all streams that are reachable (via parenting/basis) from the streams in the state["stream_number_map"] up to the root stream.
-                    size = -1
-                    while len(reachableStreamNumberMap) != size:
-                        size = len(reachableStreamNumberMap)
-                        for stream in streams:
-                            if stream.streamNumber in state["stream_number_map"]:
-                                reachableStreamNumberMap[stream.streamNumber] = state["stream_number_map"][stream.streamNumber]
-                            if stream.streamNumber in reachableStreamNumberMap and stream.basisStreamNumber not in reachableStreamNumberMap:
-                                reachableStreamNumberMap[stream.basisStreamNumber] = state["stream_number_map"][stream.streamNumber]
-                            
-                self.InitialCommitStreams(depot=state["depot"], streams=streams, tr=accurev.hist(depot=state["depot"], timeSpec=state["transaction"]).transactions[0], streamNumberMap=reachableStreamNumberMap)
-                self.config.logger.dbg( "Initializing known branches at transaction {tr}".format(tr=state["transaction"]) )
-                
-
-        # Begin processing of the transactions
-        self.config.logger.info( "Processing transaction range #{tr_start}-{tr_end}".format(tr_start=startTransaction, tr_end=endTr.id) )
-
-        # Initialize the deepHistMap variables
-        if state["stream_map"] is not None and len(state["stream_map"]) > 0:
-            if self.config.method == "deep-hist":
-                deepHistMap = {}
-                for s in state["stream_map"]:
-                    self.config.logger.info( "Querying deep-hist for {stream}".format(stream=s) )
-                    deepHistMap[s] = accurev.ext.deep_hist(depot=state["depot"], stream=s, timeSpec="{0}-{1}".format(startTransaction, endTr.id), ignoreTimelocks=False)
-                    self.config.logger.info( "Deep-hist for {stream} returned {count} transactions.".format(stream=s, count=len(deepHistMap[s])) )
-            elif self.config.method in [ "diff" ]:
-                pass
-            else:
-                raise Exception("Unrecognized conversion method: {method}!".format(method=self.config.method))
-
-        startTime = datetime.now()
-        lastPushTime = startTime
-        while state["transaction"] < endTr.id:
-            self.config.logger.dbg( "Started processing transaction #{tr}".format(tr=state["transaction"]) )
-            self.ProcessTransaction(depot=state["depot"], transaction=state["transaction"], streamNumberMap=state["stream_number_map"])
-            
-            # Validate that there are no pending changes (i.e. everything has been committed)
-            status = self.gitRepo.status()
-            self.config.logger.dbg( "Status of {branch} - {staged} staged, {changed} changed, {untracked} untracked files{initial_commit}.".format(branch=status.branch, staged=len(status.staged), changed=len(status.changed), untracked=len(status.untracked), initial_commit=', initial commit' if status.initial_commit else '') )
-            if status is None:
-                raise Exception("Invalid initial state! The status command return is invalid.")
-            if status.branch is None:
-                raise Exception("Invalid initial state! The status command returned an invalid name for current branch.")
-            if len(status.staged) != 0 or len(status.changed) != 0 or len(status.untracked) != 0:
-                raise Exception("Invalid initial state! There are changes in the tracking repository. Staged {staged}, changed {changed}, untracked {untracked}.".format(staged=status.staged, changed=status.changed, untracked=status.untracked))
-
-            # Save our current state
-            lastCommitHash = self.GetLastCommitHash(branchName=status.branch)
-            if lastCommitHash is None or len(lastCommitHash) == 0:
-                raise Exception("Failed to retrieve last commit hash!")
-            
-            # Record the current position of all the branches.
-            state["branch_list"] = []
-            for br in self.gitRepo.branch_list():
-                if br.isCurrent:
-                    if br.name != status.branch.strip() or not lastCommitHash.strip().startswith(br.shortHash):
-                        raise Exception("Invariant error! git status and git branch --list reconciliation failed. Status: {statusName} ({statusHash}), Br. list: {listName} ({listHash}).".format(statusName=status.branch.strip(), statusHash=lastCommitHash, listName=br.name, listHash=br.shortHash))
-                brHash = OrderedDict()
-                brHash["name"] = br.name
-                brHash["commit"] = br.shortHash
-                brHash["is_current"] = br.isCurrent
-                state["branch_list"].append(brHash)
-
-            
-            stateFilePath = None
-            with tempfile.NamedTemporaryFile(mode='w+', prefix='ac2git_state_', delete=False) as stateFile:
-                stateFilePath = stateFile.name
-                stateFile.write(json.dumps(state))
-            if stateFilePath is not None:
-                cmd = [ u'git', u'hash-object', u'-w', u'{0}'.format(stateFilePath) ]
-                stateObjHash = ''
-                tryCount = 0
-                while stateObjHash is not None and len(stateObjHash) == 0 and tryCount < AccuRev2Git.commandFailureRetryCount:
-                    stateObjHash = self.gitRepo.raw_cmd(cmd)
-                    stateObjHash = stateObjHash.strip()
-                    tryCount += 1
-                os.remove(stateFilePath)
-                updateRefRetr = None
-                if stateObjHash is not None:
-                    cmd = [ u'git', u'update-ref', stateRefspec, stateObjHash ]
-                    updateRefRetr = self.gitRepo.raw_cmd(cmd)
-                if stateObjHash is None or updateRefRetr is None:
-                    self.config.logger.dbg("Error! Command {cmd}".format(cmd=' '.join(str(x) for x in cmd)))
-                    self.config.logger.dbg("  Failed with: {err}".format(err=self.gitRepo.lastStderr))
-                    self.config.logger.error("Failed to record current state, aborting!")
-                    raise Exception("Error! Failed to record current state, aborting!")
-            else:
-                self.config.logger.error("Failed to create temporary file for state of transaction {0}".format(tr.id))
-                raise Exception("Error! Failed to record current state, aborting!")
-                
-
-            self.config.logger.dbg( "Finished processing transaction #{tr}".format(tr=state["transaction"]) )
-            if state["stream_map"] is not None and len(state["stream_map"]) > 0:
-                # Find the stream for which we processed this transaction
-                for s in state["next_transaction_map"]:
-                    nextTrId = state["next_transaction_map"][s]
-                    if nextTrId == state["transaction"]:
-                        deepHist = deepHistMap[s] if deepHistMap is not None else None
-                        nextTrId, diff = self.FindNextChangeTransaction(streamName=s, startTrNumber=nextTrId, endTrNumber=endTr.id, deepHist=deepHist)
-                        state["next_transaction_map"][s] = nextTrId
-                        if nextTrId is None:
-                            raise Exception("Failed to find the next transaction to process for stream {stream}. Current transaction {tr}.".format(stream=s, tr=state["transaction"]))
-                        # Note: Do not break here! This transaction could have affected more than one stream and ProcessTransaction() updates all of them so we need to
-                        #       get the next transaction for ALL streams that have been affected by this transaction!
-                nextStream = min(state["next_transaction_map"], key=lambda x: state["next_transaction_map"][x])
-                if state["transaction"] == state["next_transaction_map"][nextStream]:
-                    raise Exception("Failed to find the next transaction to process!")
-                state["transaction"] = state["next_transaction_map"][nextStream]
-            else:
-                state["transaction"] += 1
-
-            finishTime = datetime.now()
-            # Do a push every 5 min or at the end of processing the transactions...
-            if state["transaction"] == endTr.id or (finishTime - lastPushTime).total_seconds() > 300:
-                lastPushTime = finishTime
-                if self.config.git.remoteMap is not None:
-                    for remoteName in self.config.git.remoteMap:
-                        pushOutput = None
-                        try:
-                            pushCmd = "git push {remote} --all".format(remote=remoteName)
-                            pushOutput = subprocess.check_output(pushCmd.split(), stderr=subprocess.STDOUT).decode('utf-8')
-                            pushCmd = "git push {remote} +{refspec}:{refspec}".format(remote=remoteName, refspec=stateRefspec)
-                            pushOutput = subprocess.check_output(pushCmd.split(), stderr=subprocess.STDOUT).decode('utf-8')
-                            self.config.logger.info("Push to '{remote}' succeeded:".format(remote=remoteName))
-                            self.config.logger.info(pushOutput)
-                        except subprocess.CalledProcessError as e:
-                            self.config.logger.error("Push to '{remote}' failed!".format(remote=remoteName))
-                            self.config.logger.dbg("'{cmd}', returned {returncode} and failed with:".format(cmd="' '".join(e.cmd), returncode=e.returncode))
-                            self.config.logger.dbg("{output}".format(output=e.output.decode('utf-8')))
-            
-            # Print the progress message
-            processedTransactions = state["transaction"] - startTransaction # Represents the number of transactions that were processed in this invokation of the script.
-            runningTime = (finishTime - startTime).total_seconds()        # Represents the time (in seconds) that we have been running the conversion in this invokation.
-            totalTransactions = endTr.id - state["transaction"]           # Represents the total number of transactions processed since we started (this invokation).
-            eta = (runningTime/processedTransactions) * (totalTransactions - processedTransactions)  # Expected time until done (in seconds).
-            etaDays, etaHours, etaMin, etaSec = int(eta / 60 / 60 / 24), int((eta / 60 / 60) % 24), int((eta / 60) % 60), (eta % 60)
-            self.config.logger.info("Progress {progress: >5.2f}%, {processed}/{total}, avg. {throughput:.2f} tr/s ({timeTaken:.2f} s/tr). ETA {etaDays}d {etaHours}:{etaMin:0>2d}:{etaSec:0>5.2f} (h:mm:ss.ss).".format(progress=((state["transaction"] - int(self.config.accurev.startTransaction))*100/(endTr.id - int(self.config.accurev.startTransaction))), processed=(state["transaction"] - 1), total=endTr.id, throughput=(processedTransactions/runningTime), timeTaken=(runningTime/processedTransactions), etaDays=etaDays, etaHours=etaHours, etaMin=etaMin, etaSec=etaSec))
 
             
     def InitGitRepo(self, gitRepoPath):
