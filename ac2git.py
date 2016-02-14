@@ -671,9 +671,7 @@ class AccuRev2Git(object):
         os.remove(messageFilePath)
 
         if commitHash is not None:
-            if lastCommitHash != commitHash:
-                self.config.logger.dbg( "Committed {0}".format(commitHash) )
-            else:
+            if lastCommitHash == commitHash:
                 self.config.logger.error("Commit command returned True when nothing was committed...? Last commit hash {0} didn't change after the commit command executed.".format(lastCommitHash))
                 commitHash = None # Invalidate return value
         else:
