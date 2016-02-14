@@ -615,14 +615,20 @@ class AccuRev2Git(object):
         messageFilePath = None
         with tempfile.NamedTemporaryFile(mode='w+', prefix='ac2git_commit_', delete=False) as messageFile:
             messageFilePath = messageFile.name
-            if messageOverride is not None:
+            if messageOverride is not None and len(messageOverride) > 0:
                 messageFile.write(messageOverride)
-            elif transaction is None or transaction.comment is None or len(transaction.comment) == 0:
-                messageFile.write(' ') # White-space is always stripped from commit messages. See the git commit --cleanup option for details.
-            else:
+            elif transaction is not None and transaction.comment is not None and len(transaction.comment) > 0:
                 # In git the # at the start of the line indicate that this line is a comment inside the message and will not be added.
                 # So we will just add a space to the start of all the lines starting with a # in order to preserve them.
                 messageFile.write(transaction.comment)
+            else:
+                # `git commit` and `git commit-tree` commands, when given an empty file for the commit message, seem to revert to
+                # trying to read the commit message from the STDIN. This is annoying since we don't want to be opening a pipe to
+                # the spawned process all the time just to write an EOF character so instead we will just add a single space as the
+                # message and hope the user doesn't notice.
+                # For the `git commit` command it's not as bad since white-space is always stripped from commit messages. See the 
+                # `git commit --cleanup` option for details.
+                messageFile.write(' ')
         
         if messageFilePath is None:
             self.config.logger.error("Failed to create temporary file for commit message{0}".format(forTrMessage))
