@@ -2184,15 +2184,18 @@ class AccuRev2Git(object):
             streamMap = OrderedDict()
             for configStream in self.config.accurev.streamMap:
                 branchName = self.config.accurev.streamMap[configStream]
-                stream = self.GetStreamByName(depot.number, streamName)
+                stream = self.GetStreamByName(depot.number, configStream)
                 streamMap[str(stream.streamNumber)] = { "stream_name": configStream, "branch_name": branchName }
 
             # Default state
-            state = { "depot": depot,
+            state = { "depot": depot.number,
                       "stream_map": streamMap,
                       "transaction": int(self.config.accurev.startTransaction), # Dynamic
                       "branch_list": None,                                      # Dynamic
                       "next_transaction_map": None }                            # Dynamic
+
+        print("State:\n{0}".format(state))
+        raise Exception("Not yet implemented!")
 
         # Other state variables
         startTransaction = state["transaction"]
