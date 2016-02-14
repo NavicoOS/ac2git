@@ -1034,9 +1034,8 @@ class AccuRev2Git(object):
 
         return hashList.split('\n')
 
-    def RetrieveStreamData(self, depot, stream, dataRef, stateRef, startTransaction, endTransaction):
-        self.config.logger.info( "Processing stream data for {0} : {1} - {2}".format(stream.name, startTransaction, endTransaction) )
-
+    # Uses the stateRef information to fetch the contents of the stream for each transaction that whose information was committed to the stateRef and commits it to the dataRef.
+    def RetrieveStreamData(self, depot, stream, dataRef, stateRef):
         # Check if the ref exists!
         dataRefObj = self.gitRepo.raw_cmd(['git', 'show-ref', dataRef])
         if dataRefObj is not None and len(dataRefObj) == 0:
@@ -1118,15 +1117,13 @@ class AccuRev2Git(object):
 
                 self.config.logger.info( "stream {streamName}: tr. #{trId} {trType} -> commit {hash} on {ref}".format(streamName=stream.name, trId=tr.id, trType=tr.Type, hash=commitHash[:8], ref=dataRef) )
 
-        # Get the end transaction.
-        endTrHist, endTrHistXml = self.TryHist(depot=depot, timeSpec=endTransaction)
-        if endTrHist is None:
-            self.config.logger.dbg("accurev hist -p {0} -t {1}.1 failed.".format(depot, endTransaction))
+        # Find the last transaction number that we processed on the dataRef.
+        lastStateTrId = self.GetTransactionForRef(ref=stateRef)
+        if lastStateTrId is None:
+            self.config.logger.error( "Failed to get last transaction processed on the {ref}.".format(ref=stateRef) )
             return (None, None)
-        endTr = endTrHist.transactions[0]
-
         # Notify the user what we are processing.
-        self.config.logger.info("{0}: processing transaction range #{1} - #{2}".format(stream.name, lastTrId, endTr.id))
+        self.config.logger.info( "Processing stream data for {0} : {1} - {2}".format(stream.name, lastTrId, lastStateTrId) )
 
         # Process all the hashes in the list
         for stateHash in reversed(stateHashList):
@@ -1213,7 +1210,7 @@ class AccuRev2Git(object):
                 self.config.logger.error( "Commit failed for {trId} on {dataRef}".format(trId=tr.id, dataRef=dataRef) )
                 return (None, None)
             else:
-                self.config.logger.info( "stream {streamName}: tr. #{trId} {trType} -> commit {hash} on {ref}".format(streamName=stream.name, trId=tr.id, trType=tr.Type, hash=commitHash[:8], ref=dataRef) )
+                self.config.logger.info( "stream {streamName}: tr. #{trId} {trType} -> commit {hash} on {ref} (end tr. {endTrId})".format(streamName=stream.name, trId=tr.id, trType=tr.Type, hash=commitHash[:8], ref=dataRef, endTrId=lastStateTrId) )
 
         return (tr, commitHash)
 
@@ -1224,8 +1221,10 @@ class AccuRev2Git(object):
     # have to redo a lot of the work that we have already done for the 7 streams. Instead we have the two steps decoupled so that all we need to do is
     # download the 8th stream information from accurev (which we don't yet have) and do the reprocessing by only looking for information already in git.
     def RetrieveStream(self, depot, stream, dataRef, stateRef, startTransaction, endTransaction):
+        self.config.logger.info( "Processing stream {0} info for transaction range : {1} - {2}".format(stream.name, startTransaction, endTransaction) )
         stateTr, stateHash = self.RetrieveStreamInfo(depot=depot, stream=stream, stateRef=stateRef, startTransaction=startTransaction, endTransaction=endTransaction)
-        dataTr,  dataHash  = self.RetrieveStreamData(depot=depot, stream=stream, dataRef=dataRef, stateRef=stateRef, startTransaction=startTransaction, endTransaction=endTransaction)
+        self.config.logger.info( "Processing stream {0} data for transaction range : {1} - {2}".format(stream.name, startTransaction, endTransaction) )
+        dataTr,  dataHash  = self.RetrieveStreamData(depot=depot, stream=stream, dataRef=dataRef, stateRef=stateRef)
 
         if stateTr is not None and dataTr is not None:
             if stateTr.id != dataTr.id:
