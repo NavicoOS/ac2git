@@ -626,7 +626,7 @@ class AccuRev2Git(object):
                 messageFile.write(transaction.comment)
                 emptyMessage = False
 
-            if not emptyMessage:
+            if emptyMessage:
                 # `git commit` and `git commit-tree` commands, when given an empty file for the commit message, seem to revert to
                 # trying to read the commit message from the STDIN. This is annoying since we don't want to be opening a pipe to
                 # the spawned process all the time just to write an EOF character so instead we will just add a single space as the
