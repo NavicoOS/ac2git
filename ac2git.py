@@ -1900,37 +1900,6 @@ class AccuRev2Git(object):
                         children.append(s.streamNumber)
         return children
 
-    #def MergeIntoChildren(self, streamNumber, streamTree, streamMap, affectedStreamMap, commitHash):
-    #    if streamNumber in streamTree:
-    #        streamInfo = streamTree[streamNumber]
-    #        stream = streamInfo["self"]
-    #        branchName = streamMap[str(stream.streamNumber)]["branch"]
-    #        streamData = affectedStreamMap[str(stream.streamNumber)]
-    #        for child in streamInfo["children"]:
-    #            childBranchName = streamMap[str(child)]["branch"]
-    #            childStreamData = affectedStreamMap[str(stream.streamNumber)]
-    #            if self.gitRepo.checkout(branchName=childBranchName) is None:
-    #                raise Exception("git checkout branch {br}, failed!".format(br=childBranchName))
-    #    
-    #            if self.gitRepo.raw_cmd([u'git', u'merge', u'--no-ff', u'--no-commit', u'-s', u'ours', branchName]) is None:
-    #                raise Exception("Failed to merge! Failed with: {err}".format(err=self.gitRepo.lastStderr))
-
-    #            parents = [ self.GetLastCommitHash(branchName=childBranchName), self.GetLastCommitHash(branchName=branchName) ]
-    #            if None in parents:
-    #                raise Exception("Invariant error! Either the source hash {sh} or the destination hash {dh} was none!".format(sh=parents[1], dh=parents[0]))
-    #                
-    #            treeHash = streamData["data_tree_hash"]
-    #            if treeHash is None:
-    #                raise Exception("Couldn't get tree hash from stream {s}".format(s=streamTree[child]["self"].name))
-
-    #            commitMessage, notes = self.GenerateCommitMessage(transaction=tr, stream=dstStream)
-    #            dstCommitHash = self.Commit(transaction=tr, allowEmptyCommit=True, messageOverride=commitMessage, parents=parents, treeHash=dstTreeHash)
-    #            if dstCommitHash is None:
-    #                raise Exception("Failed to commit a `{Type}`! tr={tr}".format(Type=tr.Type, tr=tr.id))
-    #            if notes is not None and self.AddNote(transaction=tr, commitHash=dstCommitHash, ref=AccuRev2Git.gitNotesRef_accurevInfo, note=notes) is None:
-    #                raise Exception("Failed to add note for commit {h} (transaction {trId}) to {br}.".format(trId=tr.id, br=dstBranchName, h=dstCommitHash))
-    #            
-
     # Processes a single transaction whose id is the trId (int) and which has been recorded against the streams outlined in the affectedStreamMap.
     # affectedStreamMap is a dictionary with the following format { <key:stream_num_str>: { "state_hash": <val:state_ref_commit_hash>, "data_hash": <val:data_ref_commit_hash> } }
     # The streamMap is used so that we can translate streams and their basis into branch names { <key:stream_num_str>: { "stream": <val:config_strem_name>, "branch": <val:config_branch_name> } }
@@ -2087,7 +2056,7 @@ class AccuRev2Git(object):
             #      This case is most obviously a cherry-pick.
 
             streamTree = self.BuildStreamTree(streams.streams)
-            affectedStreamTree = self.PruneStreamTree(streamTree, keepList=[int(x) for x in affectedStreamMap])
+            affectedStreamTree = self.PruneStreamTree(streamTree, keepList=[x for x in affectedStreamMap])
 
             # Determine the stream to which the files in this this transaction were promoted.
             dstStreamName, dstStreamNumber = trHist.toStream()
@@ -2102,7 +2071,7 @@ class AccuRev2Git(object):
             dstBranchName, dstStreamData = None, None
             if str(dstStream.streamNumber) in streamMap:
                 dstBranchName = streamMap[str(dstStream.streamNumber)]["branch"]
-                dstStreamData = affectedStreamMap[str(dstStream.streamNumber)]
+                dstStreamData = affectedStreamMap[dstStream.streamNumber]
 
             # Determine the stream from which the files in this this transaction were promoted.
             srcStreamName, srcStreamNumber = trHist.fromStream()
@@ -2114,14 +2083,17 @@ class AccuRev2Git(object):
                 if srcStream is None:
                     raise Exception("Invariant error! How is it possible that at a promote transaction we don't have the destination stream? streams.xml must be invalid or incomplete!")
                 srcBranchName = streamMap[str(srcStream.streamNumber)]["branch"]
-                srcStreamData = affectedStreamMap[str(srcStream.streamNumber)]
+                srcStreamData = affectedStreamMap[srcStream.streamNumber]
+                # By definition the source stream of the transaction should never be affected by it since it already has the real versions for the files that we are promoting.
+                # So instead of getting its information from affectedStreamMap just get it straight from the branch.
+                lastSrcBranchHash = self.GetLastCommitHash(branchName=srcBranchName)
             elif dstBranchName is not None: 
                 self.config.logger.info("Warning: Could not determine the source stream for promote {tr}. Treating as a cherry-pick.".format(tr=tr.id))
 
             dstCommitHash = None
             if srcBranchName is not None and dstBranchName is not None:
-                # Do a git diff between the two data commits that we will be merging!
-                diffCmd = [u'git', u'diff', u'--stat', dstStreamData["data_hash"], srcStreamData["data_hash"], u'--' ]
+                # Do a git diff between the two data commits that we will be merging.
+                diffCmd = [u'git', u'diff', u'--stat', dstStreamData["data_hash"], lastSrcBranchHash, u'--' ]
                 diff = self.gitRepo.raw_cmd(diffCmd)
                 if diff is None:
                     raise Exception("Failed to diff new branch {nBr} to old branch {oBr}! Cmd: {cmd}, Err: {err}".format(nBr=dstBranchName, oBr=srcBranchName, cmd=' '.join(cmd), err=self.gitRepo.lastStderr))
@@ -2131,7 +2103,7 @@ class AccuRev2Git(object):
                     if self.gitRepo.checkout(branchName=dstBranchName) is None:
                         raise Exception("Failed to checkout branch {br}!".format(br=dstBranchName))
 
-                    parents = [ self.GetLastCommitHash(branchName=dstBranchName), self.GetLastCommitHash(branchName=srcBranchName) ]
+                    parents = [ self.GetLastCommitHash(branchName=dstBranchName), lastSrcBranchHash ] # Make this commit a merge of the last commit on the srcStreamBranch into the dstBranchName.
                     if None in parents:
                         raise Exception("Invariant error! Either the source hash {sh} or the destination hash {dh} was none!".format(sh=parents[1], dh=parents[0]))
                     
@@ -2145,13 +2117,11 @@ class AccuRev2Git(object):
                         raise Exception("Failed to commit a `{Type}`! tr={tr}".format(Type=tr.Type, tr=tr.id))
                     if notes is not None and self.AddNote(transaction=tr, commitHash=dstCommitHash, ref=AccuRev2Git.gitNotesRef_accurevInfo, note=notes) is None:
                         raise Exception("Failed to add note for commit {h} (transaction {trId}) to {br}.".format(trId=tr.id, br=dstBranchName, h=dstCommitHash))
-                    affectedStreamTree[dstStreamNumber]["commit_hash"] = dstCommitHash
-                    affectedStreamTree[srcStreamNumber]["commit_hash"] = dstCommitHash
                     self.config.logger.info("promote {tr}. Merged {src} into {dst} {h}.".format(tr=tr.id, src=srcBranchName, dst=dstBranchName, h=dstCommitHash))
                 else:
-                    self.config.logger.info("promote {tr}. Failed to merge {src} into {dst} {h} - diff was not empty!".format(tr=tr.id, src=srcBranchName, dst=dstBranchName, h=dstCommitHash))
+                    self.config.logger.info("promote {tr}. Failed to merge {src} into {dst} - diff was not empty!".format(tr=tr.id, src=srcBranchName, dst=dstBranchName))
             elif dstBranchName is not None:
-                # Cherry pick! 
+                # Cherry pick onto destination and merge into all the children.
                 if self.gitRepo.checkout(branchName=dstBranchName) is None:
                     raise Exception("Failed to checkout branch {br}!".format(br=dstBranchName))
 
@@ -2166,9 +2136,54 @@ class AccuRev2Git(object):
                 if notes is not None and self.AddNote(transaction=tr, commitHash=dstCommitHash, ref=AccuRev2Git.gitNotesRef_accurevInfo, note=notes) is None:
                     raise Exception("Failed to add note for commit {h} (transaction {trId}) to {br}.".format(trId=tr.id, br=dstBranchName, h=dstCommitHash))
                 self.config.logger.info("promote {tr}. Cherry-picked into {dst} {h}. No source stream found.".format(tr=tr.id, src=srcBranchName, dst=dstBranchName, h=dstCommitHash))
-                affectedStreamTree[dstStreamNumber]["commit_hash"] = dstCommitHash
 
-            # TODO: Call MergeIntoChildren()
+            # Process all affected streams.
+            for streamNumber in affectedStreamMap:
+                streamNumberStr = str(streamNumber)
+                if dstCommitHash is not None and streamNumber == dstStreamNumber:
+                    # If we have a destination branch then we don't want to perform another commit on it...
+                    continue
+                stream = streams.getStream(streamNumber)
+                branchName = streamMap[streamNumberStr]["branch"]
+                streamData = affectedStreamMap[streamNumber]
+                
+                if self.gitRepo.checkout(branchName=branchName) is None:
+                    raise Exception("Failed to checkout branch {br}!".format(br=branchName))
+
+                parents = None # If left as none it will become a cherry-pick.
+
+                if dstCommitHash is not None: # We have committed to a destination stream.
+                    # Do a diff
+                    diffCmd = [u'git', u'diff', u'--stat', streamData["data_hash"], commitHash, u'--' ]
+                    diff = self.gitRepo.raw_cmd(diffCmd)
+                    if diff is None:
+                        raise Exception("Failed to diff branch {nBr} to branch {oBr}! Cmd: {cmd}, Err: {err}".format(nBr=branchName, oBr=dstBranchName, cmd=' '.join(cmd), err=self.gitRepo.lastStderr))
+       
+                    if diff is not None and len(diff.strip()) == 0:
+                        # Merge by specifying the parent commits.
+                        parents = [ self.GetLastCommitHash(branchName=branchName), dstCommitHash ] # Make this commit a merge of the dstStream into the affectedStream.
+                        if None in parents:
+                            raise Exception("Invariant error! Either the source hash {sh} or the destination hash {dh} was none!".format(sh=parents[1], dh=parents[0]))
+                        
+                        self.config.logger.info("promote {tr}. Merge {dst} into {b} (affected stream) {h}.".format(tr=tr.id, b=branchName, dst=dstBranchName, h=commitHash))
+                        friendlyMessage = "Merge {dst} into {b}".format(b=branchName, dst=dstBranchName)
+                    else:
+                        self.config.logger.info("promote {tr}. Cherry-pick {dst} {dstHash} into {b} (affected stream) - diff between {h1} and {h2} was not empty!".format(tr=tr.id, b=branchName, dst=dstBranchName, dstHash=dstCommitHash[:8], h1=streamData["data_hash"][:8], h2=commitHash[:8]))
+                        friendlyMessage = "Cherry-pick {dst} ({dstHash}) into {b}".format(b=branchName, dst=dstBranchName, dstHash=dstCommitHash[:8])
+                else:
+                    self.config.logger.info("promote {tr}. Cherry-pick {dst} into {b}. Destination stream is not tracked.".format(tr=tr.id, b=branchName, dst=dstBranchName))
+                    friendlyMessage = "Cherry-pick into {b} - dest. stream {s} (id: {id}) is not tracked.".format(b=branchName, s=dstStreamName, id=dstStreamNumber)
+
+                treeHash = streamData["data_tree_hash"]
+                if treeHash is None:
+                    raise Exception("Couldn't get tree hash from stream {s}".format(s=stream.name))
+
+                commitMessage, notes = self.GenerateCommitMessage(transaction=tr, stream=stream, friendlyMessage=friendlyMessage)
+                commitHash = self.Commit(transaction=tr, allowEmptyCommit=True, messageOverride=commitMessage, parents=parents, treeHash=treeHash)
+                if commitHash is None:
+                    raise Exception("Failed to commit a `{Type}`! tr={tr}".format(Type=tr.Type, tr=tr.id))
+                if notes is not None and self.AddNote(transaction=tr, commitHash=commitHash, ref=AccuRev2Git.gitNotesRef_accurevInfo, note=notes) is None:
+                    raise Exception("Failed to add note for commit {h} (transaction {trId}) to {br}.".format(trId=tr.id, br=branchName, h=commitHash))
 
         #elif tr.Type in [ "defunct", "purge" ]:
         #    streamName, streamNumber = tr.affectedStream()
@@ -2303,7 +2318,7 @@ class AccuRev2Git(object):
             state = json.loads(stateText)
             # Restore the last known git repository state. We could have been interrupted in the middle of merges or other things so we need to be
             # able to restore all branches.
-            if state["branch_list"] is not None:
+            if state["branch_list"] is not None and len(state["branch_list"]) > 0:
                 # Restore all branches to the last saved state but do the branch that was current at the time last.
                 currentBranch = None
                 for br in state["branch_list"]:
@@ -2322,6 +2337,19 @@ class AccuRev2Git(object):
                     if result is None:
                         raise Exception("Failed to restore last state. git checkout -B {br} {c}; failed.".format(br=currentBranch["name"], c=currentBranch["commit"]))
 
+            # Check for branches that exist in the git repository but that we will be creating later.
+            branchList = [ state["stream_map"][x]["branch"] for x in state["stream_map"] ] # Get the list of all branches that we will create.
+            for b in self.gitRepo.branch_list():
+                if b.name in branchList and (state["branch_list"] is None or b.name not in state["branch_list"]): # state["branch_list"] is a list of the branches that we have already created.
+                    self.config.logger.info("Warning: branch {branch} exists in the repo but will need to be created later.".format(branch=b.name))
+                    backupNumber = 1
+                    while self.gitRepo.raw_cmd(['git', 'checkout', '-b', 'backup/{branch}_{number}'.format(branch=b.name, number=backupNumber)]) is None:
+                        # Make a backup of the branch.
+                        backupNumber += 1
+                    if self.gitRepo.raw_cmd(['git', 'branch', '-D', b.name]) is None: # Delete the branch even if not merged.
+                        raise Exception("Failed to delete branch {branch}!".format(branch=b.name))
+                    self.config.logger.info("Warning: branch {branch} has been renamed to backup/{branch}_{number}.".format(branch=b.name, number=backupNumber))
+                    
         else:
             depot = self.GetDepot(self.config.accurev.depot)
 
