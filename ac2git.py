@@ -1794,19 +1794,6 @@ class AccuRev2Git(object):
         name = name.replace(' ', '_').strip()
         return name
 
-    def GetBranchNameFromStreamOrMap(self, streamName, streamNumber, streamNumberMap):
-        if streamNumberMap is None or len(streamNumberMap) == 0:
-            return self.SanitizeBranchName(streamName)
-        else:
-            return streamNumberMap.get(streamNumber)
-        raise Exception("How did you hit this exception? We should have returned!")
-
-    def GetBranchNameFromStream(self, stream, streamNumberMap=None):
-        return self.GetBranchNameFromStreamOrMap(streamName=stream.name, streamNumber=stream.streamNumber, streamNumberMap=streamNumberMap)
-
-    def GetBranchNameFromStreamPrevBasis(self, stream, streamNumberMap=None):
-        return self.GetBranchNameFromStreamOrMap(streamName=stream.prevBasis, streamNumber=stream.prevBasisStreamNumber, streamNumberMap=streamNumberMap)
-
     def GitCommitOrMerge(self, depot, dstStream, srcStream, tr, commitMessageOverride=None, mergeMessageOverride=None, streamNumberMap=None):
         # Perform the git merge of the 'from stream' into the 'to stream' but only if they have the same contents.
         dstBranchName = self.GetBranchNameFromStream(dstStream, streamNumberMap)
