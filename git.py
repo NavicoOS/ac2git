@@ -203,7 +203,7 @@ class GitStatus(object):
 # GitBranchListItem is an object serialization of a single branch output when the git branch -vv
 # command is run.
 class GitBranchListItem(object):
-    branchVVRe = re.compile(pattern=r'^(?P<iscurrent>\*)?\s+(?P<name>\S+)\s+(?P<hash>[A-Fa-f0-9]+)\s+(?:(?P<remote>\[\S+\])\s+)?(?P<comment>.*)$')
+    branchVVRe = re.compile(pattern=r'^(?P<iscurrent>\*)?\s+(?P<name>.+?)\s+(?P<hash>[A-Fa-f0-9]+)\s+(?:(?P<remote>\[\S+\])\s+)?(?P<comment>.*)$')
     def __init__(self, name, shortHash, remote, shortComment, isCurrent):
         self.name = name
         self.shortHash = shortHash
