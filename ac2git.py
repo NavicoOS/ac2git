@@ -2027,7 +2027,7 @@ class AccuRev2Git(object):
                     raise Exception("Couldn't get tree hash from stream {s}".format(s=streamName))
 
                 commitMessage, notes = self.GenerateCommitMessage(transaction=tr, stream=stream)
-                commitHash = self.Commit(transaction=tr, allowEmptyCommit=True, messageOverride=commitMessage, parents=parents, treeHash=treeHash)
+                commitHash = self.Commit(transaction=tr, allowEmptyCommit=True, messageOverride=commitMessage, treeHash=treeHash)
                 if commitHash is None:
                     raise Exception("Failed to commit {Type} {tr}".format(Type=tr.Type, tr=tr.id))
                 if notes is not None and self.AddNote(transaction=tr, commitHash=commitHash, ref=AccuRev2Git.gitNotesRef_accurevInfo, note=notes) is None:
@@ -2207,8 +2207,8 @@ class AccuRev2Git(object):
         #                    cherryPickCommitMessage = self.GenerateCommitMessage(transaction=tr, stream=s, dstStream=stream, friendlyMessage="Merged {src} into {dst} - accurev parent stream inheritance ({trType}).".format(src=branchName, dst=bName, trType=tr.Type))
         #                    self.GitCommitOrMerge(depot=depot, dstStream=s, srcStream=stream, tr=tr, commitMessageOverride=cherryPickCommitMessage, mergeMessageOverride=commitMessage, streamNumberMap=streamNumberMap)
         #    
-        #elif tr.Type == "defcomp":
-        #    self.config.logger.info("Ignoring transaction #{id} - {Type}".format(id=tr.id, Type=tr.Type))
+        elif tr.Type == "defcomp":
+            self.config.logger.info("Ignoring transaction #{id} - {Type}".format(id=tr.id, Type=tr.Type))
 
         else:
             message = "Not yet implemented! Unrecognized transaction type {type}".format(type=tr.Type)
