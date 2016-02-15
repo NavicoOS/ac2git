@@ -2005,40 +2005,35 @@ class AccuRev2Git(object):
         #        if commitHash is None:
         #            raise Exception("Failed to add chstream commit")
 
-        #elif tr.Type == "add":
-        #    streamName, streamNumber = tr.affectedStream()
-        #    stream = accurev.show.streams(depot=depot, stream=streamNumber, timeSpec=tr.id, useCache=self.config.accurev.UseCommandCache()).streams[0]
-        #    branchName = self.GetBranchNameFromStream(stream, streamNumberMap)
-        #    if branchName is not None:
-        #        if self.gitRepo.checkout(branchName=branchName) is None:
-        #            raise Exception("Failed to checkout branch {br}!".format(br=branchName))
-        #        elif stream.Type != "workspace":
-        #            raise Exception("Invariant error! Assumed that a {Type} transaction can only occur on a workspace. Stream {name}, type {streamType}".format(Type=tr.type, name=stream.name, streamType=stream.Type))
-        #        # The add command only introduces new files so we can safely use only `accurev pop` to get the changes.
-        #        self.TryPop(streamName=stream.name, transaction=tr)
-        #        
-        #        commitMessage = self.GenerateCommitMessage(transaction=tr, stream=stream)
-        #        self.Commit(depot=depot, stream=stream, transaction=tr, branchName=branchName, noNotes=True, messageOverride=commitMessage)
-        #    
-        #elif tr.Type in [ "keep", "co", "move" ]:
-        #    streamName, streamNumber = tr.affectedStream()
-        #    stream = accurev.show.streams(depot=depot, stream=streamNumber, timeSpec=tr.id, useCache=self.config.accurev.UseCommandCache()).streams[0]
-        #    branchName = self.GetBranchNameFromStream(stream, streamNumberMap)
-        #    if branchName is not None:
-        #        if self.gitRepo.checkout(branchName=branchName) is None:
-        #            raise Exception("Failed to checkout branch {br}!".format(br=branchName))
-        #        if stream.Type != "workspace":
-        #            self.config.logger.info("Note: {trType} transaction {id} on stream {stream} ({streamType}). Merging down-stream. Usually {trType}s occur on workspaces!".format(trType=tr.Type, id=tr.id, stream=stream.name, streamType=stream.Type))
-        #        
-        #        diff = self.TryDiff(streamName=stream.name, firstTrNumber=(tr.id - 1), secondTrNumber=tr.id)
-        #        deletedPathList = self.DeleteDiffItemsFromRepo(diff=diff)
-        #        popResult = self.TryPop(streamName=stream.name, transaction=tr)
+        elif tr.Type in [ "add", "keep", "co", "move" ]:
+            streamName, streamNumber = tr.affectedStream()
 
-        #        commitMessage = self.GenerateCommitMessage(transaction=tr, stream=stream)
-        #        commitHash = self.Commit(depot=depot, stream=stream, transaction=tr, branchName=branchName, allowEmptyCommit=True, noNotes=True, messageOverride=commitMessage)
-        #        if commitHash is None:
-        #            raise Exception("Failed to commit a `{Type}`! tr={tr}".format(tr=tr.id, Type=tr.Type))
-        #    
+            # Check if the destination stream is a part of our processing.
+            branchName, streamData = None, None
+            if str(streamNumber) in streamMap:
+                branchName = streamMap[str(streamNumber)]["branch"]
+                streamData = affectedStreamMap[streamNumber]
+
+            if branchName is not None:
+                if self.gitRepo.checkout(branchName=branchName) is None:
+                    raise Exception("Failed to checkout branch {br}!".format(br=branchName))
+
+                stream = streams.getStream(streamNumber)
+                if stream.Type != "workspace":
+                    self.config.logger.info("Note: {trType} transaction {id} on stream {stream} ({streamType}). Merging down-stream. Usually {trType}s occur on workspaces!".format(trType=tr.Type, id=tr.id, stream=stream.name, streamType=stream.Type))
+
+                treeHash = streamData["data_tree_hash"]
+                if treeHash is None:
+                    raise Exception("Couldn't get tree hash from stream {s}".format(s=streamName))
+
+                commitMessage, notes = self.GenerateCommitMessage(transaction=tr, stream=stream)
+                commitHash = self.Commit(transaction=tr, allowEmptyCommit=True, messageOverride=commitMessage, parents=parents, treeHash=treeHash)
+                if commitHash is None:
+                    raise Exception("Failed to commit {Type} {tr}".format(Type=tr.Type, tr=tr.id))
+                if notes is not None and self.AddNote(transaction=tr, commitHash=commitHash, ref=AccuRev2Git.gitNotesRef_accurevInfo, note=notes) is None:
+                    raise Exception("Failed to add note for commit {h} (transaction {trId}) to {br}.".format(trId=tr.id, br=branchName, h=commitHash))
+                self.config.logger.info("{Type} {tr}. committed to {branch} {h}.".format(Type=tr.Type, tr=tr.id, branch=branchName, h=commitHash))
+            
         elif tr.Type == "promote":
             # Promotes can be thought of as merges or cherry-picks in git and deciding which one we are dealing with
             # is the key to having a good conversion.
