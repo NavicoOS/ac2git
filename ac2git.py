@@ -1843,13 +1843,104 @@ class AccuRev2Git(object):
 
         return commitHash
 
+    def BuildStreamTree(self, streams):
+        rv = {}
+        for s in streams:
+            rv[s.streamNumber] = { "parent": s.basisStreamNumber, "children": [], "self": s }
+        for s in streams:
+            if s.basisStreamNumber is None:
+                continue
+            if s.basisStreamNumber not in rv:
+                raise Exception("Incomplete set of streams given! Stream {s} is missing from the streams list, cannot build tree!".format(s=s.basisStreamNumber))
+            rv[s.basisStreamNumber]["children"].append(s.streamNumber)
+        return rv
+
+    def PruneStreamTree(self, streamTree, keepList):
+        rv = None
+        if streamTree is not None:
+            if keepList is None:
+                return streamTree
+            rv = streamTree.copy()
+            # Remove all the streams that are not in the keepList and take their children and add them to the parent stream.
+            for s in streamTree:
+                if s not in keepList:
+                    # Find the next parent that we are keeping.
+                    p = streamTree[s]["parent"]
+                    while p is not None and p not in keepList:
+                        p = streamTree[p]["parent"]
+                    # If we found the parent then append our children to his/hers.
+                    if p is not None:
+                        c = streamTree[s]["children"]
+                        rv[p]["children"].extend(c)
+                    del rv[s]
+                    # Set the parent for all the children to either None or the actual parent.
+                    for c in streamTree[s]["children"]:
+                        if c in rv:
+                            rv[c]["parent"] = p
+            # Remove all the streams that are not in the keepList from each streams children list.
+            for s in rv:
+                children = []
+                for c in rv[s]["children"]:
+                    if c in keepList:
+                        children.append(c)  # subset of children
+                rv[s]["children"] = children
+
+        return rv
+
+    def GetStreamAndChildren(self, streams, streamNumber):
+        children = None
+        if streams is not None:
+            # Find all the children of the dstStream.
+            children = [ streamNumber ]
+            lastCount = 0
+            while lastCount != len(children):
+                lastCount = len(children)
+                for s in streams.streams:
+                    if s.basisStreamNumber in children and s.streamNumber not in children:
+                        children.append(s.streamNumber)
+        return children
+
+    #def MergeIntoChildren(self, streamNumber, streamTree, streamMap, affectedStreamMap, commitHash):
+    #    if streamNumber in streamTree:
+    #        streamInfo = streamTree[streamNumber]
+    #        stream = streamInfo["self"]
+    #        branchName = streamMap[str(stream.streamNumber)]["branch"]
+    #        streamData = affectedStreamMap[str(stream.streamNumber)]
+    #        for child in streamInfo["children"]:
+    #            childBranchName = streamMap[str(child)]["branch"]
+    #            childStreamData = affectedStreamMap[str(stream.streamNumber)]
+    #            if self.gitRepo.checkout(branchName=childBranchName) is None:
+    #                raise Exception("git checkout branch {br}, failed!".format(br=childBranchName))
+    #    
+    #            if self.gitRepo.raw_cmd([u'git', u'merge', u'--no-ff', u'--no-commit', u'-s', u'ours', branchName]) is None:
+    #                raise Exception("Failed to merge! Failed with: {err}".format(err=self.gitRepo.lastStderr))
+
+    #            parents = [ self.GetLastCommitHash(branchName=childBranchName), self.GetLastCommitHash(branchName=branchName) ]
+    #            if None in parents:
+    #                raise Exception("Invariant error! Either the source hash {sh} or the destination hash {dh} was none!".format(sh=parents[1], dh=parents[0]))
+    #                
+    #            treeHash = streamData["data_tree_hash"]
+    #            if treeHash is None:
+    #                raise Exception("Couldn't get tree hash from stream {s}".format(s=streamTree[child]["self"].name))
+
+    #            commitMessage, notes = self.GenerateCommitMessage(transaction=tr, stream=dstStream)
+    #            dstCommitHash = self.Commit(transaction=tr, allowEmptyCommit=True, messageOverride=commitMessage, parents=parents, treeHash=dstTreeHash)
+    #            if dstCommitHash is None:
+    #                raise Exception("Failed to commit a `{Type}`! tr={tr}".format(Type=tr.Type, tr=tr.id))
+    #            if notes is not None and self.AddNote(transaction=tr, commitHash=dstCommitHash, ref=AccuRev2Git.gitNotesRef_accurevInfo, note=notes) is None:
+    #                raise Exception("Failed to add note for commit {h} (transaction {trId}) to {br}.".format(trId=tr.id, br=dstBranchName, h=dstCommitHash))
+    #            
+
     # Processes a single transaction whose id is the trId (int) and which has been recorded against the streams outlined in the affectedStreamMap.
     # affectedStreamMap is a dictionary with the following format { <key:stream_num_str>: { "state_hash": <val:state_ref_commit_hash>, "data_hash": <val:data_ref_commit_hash> } }
     # The streamMap is used so that we can translate streams and their basis into branch names { <key:stream_num_str>: { "stream": <val:config_strem_name>, "branch": <val:config_branch_name> } }
     def ProcessTransaction(self, streamMap, trId, affectedStreamMap):
-        # For all affected streams the hist.xml contents should be the same so get it from any one of them.
+        # For all affected streams the streams.xml and hist.xml contents should be the same for the same transaction id so get it from any one of them.
         arbitraryStreamNumberStr = next(iter(affectedStreamMap))
         arbitraryStream = affectedStreamMap[arbitraryStreamNumberStr]
+        streamsXml, streams = self.GetStreamsInfo(ref=arbitraryStream["state_hash"])
+        if streams is None:
+            raise Exception("Couldn't get streams for transaction {tr}. Aborting!".format(tr=trId))
 
         trHistXml, trHist = self.GetHistInfo(ref=arbitraryStream["state_hash"])
         if trHist is None or len(trHist.transactions) == 0 is None:
@@ -1867,7 +1958,6 @@ class AccuRev2Git(object):
             if len(affectedStreamMap) != 1:
                 raise Exception("Invariant error! There is no way to know for what stream this mkstream transaction was made!")
 
-            streamsXml, streams = self.GetStreamsInfo(ref=arbitraryStream["state_hash"])
             newStream = streams.getStream(int(arbitraryStreamNumberStr))
 
             # Find the first parent stream that is in the streamMap
@@ -1980,78 +2070,105 @@ class AccuRev2Git(object):
         #        if commitHash is None:
         #            raise Exception("Failed to commit a `{Type}`! tr={tr}".format(tr=tr.id, Type=tr.Type))
         #    
-        #elif tr.Type == "promote":
-        #    # Promotes can be thought of as merges or cherry-picks in git and deciding which one we are dealing with
-        #    # is the key to having a good conversion.
-        #    # There are 4 situations that we should consider:
-        #    #   1. A promote from a child stream to a parent stream that promotes everything from that stream.
-        #    #      This trivial case is the easiest to reason about and is obviously a merge.
-        #    #   2. A promote from a child stream to a parent stream that promotes only some of the things from that
-        #    #      stream. (i.e. one of 2 transactions is promoted up, or a subset of files).
-        #    #      This is slightly trickier to reason about since the transactions could have been promoted in order
-        #    #      (from earliest to latest) in which case it is a sequence of merges or in any other case it should be
-        #    #      a cherry-pick.
-        #    #   3. A promote from either an indirect descendant stream to this stream (a.k.a. cross-promote).
-        #    #      This case can be considered as either a merge or a cherry-pick, but we will endevour to make it a merge.
-        #    #   4. A promote from either a non-descendant stream to this stream (a.k.a. cross-promote).
-        #    #      This case is most obviously a cherry-pick.
+        elif tr.Type == "promote":
+            # Promotes can be thought of as merges or cherry-picks in git and deciding which one we are dealing with
+            # is the key to having a good conversion.
+            # There are 4 situations that we should consider:
+            #   1. A promote from a child stream to a parent stream that promotes everything from that stream.
+            #      This trivial case is the easiest to reason about and is obviously a merge.
+            #   2. A promote from a child stream to a parent stream that promotes only some of the things from that
+            #      stream. (i.e. one of 2 transactions is promoted up, or a subset of files).
+            #      This is slightly trickier to reason about since the transactions could have been promoted in order
+            #      (from earliest to latest) in which case it is a sequence of merges or in any other case it should be
+            #      a cherry-pick.
+            #   3. A promote from either an indirect descendant stream to this stream (a.k.a. cross-promote).
+            #      This case can be considered as either a merge or a cherry-pick, but we will endevour to make it a merge.
+            #   4. A promote from either a non-descendant stream to this stream (a.k.a. cross-promote).
+            #      This case is most obviously a cherry-pick.
 
-        #    # Determine the stream to which the files in this this transaction were promoted.
-        #    dstStreamName, dstStreamNumber = trHist.toStream()
-        #    if dstStreamNumber is not None:
-        #        dstStream = accurev.show.streams(depot=depot, stream=dstStreamNumber, timeSpec=tr.id, useCache=self.config.accurev.UseCommandCache())
-        #    elif dstStreamName is not None:
-        #        dstStream = accurev.show.streams(depot=depot, stream=dstStreamName, timeSpec=tr.id, useCache=self.config.accurev.UseCommandCache())
-        #    else:
-        #        raise Exception("Error! Could not determine the destination stream for promote {tr}.".format(tr=tr.id))
+            streamTree = self.BuildStreamTree(streams.streams)
+            affectedStreamTree = self.PruneStreamTree(streamTree, keepList=[int(x) for x in affectedStreamMap])
 
-        #    if dstStream is None or dstStream.streams is None or len(dstStream.streams) == 0:
-        #        raise Exception("Error! accurev show streams -p {d} -s {s} -t {t} failed!".format(d=depot, s=dstStreamName, t=tr.id))
-        #    dstStream = dstStream.streams[0]
-        #    dstBranchName = self.GetBranchNameFromStream(dstStream, streamNumberMap)
+            # Determine the stream to which the files in this this transaction were promoted.
+            dstStreamName, dstStreamNumber = trHist.toStream()
+            if dstStreamNumber is not None:
+                dstStream = streams.getStream(dstStreamNumber)
+                if dstStream is None:
+                    raise Exception("Invariant error! How is it possible that at a promote transaction we don't have the destination stream? streams.xml must be invalid or incomplete!")
+            else:
+                raise Exception("Error! Could not determine the destination stream for promote {tr}.".format(tr=tr.id))
 
-        #    # Determine the stream from which the files in this this transaction were promoted.
-        #    srcStreamName, srcStreamNumber = trHist.fromStream()
-        #    srcStream = None
+            # Check if the destination stream is a part of our processing.
+            dstBranchName, dstStreamData = None, None
+            if str(dstStream.streamNumber) in streamMap:
+                dstBranchName = streamMap[str(dstStream.streamNumber)]["branch"]
+                dstStreamData = affectedStreamMap[str(dstStream.streamNumber)]
 
-        #    if srcStreamName is None and srcStreamNumber is None:
-        #        # We have failed to determine the stream from which this transaction came. Hence we now must treat this as a cherry-pick instead of a merge...
-        #        self.config.logger.error("Error! Could not determine the source stream for promote {tr}. Treating as a cherry-pick.".format(tr=tr.id))
+            # Determine the stream from which the files in this this transaction were promoted.
+            srcStreamName, srcStreamNumber = trHist.fromStream()
+            srcStream = None
 
-        #        if self.gitRepo.checkout(branchName=dstBranchName) is None:
-        #            raise Exception("Failed to checkout branch {br}!".format(br=dstBranchName))
+            srcBranchName, srcStreamData = None, None
+            if srcStreamNumber is not None:
+                srcStream = streams.getStream(srcStreamNumber)
+                if srcStream is None:
+                    raise Exception("Invariant error! How is it possible that at a promote transaction we don't have the destination stream? streams.xml must be invalid or incomplete!")
+                srcBranchName = streamMap[str(srcStream.streamNumber)]["branch"]
+                srcStreamData = affectedStreamMap[str(srcStream.streamNumber)]
+            elif dstBranchName is not None: 
+                self.config.logger.info("Warning: Could not determine the source stream for promote {tr}. Treating as a cherry-pick.".format(tr=tr.id))
 
-        #        diff = self.TryDiff(streamName=dstStream.name, firstTrNumber=(tr.id - 1), secondTrNumber=tr.id)
-        #        deletedPathList = self.DeleteDiffItemsFromRepo(diff=diff)
-        #        popResult = self.TryPop(streamName=dstStream.name, transaction=tr)
+            dstCommitHash = None
+            if srcBranchName is not None and dstBranchName is not None:
+                # Do a git diff between the two data commits that we will be merging!
+                diffCmd = [u'git', u'diff', u'--stat', dstStreamData["data_hash"], srcStreamData["data_hash"], u'--' ]
+                diff = self.gitRepo.raw_cmd(diffCmd)
+                if diff is None:
+                    raise Exception("Failed to diff new branch {nBr} to old branch {oBr}! Cmd: {cmd}, Err: {err}".format(nBr=dstBranchName, oBr=srcBranchName, cmd=' '.join(cmd), err=self.gitRepo.lastStderr))
+        
+                if diff is not None and len(diff.strip()) == 0:
+                    # Merge
+                    if self.gitRepo.checkout(branchName=dstBranchName) is None:
+                        raise Exception("Failed to checkout branch {br}!".format(br=dstBranchName))
 
-        #        commitMessage = self.GenerateCommitMessage(transaction=tr, stream=dstStream)
-        #        commitHash = self.Commit(depot=depot, stream=dstStream, transaction=tr, branchName=dstBranchName, allowEmptyCommit=True, noNotes=True, messageOverride=commitMessage, dstStream=dstStream, srcStream=srcStream)
-        #        if commitHash is None:
-        #            raise Exception("Failed to commit a `{Type}`! tr={tr}".format(Type=tr.Type, tr=tr.id))
-        #    else:
-        #        # The source stream is almost always a workspace in which the transaction was generated. This is not ideal, but it is the best we can get.
-        #        if srcStreamNumber is not None:
-        #            srcStream = accurev.show.streams(depot=depot, stream=srcStreamNumber, timeSpec=tr.id, useCache=self.config.accurev.UseCommandCache())
-        #        elif srcStreamName is not None:
-        #            srcStream = accurev.show.streams(depot=depot, stream=srcStreamName, timeSpec=tr.id, useCache=self.config.accurev.UseCommandCache())
-        #        if srcStream is None or srcStream.streams is None or len(srcStream.streams) == 0:
-        #            raise Exception("Error! accurev show streams -p {d} -s {s} -t {t} failed!".format(d=depot, s=srcStreamName if srcStreamName is not None else srcStreamNumber, t=tr.id))
-        #        srcStream = srcStream.streams[0]
-        #        srcBranchName = self.GetBranchNameFromStream(srcStream, streamNumberMap)
+                    parents = [ self.GetLastCommitHash(branchName=dstBranchName), self.GetLastCommitHash(branchName=srcBranchName) ]
+                    if None in parents:
+                        raise Exception("Invariant error! Either the source hash {sh} or the destination hash {dh} was none!".format(sh=parents[1], dh=parents[0]))
+                    
+                    dstTreeHash = dstStreamData["data_tree_hash"]
+                    if dstTreeHash is None:
+                        raise Exception("Couldn't get tree hash from stream {s}".format(s=dstStreamName))
 
-        #        # Perform the git merge of the 'from stream' into the 'to stream' but only if they have the same contents.
-        #        mergeCommitMessage = self.GenerateCommitMessage(transaction=tr, stream=dstStream, srcStream=srcStream, friendlyMessage="Merged {src} into {dst} - accurev promote.".format(src=srcBranchName, dst=dstBranchName))
-        #        cherryPickCommitMessage = self.GenerateCommitMessage(transaction=tr, stream=dstStream, srcStream=srcStream, friendlyMessage="Cherry-picked {src} into {dst} - accurev promote.".format(src=srcBranchName, dst=dstBranchName))
-        #        self.GitCommitOrMerge(depot=depot, dstStream=dstStream, srcStream=srcStream, tr=tr, commitMessageOverride=cherryPickCommitMessage, mergeMessageOverride=mergeCommitMessage, streamNumberMap=streamNumberMap)
-        #    
-        #    affectedStreams = accurev.ext.affected_streams(depot=depot, transaction=tr.id, includeWorkspaces=True, ignoreTimelocks=False, doDiffs=True, useCache=self.config.accurev.UseCommandCache())
-        #    for stream in affectedStreams:
-        #        branchName = self.GetBranchNameFromStream(stream, streamNumberMap)
-        #        if stream.streamNumber != dstStream.streamNumber and (srcStream is None or stream.streamNumber != srcStream.streamNumber) and (streamNumberMap is None or stream.streamNumber in streamNumberMap):
-        #            mergeCommitMessage = self.GenerateCommitMessage(transaction=tr, stream=stream, dstStream=dstStream, srcStream=srcStream, friendlyMessage="Merged {src} into {dst} - accurev parent stream inheritance.".format(src=dstBranchName, dst=branchName))
-        #            cherryPickCommitMessage = self.GenerateCommitMessage(transaction=tr, stream=stream, dstStream=dstStream, srcStream=srcStream, friendlyMessage="Cherry-picked {src} into {dst} - accurev parent stream inheritance.".format(src=dstBranchName, dst=branchName))
-        #            self.GitCommitOrMerge(depot=depot, dstStream=stream, srcStream=dstStream, tr=tr, commitMessageOverride=cherryPickCommitMessage, mergeMessageOverride=mergeCommitMessage, streamNumberMap=streamNumberMap)
+                    commitMessage, notes = self.GenerateCommitMessage(transaction=tr, stream=dstStream)
+                    dstCommitHash = self.Commit(transaction=tr, allowEmptyCommit=True, messageOverride=commitMessage, parents=parents, treeHash=dstTreeHash)
+                    if dstCommitHash is None:
+                        raise Exception("Failed to commit a `{Type}`! tr={tr}".format(Type=tr.Type, tr=tr.id))
+                    if notes is not None and self.AddNote(transaction=tr, commitHash=dstCommitHash, ref=AccuRev2Git.gitNotesRef_accurevInfo, note=notes) is None:
+                        raise Exception("Failed to add note for commit {h} (transaction {trId}) to {br}.".format(trId=tr.id, br=dstBranchName, h=dstCommitHash))
+                    affectedStreamTree[dstStreamNumber]["commit_hash"] = dstCommitHash
+                    affectedStreamTree[srcStreamNumber]["commit_hash"] = dstCommitHash
+                    self.config.logger.info("promote {tr}. Merged {src} into {dst} {h}.".format(tr=tr.id, src=srcBranchName, dst=dstBranchName, h=dstCommitHash))
+                else:
+                    self.config.logger.info("promote {tr}. Failed to merge {src} into {dst} {h} - diff was not empty!".format(tr=tr.id, src=srcBranchName, dst=dstBranchName, h=dstCommitHash))
+            elif dstBranchName is not None:
+                # Cherry pick! 
+                if self.gitRepo.checkout(branchName=dstBranchName) is None:
+                    raise Exception("Failed to checkout branch {br}!".format(br=dstBranchName))
+
+                dstTreeHash = dstStreamData["data_tree_hash"]
+                if dstTreeHash is None:
+                    raise Exception("Couldn't get tree hash from stream {s}".format(s=dstStreamName))
+
+                commitMessage, notes = self.GenerateCommitMessage(transaction=tr, stream=dstStream)
+                dstCommitHash = self.Commit(transaction=tr, allowEmptyCommit=True, messageOverride=commitMessage, treeHash=dstTreeHash)
+                if dstCommitHash is None:
+                    raise Exception("Failed to commit a `{Type}`! tr={tr}".format(Type=tr.Type, tr=tr.id))
+                if notes is not None and self.AddNote(transaction=tr, commitHash=dstCommitHash, ref=AccuRev2Git.gitNotesRef_accurevInfo, note=notes) is None:
+                    raise Exception("Failed to add note for commit {h} (transaction {trId}) to {br}.".format(trId=tr.id, br=dstBranchName, h=dstCommitHash))
+                self.config.logger.info("promote {tr}. Cherry-picked into {dst} {h}. No source stream found.".format(tr=tr.id, src=srcBranchName, dst=dstBranchName, h=dstCommitHash))
+                affectedStreamTree[dstStreamNumber]["commit_hash"] = dstCommitHash
+
+            # TODO: Call MergeIntoChildren()
 
         #elif tr.Type in [ "defunct", "purge" ]:
         #    streamName, streamNumber = tr.affectedStream()
