@@ -2333,9 +2333,11 @@ class AccuRev2Git(object):
                         raise Exception("Failed to restore last state. git checkout -B {br} {c}; failed.".format(br=currentBranch["name"], c=currentBranch["commit"]))
 
             # Check for branches that exist in the git repository but that we will be creating later.
-            branchList = [ state["stream_map"][x]["branch"] for x in state["stream_map"] ] # Get the list of all branches that we will create.
-            for b in self.gitRepo.branch_list():
-                if b.name in branchList and (state["branch_list"] is None or b.name not in state["branch_list"]): # state["branch_list"] is a list of the branches that we have already created.
+            streamBranchList = [ state["stream_map"][s]["branch"] for s in state["stream_map"] ] # Get the list of all branches that we will create.
+            loadedBranchList = [ b["name"] for b in state["branch_list"] ] # Get the list of all branches that we will create.
+            branchList = self.gitRepo.branch_list()
+            for b in branchList:
+                if b.name in streamBranchList and (state["branch_list"] is None or b.name not in loadedBranchList): # state["branch_list"] is a list of the branches that we have already created.
                     self.config.logger.info("Warning: branch {branch} exists in the repo but will need to be created later.".format(branch=b.name))
                     backupNumber = 1
                     while self.gitRepo.raw_cmd(['git', 'checkout', '-b', 'backup/{branch}_{number}'.format(branch=b.name, number=backupNumber)]) is None:
@@ -2344,7 +2346,9 @@ class AccuRev2Git(object):
                     if self.gitRepo.raw_cmd(['git', 'branch', '-D', b.name]) is None: # Delete the branch even if not merged.
                         raise Exception("Failed to delete branch {branch}!".format(branch=b.name))
                     self.config.logger.info("Warning: branch {branch} has been renamed to backup/{branch}_{number}.".format(branch=b.name, number=backupNumber))
-                    
+            for missingBranch in (set(loadedBranchList) - set([ b.name for b in branchList ])):
+                self.config.logger.info("Warning: branch {branch} is missing from the repo!".format(branch=missingBranch))
+
         else:
             depot = self.GetDepot(self.config.accurev.depot)
 
@@ -2369,12 +2373,9 @@ class AccuRev2Git(object):
                       "branch_list": None }
 
         # Get the list of transactions that we are processing, and build a list of known branch names for maintaining their states between processing stages.
-        knownBranchSet = set()
         transactionsMap = {} # is a dictionary with the following format { <key:tr_num>: { <key:stream_num>: { "state_hash": <val:commit_hash>, "data_hash": <val:data_hash> } } }
         for streamNumberStr in state["stream_map"]:
             streamNumber = int(streamNumberStr)
-
-            knownBranchSet.add(state["stream_map"][streamNumberStr]["branch"])
 
             # Initialize the state that we load every time.
             stateRef, dataRef, hwmRef = self.GetStreamRefs(depot=state["depot_number"], streamNumber=streamNumber)
@@ -2423,6 +2424,7 @@ class AccuRev2Git(object):
                  # that the configured end transaction is lower than the lowest high-water-mark we
                  # have for the depot.
 
+        knownBranchSet = set([ state["stream_map"][x]["branch"] for x in state["stream_map"] ]) # Get the list of all branches that we will create.
         for tr in sorted(transactionsMap):
             if tr < state["next_transaction"]:
                 del transactionsMap[tr] # ok since sorted returns a sorted list by copy.
@@ -2436,16 +2438,15 @@ class AccuRev2Git(object):
                 if br is None:
                     self.config.logger.error("Error: git.py failed to parse a branch name! Please ensure that the git.repo.branch_list() returns a list with no None items. Non-fatal, continuing.")
                     continue
-                elif br.name not in knownBranchSet:
-                    # If this is not one of the branches we are tracking we don't care about keeping track of its state. Ignore and move on...
-                    continue
-                # We only care about the branches that we are processing, i.e. the branches that are in the streamMap.
-                brHash = OrderedDict()
-                brHash["name"] = br.name
-                brHash["commit"] = br.shortHash
-                brHash["is_current"] = br.isCurrent
-                state["branch_list"].append(brHash)
+                elif br.name in knownBranchSet:
+                    # We only care about the branches that we are processing, i.e. the branches that are in the streamMap.
+                    brHash = OrderedDict()
+                    brHash["name"] = br.name
+                    brHash["commit"] = br.shortHash
+                    brHash["is_current"] = br.isCurrent
+                    state["branch_list"].append(brHash)
 
+            state["next_transaction"] = tr
             if self.WriteFileRef(ref=stateRefspec, text=json.dumps(state)) != True:
                 raise Exception("Failed to write state to {ref}.".format(ref=stateRefspec))
 
