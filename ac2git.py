@@ -1978,11 +1978,14 @@ class AccuRev2Git(object):
                     srcStream = streams.getStream(srcStreamNumber)
                     if srcStream is None:
                         raise Exception("Invariant error! How is it possible that at a promote transaction we don't have the destination stream? streams.xml must be invalid or incomplete!")
-                    srcBranchName = streamMap[str(srcStream.streamNumber)]["branch"]
-                    srcStreamData = affectedStreamMap[srcStream.streamNumber]
-                    # By definition the source stream of the transaction should never be affected by it since it already has the real versions for the files that we are promoting.
-                    # So instead of getting its information from affectedStreamMap just get it straight from the branch.
-                    lastSrcBranchHash = self.GetLastCommitHash(branchName=srcBranchName)
+
+                    srcBranchName, srcStreamData, lastSrcBranchHash = None, None, None
+                    if str(srcStreamNumber) in streamMap:
+                        srcBranchName = streamMap[str(srcStream.streamNumber)]["branch"]
+                        srcStreamData = affectedStreamMap[srcStream.streamNumber]
+                        # By definition the source stream of the transaction should never be affected by it since it already has the real versions for the files that we are promoting.
+                        # So instead of getting its information from affectedStreamMap just get it straight from the branch.
+                        lastSrcBranchHash = self.GetLastCommitHash(branchName=srcBranchName)
                 elif branchName is not None: 
                     self.config.logger.info("Warning: Could not determine the source stream for promote {tr}. Treating as a cherry-pick.".format(tr=tr.id))
 
