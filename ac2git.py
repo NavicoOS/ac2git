@@ -346,7 +346,6 @@ class AccuRev2Git(object):
         self.config = config
         self.cwd = None
         self.gitRepo = None
-        self.gitBranchList = None
 
     # Returns True if the path was deleted, otherwise false
     def DeletePath(self, path):
@@ -875,6 +874,31 @@ class AccuRev2Git(object):
         with codecs.open(histFilePath, 'w') as f:
             f.write(re.sub('TaskId="[0-9]+"', 'TaskId="0"', histXml))
 
+    # GetDepotRefsNamespace
+    # When depot is None it returns the git ref namespace where all depots are under.
+    # When depot is not None it queries the stored depots for the depot name or number and returns the git ref namespace for that depot.
+    # If the depot name or number is not None and does not correspont to a depot in Accurev this function returns None.
+    def GetDepotRefsNamespace(self, depot=None):
+        depotsNS = '{refsNS}depots/'.format(refsNS=AccuRev2Git.gitRefsNamespace)
+        if depot is not None:
+            d = self.GetDepot(depot)
+            if d is not None:
+                depotNS = '{depotsNS}{depotNumber}/'.format(depotsNS=depotsNS, depotNumber=d.number)
+                return depotNS
+            return None # Invalid depot, no refs allowed.
+        return depotsNS
+
+    def ParseDepotRef(self, ref):
+        depotNumber, remainder = None, None
+        if ref is not None and isinstance(ref, str):
+            depotsNS = self.GetDepotRefsNamespace()
+            # Extract the depot number.
+            match = re.match(r'^{depotsNS}(\d+)/(.*)$'.format(depotsNS=depotsNS), ref)
+            if match is not None:
+                depotNumber = int(match.group(1))
+                remainder = match.group(2)
+        return depotNumber, remainder
+
     def GetDepot(self, depot):
         depotNumber = None
         depotName = None
@@ -883,7 +907,7 @@ class AccuRev2Git(object):
         except:
             if isinstance(depot, str):
                 depotName = depot
-        depotsRef = '{refsNS}depots'.format(refsNS=AccuRev2Git.gitRefsNamespace)
+        depotsRef = '{depotsNS}info'.format(depotsNS=self.GetDepotRefsNamespace())
 
         # Check if the ref exists!
         commitHash = self.GetLastCommitHash(self, ref=depotsRef)
@@ -958,20 +982,39 @@ class AccuRev2Git(object):
 
         return None
 
-    def GetStreamRefsNamespace(self, depot):
-        d = self.GetDepot(depot)
-        if d is not None:
-            return '{refsNS}{depot}/streams/'.format(refsNS=AccuRev2Git.gitRefsNamespace, depot=d.number)
+    def GetStreamRefsNamespace(self, depot, streamNumber=None):
+        depotNS = self.GetDepotRefsNamespace(depot=depot)
+        if depotNS is not None:
+            streamsNS = '{depotNS}streams/'.format(depotNS=depotNS)
+            if streamNumber is not None:
+                if not isinstance(streamNumber, int):
+                    streamNumber = int(streamNumber)
+                streamNS = '{streamsNS}{streamNumber}'.format(streamsNS=streamsNS, streamNumber=streamNumber)
+                return streamNS
+            return streamsNS
         return None
+
+    def ParseStreamRef(self, ref):
+        depotNumber, streamNumber, remainder = None, None, None
+        if ref is not None and isinstance(ref, str):
+            depotNumber, depotRemainder = self.ParseDepotRef(ref=ref)
+            if depotNumber is not None:
+                streamsNS = self.GetStreamRefsNamespace(depot=depotNumber)
+                if streamsNS is not None:
+                    # Extract the stream number.
+                    match = re.match(r'^{streamsNS}(\d+)/(.*)$'.format(streamsNS=streamsNS), ref)
+                    if match is not None:
+                        streamNumber = int(match.group(1))
+                        remainder = match.group(2)
+        return (depotNumber, streamNumber, remainder)
 
     def GetStreamRefs(self, depot, streamNumber):
         stateRef, dataRef, hwmRef = None, None, None
-        ns = self.GetStreamRefsNamespace(depot)
-        if ns is not None and streamNumber is not None and isinstance(streamNumber, int):
-            refPrefix = '{ns}stream_{streamNumber}'.format(ns=ns, streamNumber=streamNumber)
-            dataRef  = '{prefix}_data'.format(prefix=refPrefix)
-            stateRef = '{prefix}_info'.format(prefix=refPrefix)
-            hwmRef = '{prefix}_hwm'.format(prefix=refPrefix) # High-water mark ref.
+        streamNS = self.GetStreamRefsNamespace(depot, streamNumber=streamNumber)
+        if streamNS is not None:
+            dataRef  = '{streamNS}/data'.format(streamNS=streamNS)
+            stateRef = '{streamNS}/info'.format(streamNS=streamNS)
+            hwmRef = '{streamNS}/hwm'.format(streamNS=streamNS) # High-water mark ref.
         return (stateRef, dataRef, hwmRef)
 
     # Gets the diff.xml contents and parsed accurev.obj.Diff object from the given \a ref (git ref or hash).
@@ -1428,16 +1471,23 @@ class AccuRev2Git(object):
 
     # Lists the .git/... directory that contains all the stream refs and returns the file list as its result
     def GetAllKnownStreamRefs(self, depot):
-        refsPrefix = self.GetStreamRefsNamespace(depot)
+        refsPrefix = self.GetDepotRefsNamespace() # Search all depots
         if refsPrefix is not None:
-            refsPath = '.git/{prefix}'.format(prefix=refsPrefix)
+            rv = []
+            repoPath = os.path.abspath(self.gitRepo.path)
+            repoPath = os.path.normpath(repoPath)
+            repoGitDir = os.path.join(repoPath, '.git', '') # Terminate with slash so that when we strip it out the directory separator goes with this part.
+            repoRefsPath = os.path.join(repoGitDir, 'refs')
 
-            repoRefsPath = os.path.join(self.gitRepo.path, refsPath)
-            if os.path.exists(repoRefsPath):
-                rv = []
-                for r in os.listdir(repoRefsPath):
-                    rv.append(refsPrefix + r)
-                return rv
+            for dirpath, dirnames, filenames in os.walk(repoRefsPath, topdown=True):
+                for filename in filenames:
+                    filepath = os.path.join(dirpath, filename)
+                    ref = filepath.replace(repoGitDir, "")
+                    ref = '/'.join(SplitPath(ref)) # If we are on Windows we need to use os.path.split() to get individual directories and then rejoin them with the slashes /.
+                    depotNumber, streamNumber, remainder = self.ParseStreamRef(ref=ref)
+                    if None not in [ depotNumber, streamNumber ]:
+                        rv.append(ref)
+            return rv
         return None
 
     # Tries to get the stream name from the data that we have stored in git.
@@ -1452,9 +1502,9 @@ class AccuRev2Git(object):
         # So, parse and extract the number from the ..._info refs, and remove the ..._data refs.
         infoRefList = []
         for ref in refList:
-            match = re.match(r'^.*stream_(\d+)_info$', ref)
-            if match is not None:
-                infoRefList.append( (int(match.group(1)), ref) ) # The stream number is extracted and put as the first element for sorting.
+            depotNumber, streamNumber, remainder = self.ParseStreamRef(ref=ref)
+            if streamNumber is not None and remainder == "info":
+                infoRefList.append( (streamNumber, ref) ) # The stream number is extracted and put as the first element for sorting.
         infoRefList.sort()
 
         for streamNumber, ref in infoRefList:
@@ -2096,8 +2146,8 @@ class AccuRev2Git(object):
         streamRefs = self.GetAllKnownStreamRefs(depot)
         lowestHwm = None
         for sRef in streamRefs:
-            match = re.match(r'.*/stream_(\d+)_hwm$', sRef)
-            if match is not None:
+            depotNumber, streamNumber, remainder = self.ParseStreamRef(sRef)
+            if streamNumber is not None and remainder == "hwm":
                 text = self.ReadFileRef(ref=sRef)
                 if text is None:
                     self.config.logger.error("Failed to read ref {r}!".format(r=sRef))
@@ -2107,10 +2157,14 @@ class AccuRev2Git(object):
         return lowestHwm
 
     def ProcessTransactions(self):
-        # Git refspec for the state ref in which we will store a blob.
-        stateRefspec = u'{refsNS}processing_state'.format(refsNS=AccuRev2Git.gitRefsNamespace)
+        depot = self.GetDepot(self.config.accurev.depot)
 
-        depotNumber = None
+        if depot is None:
+            raise Exception("Failed to get depot {depot}!".format(depot=self.config.accurev.depot))
+
+        # Git refspec for the state ref in which we will store a blob.
+        stateRefspec = u'{refsNS}state/depots/{depotNumber}'.format(refsNS=AccuRev2Git.gitRefsNamespace, depotNumber=depot.number)
+
         streamMap = None
 
         stateText = self.ReadFileRef(ref=stateRefspec)
@@ -2153,16 +2207,10 @@ class AccuRev2Git(object):
                 self.config.logger.info("Warning: branch {branch} is missing from the repo!".format(branch=missingBranch))
 
         else:
-            depot = self.GetDepot(self.config.accurev.depot)
-
-            if depot is None:
-                raise Exception("Failed to get depot {depot}!".format(depot=self.config.accurev.depot))
-
-            depotNumber = depot.number
             streamMap = OrderedDict()
             for configStream in self.config.accurev.streamMap:
                 branchName = self.config.accurev.streamMap[configStream]
-                stream = self.GetStreamByName(depotNumber, configStream)
+                stream = self.GetStreamByName(depot.number, configStream)
                 if stream is None:
                     raise Exception("Failed to get stream information for {s}".format(s=configStream))
                 # Since we will be storing this state in JSON we need to make sure that we don't have
@@ -2170,7 +2218,7 @@ class AccuRev2Git(object):
                 streamMap[str(stream.streamNumber)] = { "stream": configStream, "branch": branchName }
 
             # Default state
-            state = { "depot_number": depotNumber,
+            state = { "depot_number": depot.number,
                       "stream_map": streamMap,
                       "next_transaction": int(self.config.accurev.startTransaction),
                       "branch_list": None }
@@ -2338,15 +2386,13 @@ class AccuRev2Git(object):
         # to allow other scripts to safely call into this method.
         if self.InitGitRepo(self.config.git.repoPath):
             self.gitRepo = git.open(self.config.git.repoPath)
-            self.gitBranchList = self.gitRepo.branch_list()
-            if self.gitBranchList is None:
-                raise Exception("Failed to get branch list!")
-            elif len(self.gitBranchList) == 0:
-                status = self.gitRepo.status()
-                if status is None or not status.initial_commit:
-                    raise Exception("Invalid state! git branch returned {branchList} (an empty list of branches) and we are not on an initial commit? Aborting!".format(branchList=self.gitBranchList))
-                else:
-                    self.config.logger.dbg( "New git repository. Initial commit on branch {br}".format(br=status.branch) )
+            status = self.gitRepo.status()
+            if status is None:
+                raise Exception("git state failed. Aborting! err: {err}".format(err=self.gitRepo.lastStderr))
+            elif status.initial_commit:
+                self.config.logger.dbg( "New git repository. Initial commit on branch {br}".format(br=status.branch) )
+            else:
+                self.config.logger.dbg( "Opened git repository on branch {br}".format(br=status.branch) )
  
             # Configure the remotes
             if self.config.git.remoteMap is not None and len(self.config.git.remoteMap) > 0:
@@ -2668,6 +2714,25 @@ def AutoConfigFile(filename, args, preserveConfig=False):
         """)
         return 0
     return 1
+
+def SplitPath(path):
+    rv = None
+    if path is not None:
+        path = str(path)
+        rv = []
+        drive, path = os.path.splitdrive(path)
+        head, tail = os.path.split(path)
+        while len(head) > 0 and head != '/' and head != '\\': # For an absolute path the starting slash isn't removed from head.
+            rv.append(tail)
+            head, tail = os.path.split(head)
+        if len(tail) > 0:
+            rv.append(tail)
+        if len(head) > 0: # For absolute paths.
+            rv.append(head)
+        if len(drive) > 0:
+            rv.append(drive)
+        rv.reverse()
+    return rv
 
 def TryGetAccurevUserlist(username, password):
     info = accurev.info()
