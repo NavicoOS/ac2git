@@ -545,7 +545,7 @@ class obj:
             self.streamName       = streamName
             self.streamNumber     = IntOrNone(streamNumber)
             self.fromStreamName   = fromStreamName
-            self.fromStreamNumber = fromStreamNumber
+            self.fromStreamNumber = IntOrNone(fromStreamNumber)
             self.comment          = comment
             self.versions         = versions
             self.moves            = moves
@@ -613,7 +613,7 @@ class obj:
                 streamName       = xmlElement.attrib.get('streamName')
                 streamNumber     = xmlElement.attrib.get('streamNumber')
                 fromStreamName   = xmlElement.attrib.get('fromStreamName')
-                fromStreamNumber = xmlElement.attrib.get('fromstreamNumber')
+                fromStreamNumber = xmlElement.attrib.get('fromStreamNumber')
                 comment          = GetXmlContents(xmlElement.find('comment'))
     
                 versions = []
