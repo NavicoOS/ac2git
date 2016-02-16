@@ -1900,6 +1900,20 @@ class AccuRev2Git(object):
                         children.append(s.streamNumber)
         return children
 
+    def CommitTransaction(self, tr, stream, parents=None, treeHash=None, branchName=None, title=None, friendlyMessage=None):
+        branchRef = None if branchName is None else 'refs/heads/{branch}'.format(branch=branchName)
+        checkout = (branchName is None)
+
+        commitMessage, notes = self.GenerateCommitMessage(transaction=tr, stream=stream, title=title, friendlyMessage=friendlyMessage)
+        commitHash = self.Commit(transaction=tr, allowEmptyCommit=True, messageOverride=commitMessage, parents=parents, treeHash=treeHash, ref=branchRef, checkout=checkout)
+        if commitHash is None:
+            raise Exception("Failed to commit {Type} {tr}".format(Type=tr.Type, tr=tr.id))
+        if notes is not None and self.AddNote(transaction=tr, commitHash=commitHash, ref=AccuRev2Git.gitNotesRef_accurevInfo, note=notes) is None:
+            raise Exception("Failed to add note for commit {h} (transaction {trId}) to {br}.".format(trId=tr.id, br=branchName, h=commitHash))
+
+        return commitHash
+
+
     # Processes a single transaction whose id is the trId (int) and which has been recorded against the streams outlined in the affectedStreamMap.
     # affectedStreamMap is a dictionary with the following format { <key:stream_num_str>: { "state_hash": <val:state_ref_commit_hash>, "data_hash": <val:data_ref_commit_hash> } }
     # The streamMap is used so that we can translate streams and their basis into branch names { <key:stream_num_str>: { "stream": <val:config_strem_name>, "branch": <val:config_branch_name> } }
@@ -1923,12 +1937,15 @@ class AccuRev2Git(object):
         self.config.logger.dbg( "Transaction #{tr} - {Type} by {user} to {stream} at {time}".format(tr=tr.id, Type=tr.Type, time=tr.time, user=tr.user, stream=streamName) )
 
         # Get the information for the stream on which this transaction had occurred.
-        stream, branchName, streamData = None, None, None
+        stream, branchName, streamData, treeHash = None, None, None, None
         if streamNumber is not None:
             # Check if the destination stream is a part of our processing.
             if str(streamNumber) in streamMap:
                 branchName = streamMap[str(streamNumber)]["branch"]
                 streamData = affectedStreamMap[streamNumber]
+                treeHash = streamData["data_tree_hash"]
+                if treeHash is None:
+                    raise Exception("Couldn't get tree hash from stream {s}".format(s=streamName))
 
             # Get the deserialized stream object.
             stream = streams.getStream(streamNumber)
@@ -1988,18 +2005,17 @@ class AccuRev2Git(object):
                 if tr.stream.prevName is not None and len(tr.stream.prevName.strip()) > 0:
                     # if the stream has been renamed, use its new name from now on.
                     self.config.logger.info("Stream renamed from {oldName} to {newName}. Branch name is {branch}, ignoring.".format(oldName=tr.stream.prevName, newName=tr.stream.name, branch=branchName))
-                    
-                if self.gitRepo.checkout(branchName=branchName) is None:
-                    raise Exception("Failed to checkout branch {br}".format(br=branchName))
 
+                parents = None
+                # Check if the stream has changed basis and if it has change our branch pointer (irrespective of whether it is merged) over to the new basis stream's branch (if tracked).
                 if tr.stream.prevBasis is not None and len(tr.stream.prevBasis) > 0:
                     # We need to change where our stream is parented, i.e. rebase it...
-                    prevBasisBranchName, prevBasisStreamData = None
+                    prevBasisBranchName, prevBasisStreamData = None, None
                     if str(tr.stream.prevBasisStreamNumber) in streamMap:
                         prevBasisBranchName = streamMap[str(tr.stream.prevBasisStreamNumber)]["branch"]
                         prevBasisStreamData = affectedStreamMap[tr.stream.prevBasisStreamNumber]
 
-                    basisBranchName, basisStreamData = None
+                    basisBranchName, basisStreamData = None, None
                     if str(tr.stream.basisStreamNumber) in streamMap:
                         basisBranchName = streamMap[str(tr.stream.basisStreamNumber)]["branch"]
                         basisStreamData = affectedStreamMap[tr.stream.basisStreamNumber]
@@ -2015,17 +2031,11 @@ class AccuRev2Git(object):
                         if self.gitRepo.raw_cmd([ u'git', u'reset', u'--hard', newBasisCommitHash ]) is None:
                             raise Exception("Failed to rebase branch {br} from {old} to {new}. Err: {err}".format(br=branchName, old=prevBasisBranchName, new=basisBranchName, err=self.gitRepo.lastStderr))
                         self.config.logger.info("Rebased branch {name} from {oldBasis} to {newBasis}".format(name=branchName, oldBasis=prevBasisBranchName, newBasis=basisBranchName))
-                    
-                treeHash = streamData["data_tree_hash"]
-                if treeHash is None:
-                    raise Exception("Couldn't get tree hash from stream {s}".format(s=streamName))
+                    else:
+                        # We want to make a new orphaned branch and potentially save the data that has not been merged into the HEAD.
+                        parents = []
 
-                commitMessage, notes = self.GenerateCommitMessage(transaction=tr, stream=stream)
-                commitHash = self.Commit(transaction=tr, allowEmptyCommit=True, messageOverride=commitMessage, treeHash=treeHash)
-                if commitHash is None:
-                    raise Exception("Failed to commit {Type} {tr}".format(Type=tr.Type, tr=tr.id))
-                if notes is not None and self.AddNote(transaction=tr, commitHash=commitHash, ref=AccuRev2Git.gitNotesRef_accurevInfo, note=notes) is None:
-                    raise Exception("Failed to add note for commit {h} (transaction {trId}) to {br}.".format(trId=tr.id, br=branchName, h=commitHash))
+                commitHash = self.CommitTransaction(tr=tr, stream=stream, treeHash=treeHash, parents=parents, branchName=branchName)
                 self.config.logger.info("{Type} {tr}. committed to {branch} {h}.".format(Type=tr.Type, tr=tr.id, branch=branchName, h=commitHash))
 
         else:
@@ -2036,22 +2046,7 @@ class AccuRev2Git(object):
                     self.config.logger.info("Warning: unexpected transaction {Type} {tr}. occurred in workspace {w}.".format(Type=tr.Type, tr=tr.id, w=stream.name))
 
                 if branchName is not None:
-                    if self.gitRepo.checkout(branchName=branchName) is None:
-                        raise Exception("Failed to checkout branch {br}!".format(br=branchName))
-
-                    if stream.Type != "workspace":
-                        self.config.logger.info("Note: {trType} transaction {id} on stream {stream} ({streamType}). Merging down-stream. Usually {trType}s occur on workspaces!".format(trType=tr.Type, id=tr.id, stream=stream.name, streamType=stream.Type))
-
-                    treeHash = streamData["data_tree_hash"]
-                    if treeHash is None:
-                        raise Exception("Couldn't get tree hash from stream {s}".format(s=streamName))
-
-                    commitMessage, notes = self.GenerateCommitMessage(transaction=tr, stream=stream)
-                    commitHash = self.Commit(transaction=tr, allowEmptyCommit=True, messageOverride=commitMessage, treeHash=treeHash)
-                    if commitHash is None:
-                        raise Exception("Failed to commit {Type} {tr}".format(Type=tr.Type, tr=tr.id))
-                    if notes is not None and self.AddNote(transaction=tr, commitHash=commitHash, ref=AccuRev2Git.gitNotesRef_accurevInfo, note=notes) is None:
-                        raise Exception("Failed to add note for commit {h} (transaction {trId}) to {br}.".format(trId=tr.id, br=branchName, h=commitHash))
+                    commitHash = self.CommitTransaction(tr=tr, stream=stream, treeHash=treeHash, branchName=branchName)
                     self.config.logger.info("{Type} {tr}. committed to {branch} {h}.".format(Type=tr.Type, tr=tr.id, branch=branchName, h=commitHash))
 
             elif stream.Type in [ "normal" ]:
@@ -2106,41 +2101,17 @@ class AccuRev2Git(object):
         
                     if diff is not None and len(diff.strip()) == 0:
                         # Merge
-                        if self.gitRepo.checkout(branchName=branchName) is None:
-                            raise Exception("Failed to checkout branch {br}!".format(br=branchName))
-
                         parents = [ self.GetLastCommitHash(branchName=branchName), lastSrcBranchHash ] # Make this commit a merge of the last commit on the srcStreamBranch into the branchName.
                         if None in parents:
                             raise Exception("Invariant error! Either the source hash {sh} or the destination hash {dh} was none!".format(sh=parents[1], dh=parents[0]))
                         
-                        treeHash = streamData["data_tree_hash"]
-                        if treeHash is None:
-                            raise Exception("Couldn't get tree hash from stream {s}".format(s=streamName))
-
-                        commitMessage, notes = self.GenerateCommitMessage(transaction=tr, stream=stream)
-                        commitHash = self.Commit(transaction=tr, allowEmptyCommit=True, messageOverride=commitMessage, parents=parents, treeHash=treeHash)
-                        if commitHash is None:
-                            raise Exception("Failed to commit a `{Type}`! tr={tr}".format(Type=tr.Type, tr=tr.id))
-                        if notes is not None and self.AddNote(transaction=tr, commitHash=commitHash, ref=AccuRev2Git.gitNotesRef_accurevInfo, note=notes) is None:
-                            raise Exception("Failed to add note for commit {h} (transaction {trId}) to {br}.".format(trId=tr.id, br=branchName, h=commitHash))
+                        commitHash = self.CommitTransaction(tr=tr, stream=stream, parents=parents, treeHash=treeHash, branchName=branchName)
                         self.config.logger.info("promote {tr}. Merged {src} into {dst} {h}.".format(tr=tr.id, src=srcBranchName, dst=branchName, h=commitHash))
                     else:
                         self.config.logger.info("promote {tr}. Failed to merge {src} into {dst} - diff was not empty!".format(tr=tr.id, src=srcBranchName, dst=branchName))
                 elif branchName is not None:
                     # Cherry pick onto destination and merge into all the children.
-                    if self.gitRepo.checkout(branchName=branchName) is None:
-                        raise Exception("Failed to checkout branch {br}!".format(br=branchName))
-
-                    treeHash = streamData["data_tree_hash"]
-                    if treeHash is None:
-                        raise Exception("Couldn't get tree hash from stream {s}".format(s=streamName))
-
-                    commitMessage, notes = self.GenerateCommitMessage(transaction=tr, stream=stream)
-                    commitHash = self.Commit(transaction=tr, allowEmptyCommit=True, messageOverride=commitMessage, treeHash=treeHash)
-                    if commitHash is None:
-                        raise Exception("Failed to commit a `{Type}`! tr={tr}".format(Type=tr.Type, tr=tr.id))
-                    if notes is not None and self.AddNote(transaction=tr, commitHash=commitHash, ref=AccuRev2Git.gitNotesRef_accurevInfo, note=notes) is None:
-                        raise Exception("Failed to add note for commit {h} (transaction {trId}) to {br}.".format(trId=tr.id, br=branchName, h=commitHash))
+                    commitHash = self.CommitTransaction(tr=tr, stream=stream, treeHash=treeHash, branchName=branchName)
                     self.config.logger.info("promote {tr}. Cherry-picked into {dst} {h}. No source stream found.".format(tr=tr.id, src=srcBranchName, dst=branchName, h=commitHash))
 
                 # Process all affected streams.
@@ -2153,9 +2124,6 @@ class AccuRev2Git(object):
                     affectedBranchName = streamMap[affectedStreamNumberStr]["branch"]
                     affectedStreamData = affectedStreamMap[affectedStreamNumber]
                     
-                    if self.gitRepo.checkout(branchName=affectedBranchName) is None:
-                        raise Exception("Failed to checkout branch {br}!".format(br=affectedBranchName))
-
                     parents = None # If left as none it will become a cherry-pick.
 
                     if commitHash is not None: # We have committed to a destination stream.
@@ -2184,47 +2152,11 @@ class AccuRev2Git(object):
                     if affectedTreeHash is None:
                         raise Exception("Couldn't get tree hash from stream {s}".format(s=affectedStream.name))
 
-                    commitMessage, notes = self.GenerateCommitMessage(transaction=tr, stream=affectedStream, friendlyMessage=friendlyMessage)
-                    commitHash = self.Commit(transaction=tr, allowEmptyCommit=True, messageOverride=commitMessage, parents=parents, treeHash=affectedTreeHash)
-                    if commitHash is None:
-                        raise Exception("Failed to commit a `{Type}`! tr={tr}".format(Type=tr.Type, tr=tr.id))
-                    if notes is not None and self.AddNote(transaction=tr, commitHash=commitHash, ref=AccuRev2Git.gitNotesRef_accurevInfo, note=notes) is None:
-                        raise Exception("Failed to add note for commit {h} (transaction {trId}) to {br}.".format(trId=tr.id, br=affectedBranchName, h=commitHash))
+                    commitHash = self.CommitTransaction(tr=tr, stream=stream, parents=parents, treeHash=affectedTreeHash, branchName=affectedBranchName)
+                    self.config.logger.info("{Type} {tr}. committed to {branch} {h}.".format(Type=tr.Type, tr=tr.id, branch=branchName, h=commitHash))
 
             else:
                 raise Exception("Not yet implemented! Unrecognized stream type {Type}. Stream {name}".format(Type=stream.Type, name=stream.name))
-
-    def InitialCommitStreams(self, depot, streams, stream=None, tr=None, streamNumberMap=None):
-        if stream is None:
-            for s in streams:
-                if s.basisStreamNumber is None:
-                    return self.InitialCommitStreams(depot=depot, stream=s, streams=streams, tr=tr, streamNumberMap=streamNumberMap)
-        else:
-            # Checkout basis stream (if any).
-            basisBranchName = None
-            if stream.basisStreamNumber is not None:
-                basisBranchName = self.GetBranchNameFromStreamBasis(stream, streamNumberMap)
-                if basisBranchName is not None and self.gitRepo.checkout(branchName=basisBranchName) is None:
-                    raise Exception("Failed to checkout basis stream branch {bsBr} for stream {s}".format(bsBr=basisBranchName, s=stream.name))
-            
-            # Create branch whith a single empty commit.
-            branchName = self.GetBranchNameFromStream(stream, streamNumberMap)
-            if branchName is not None:
-                if basisBranchName != branchName and self.gitRepo.checkout(branchName=branchName, isNewBranch=True) is None:
-                    raise Exception("Failed to create new branch {br}. Error: {err}".format(br=branchName, err=self.gitRepo.lastStderr))
-                self.config.logger.info("Initial commit name={name}, number={num}, basis={basis}, basis-number={basisNumber}".format(name=stream.name, num=stream.streamNumber, basis=stream.basis, basisNumber=stream.basisStreamNumber))
-                # Modify the commit message
-                commitMessage = self.GenerateCommitMessage(transaction=tr, stream=stream, title="Created {name} based on {basis}".format(name=branchName, basis='-' if stream.basis is None else basisBranchName))
-                commitHash = self.Commit(depot=depot, stream=stream, transaction=tr, branchName=branchName, isFirstCommit=True, allowEmptyCommit=True, noNotes=True, messageOverride=commitMessage)
-                if commitHash is None:
-                    raise Exception("Failed to add empty commit")
-
-            # Create all child branches.
-            for s in streams:
-                if s.basisStreamNumber == stream.streamNumber:
-                    self.InitialCommitStreams(depot=depot, stream=s, streams=streams, tr=tr, streamNumberMap=streamNumberMap)
-                
-        return False
 
     def ReadFileRef(self, ref):
         rv = None
@@ -2303,9 +2235,7 @@ class AccuRev2Git(object):
                             raise Exception("Failed to restore last state. git checkout -B {br} {c}; failed.".format(br=br["name"], c=br["commit"]))
                     else:
                         currentBranch = br
-                if currentBranch is None and len(state["branch_list"]) > 0:
-                    raise Exception("Invariant error! There must have been at least one current branch saved.")
-                elif currentBranch is not None:
+                if currentBranch is not None:
                     self.config.logger.dbg( "Checkout last processed transaction #{tr} on branch {branchName} at commit {commit}".format(tr=state["next_transaction"], branchName=currentBranch["name"], commit=currentBranch["commit"]) )
                     result = self.gitRepo.raw_cmd([u'git', u'checkout', u'-B', currentBranch["name"], currentBranch["commit"]])
                     if result is None:
