@@ -1930,7 +1930,7 @@ class AccuRev2Git(object):
                         parents = []
 
                 commitHash = self.CommitTransaction(tr=tr, stream=stream, treeHash=treeHash, parents=parents, branchName=branchName)
-                self.config.logger.info("{Type} {tr}. committed to {branch} {h}.".format(Type=tr.Type, tr=tr.id, branch=branchName, h=commitHash))
+                self.config.logger.info("{Type} {tr}. committed to {branch} {h}.".format(Type=tr.Type, tr=tr.id, branch=branchName, h=commitHash[:8]))
 
         else:
             # The rest of the transactions can be processed by stream type. Normal streams that have children need to try and merge down while workspaces which don't have children can skip this step.
@@ -1941,7 +1941,7 @@ class AccuRev2Git(object):
 
                 if branchName is not None:
                     commitHash = self.CommitTransaction(tr=tr, stream=stream, treeHash=treeHash, branchName=branchName)
-                    self.config.logger.info("{Type} {tr}. committed to {branch} {h}.".format(Type=tr.Type, tr=tr.id, branch=branchName, h=commitHash))
+                    self.config.logger.info("{Type} {tr}. committed to {branch} {h}.".format(Type=tr.Type, tr=tr.id, branch=branchName, h=commitHash[:8]))
 
             elif stream.Type in [ "normal" ]:
                 if tr.Type not in [ "promote", "defunct", "purge" ]:
@@ -2000,13 +2000,13 @@ class AccuRev2Git(object):
                             raise Exception("Invariant error! Either the source hash {sh} or the destination hash {dh} was none!".format(sh=parents[1], dh=parents[0]))
                         
                         commitHash = self.CommitTransaction(tr=tr, stream=stream, parents=parents, treeHash=treeHash, branchName=branchName)
-                        self.config.logger.info("promote {tr}. Merged {src} into {dst} {h}.".format(tr=tr.id, src=srcBranchName, dst=branchName, h=commitHash))
+                        self.config.logger.info("promote {tr}. Merged {src} into {dst} {h}.".format(tr=tr.id, src=srcBranchName, dst=branchName, h=commitHash[:8]))
                     else:
                         self.config.logger.info("promote {tr}. Failed to merge {src} into {dst} - diff was not empty!".format(tr=tr.id, src=srcBranchName, dst=branchName))
                 elif branchName is not None:
                     # Cherry pick onto destination and merge into all the children.
                     commitHash = self.CommitTransaction(tr=tr, stream=stream, treeHash=treeHash, branchName=branchName)
-                    self.config.logger.info("promote {tr}. Cherry-picked into {dst} {h}. No source stream found.".format(tr=tr.id, src=srcBranchName, dst=branchName, h=commitHash))
+                    self.config.logger.info("promote {tr}. Cherry-picked into {dst} {h}. No source stream found.".format(tr=tr.id, src=srcBranchName, dst=branchName, h=commitHash[:8]))
 
                 # Process all affected streams.
                 for affectedStreamNumber in affectedStreamMap:
@@ -2033,7 +2033,7 @@ class AccuRev2Git(object):
                             if None in parents:
                                 raise Exception("Invariant error! Either the source hash {sh} or the destination hash {dh} was none!".format(sh=parents[1], dh=parents[0]))
                             
-                            self.config.logger.info("promote {tr}. Merge {dst} into {b} (affected stream) {h}.".format(tr=tr.id, b=affectedBranchName, dst=branchName, h=commitHash))
+                            self.config.logger.info("promote {tr}. Merge {dst} into {b} (affected stream) {h}.".format(tr=tr.id, b=affectedBranchName, dst=branchName, h=commitHash[:8]))
                             friendlyMessage = "Merge {dst} into {b}".format(b=affectedBranchName, dst=branchName)
                         else:
                             self.config.logger.info("promote {tr}. Cherry-pick {dst} {dstHash} into {b} (affected stream) - diff between {h1} and {h2} was not empty!".format(tr=tr.id, b=affectedBranchName, dst=branchName, dstHash=commitHash[:8], h1=affectedStreamData["data_hash"][:8], h2=commitHash[:8]))
@@ -2046,8 +2046,8 @@ class AccuRev2Git(object):
                     if affectedTreeHash is None:
                         raise Exception("Couldn't get tree hash from stream {s}".format(s=affectedStream.name))
 
-                    commitHash = self.CommitTransaction(tr=tr, stream=stream, parents=parents, treeHash=affectedTreeHash, branchName=affectedBranchName)
-                    self.config.logger.info("{Type} {tr}. committed to {branch} {h}.".format(Type=tr.Type, tr=tr.id, branch=branchName, h=commitHash))
+                    affectedCommitHash = self.CommitTransaction(tr=tr, stream=stream, parents=parents, treeHash=affectedTreeHash, branchName=affectedBranchName)
+                    self.config.logger.info("{Type} {tr}. committed to {branch} {h}.".format(Type=tr.Type, tr=tr.id, branch=branchName, h=affectedCommitHash[:8]))
 
             else:
                 raise Exception("Not yet implemented! Unrecognized stream type {Type}. Stream {name}".format(Type=stream.Type, name=stream.name))
