@@ -2039,7 +2039,7 @@ class AccuRev2Git(object):
                             self.config.logger.info("promote {tr}. Cherry-pick {dst} {dstHash} into {b} (affected stream) - diff between {h1} and {h2} was not empty!".format(tr=tr.id, b=affectedBranchName, dst=branchName, dstHash=commitHash[:8], h1=affectedStreamData["data_hash"][:8], h2=commitHash[:8]))
                             friendlyMessage = "Cherry-pick {dst} ({dstHash}) into {b}".format(b=affectedBranchName, dst=branchName, dstHash=commitHash[:8])
                     else:
-                        self.config.logger.info("promote {tr}. Cherry-pick {dst} into {b}. Destination stream is not tracked.".format(tr=tr.id, b=affectedBranchName, dst=branchName))
+                        self.config.logger.info("promote {tr}. Cherry-pick into {b}. Destination stream {dst} is not tracked.".format(tr=tr.id, b=affectedBranchName, dst=streamName))
                         friendlyMessage = "Cherry-pick into {b} - dest. stream {s} (id: {id}) is not tracked.".format(b=affectedBranchName, s=streamName, id=streamNumber)
 
                     affectedTreeHash = affectedStreamData["data_tree_hash"]
