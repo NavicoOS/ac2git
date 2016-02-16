@@ -1869,9 +1869,10 @@ class AccuRev2Git(object):
             if basisStream is not None:
                 parents = None # When parents are none then the Commit() function automatically gets the last parent.
                 basisBranchName = streamMap[str(basisStream.streamNumber)]["branch"]
-                if self.gitRepo.checkout(branchName=basisBranchName) is None:
-                    raise Exception("Failed to checkout basis stream branch {bsBr} for stream {s}".format(bsBr=basisBranchName, s=newStream.name))
-            
+                parents = [ self.GetLastCommitHash(branchName=basisBranchName) ] # The branch will start at this hash.
+                if None in parents:
+                    raise Exception("Failed to get last hash for branch {b}, stream {s} (id: {id})".format(b=basisBranchName, s=newStream.basis, id=newStream.basisStreamNumber))
+
             newBranchName = streamMap[str(newStream.streamNumber)]["branch"]
             if newBranchName is None:
                 raise Exception("Failed to retrieve branch name for stream {s} (id: {id})".format(s=newStream.name, id=newStream.streamNumber))
