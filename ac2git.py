@@ -1905,15 +1905,13 @@ class AccuRev2Git(object):
                 # Check if the stream has changed basis and if it has change our branch pointer (irrespective of whether it is merged) over to the new basis stream's branch (if tracked).
                 if tr.stream.prevBasis is not None and len(tr.stream.prevBasis) > 0:
                     # We need to change where our stream is parented, i.e. rebase it...
-                    prevBasisBranchName, prevBasisStreamData = None, None
+                    prevBasisBranchName = None
                     if str(tr.stream.prevBasisStreamNumber) in streamMap:
                         prevBasisBranchName = streamMap[str(tr.stream.prevBasisStreamNumber)]["branch"]
-                        prevBasisStreamData = affectedStreamMap[tr.stream.prevBasisStreamNumber]
 
-                    basisBranchName, basisStreamData = None, None
+                    basisBranchName = None
                     if str(tr.stream.basisStreamNumber) in streamMap:
                         basisBranchName = streamMap[str(tr.stream.basisStreamNumber)]["branch"]
-                        basisStreamData = affectedStreamMap[tr.stream.basisStreamNumber]
 
                     if basisBranchName is not None:
                         # If the prevBasisBranchName is None, this would mean that we haven't been tracking that stream and that this stream is potentially not rooted/merged
