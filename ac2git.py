@@ -1846,6 +1846,82 @@ class AccuRev2Git(object):
         name = name.replace(' ', '_').strip()
         return name
 
+    # TODO: Determine which of these functions is most useful in organizing affected streams into a hierarchy tree!
+    def BuildStreamTree(self, streams):
+        rv = {}
+        for s in streams:
+            rv[s.streamNumber] = { "parent": s.basisStreamNumber, "children": [], "self": s }
+        for s in streams:
+            if s.basisStreamNumber is None:
+                continue
+            if s.basisStreamNumber not in rv:
+                raise Exception("Incomplete set of streams given! Stream {s} is missing from the streams list, cannot build tree!".format(s=s.basisStreamNumber))
+            rv[s.basisStreamNumber]["children"].append(s.streamNumber)
+        return rv
+
+    def PruneStreamTree(self, streamTree, keepList):
+        rv = None
+        if streamTree is not None:
+            if keepList is None:
+                return streamTree
+            elif len(keepList) == 1:
+                return { "parent": None, "children": [], "self": streamTree[keepList[0]]["self"] }
+            rv = streamTree.copy()
+            # Remove all the streams that are not in the keepList and take their children and add them to the parent stream.
+            for s in streamTree:
+                if s not in keepList:
+                    # Find the next parent that we are keeping.
+                    p = streamTree[s]["parent"]
+                    while p is not None and p not in keepList:
+                        p = streamTree[p]["parent"]
+                    # If we found the parent then append our children to his/hers.
+                    if p is not None:
+                        c = streamTree[s]["children"]
+                        rv[p]["children"].extend(c)
+                    del rv[s]
+                    # Set the parent for all the children to either None or the actual parent.
+                    for c in streamTree[s]["children"]:
+                        if c in rv:
+                            rv[c]["parent"] = p
+            # Remove all the streams that are not in the keepList from each streams children list.
+            for s in rv:
+                children = []
+                for c in rv[s]["children"]:
+                    if c in keepList:
+                        children.append(c)  # subset of children
+                rv[s]["children"] = children
+
+        return rv
+
+    def IsStreamAncestorOf(self, streams, ancestorStreamNumber, streamNumber):
+        if streams is not None and isinstance(ancestorStreamNumber, int) and isinstance(streamNumber, int):
+            # Build a map of streams by number so it is quicker to traverse.
+            sm = {}
+            for s in streams:
+                sm[s.streamNumber] = s
+            # Search for the parent.
+            if streamNumber not in sm or ancestorStreamNumber not in sm:
+                return None
+            p = sm[streamNumber].basisStreamNumber
+            while p is not None and p != ancestorStreamNumber:
+                p = sm[p].basisStreamNumber
+            return (p == ancestorStreamNumber)
+        raise Exception("Invalid arguments to IsAnyParentOf(ancestorStreamNumber={a}, streamNumber={c}, streams={s}).".format(s=streams, p=ancestorStreamNumber, c=streamNumber))
+
+    def GetStreamAndChildren(self, streams, streamNumber):
+        children = None
+        if streams is not None:
+            # Find all the children of the dstStream.
+            children = [ streamNumber ]
+            lastCount = 0
+            while lastCount != len(children):
+                lastCount = len(children)
+                for s in streams:
+                    if s.basisStreamNumber in children and s.streamNumber not in children:
+                        children.append(s.streamNumber)
+        return children
+    # END TODO
+
     def CommitTransaction(self, tr, stream, parents=None, treeHash=None, branchName=None, title=None, srcStream=None, dstStream=None, friendlyMessage=None):
         branchRef = None
         if branchName is not None:
