@@ -1472,23 +1472,25 @@ class AccuRev2Git(object):
     # Lists the .git/... directory that contains all the stream refs and returns the file list as its result
     def GetAllKnownStreamRefs(self, depot):
         refsPrefix = self.GetDepotRefsNamespace() # Search all depots
-        if refsPrefix is not None:
-            rv = []
-            repoPath = os.path.abspath(self.gitRepo.path)
-            repoPath = os.path.normpath(repoPath)
-            repoGitDir = os.path.join(repoPath, '.git', '') # Terminate with slash so that when we strip it out the directory separator goes with this part.
-            repoRefsPath = os.path.join(repoGitDir, 'refs')
 
-            for dirpath, dirnames, filenames in os.walk(repoRefsPath, topdown=True):
-                for filename in filenames:
-                    filepath = os.path.join(dirpath, filename)
-                    ref = filepath.replace(repoGitDir, "")
-                    ref = '/'.join(SplitPath(ref)) # If we are on Windows we need to use os.path.split() to get individual directories and then rejoin them with the slashes /.
-                    depotNumber, streamNumber, remainder = self.ParseStreamRef(ref=ref)
-                    if None not in [ depotNumber, streamNumber ]:
-                        rv.append(ref)
-            return rv
-        return None
+        cmd = [ 'git', 'show-ref', '--' ]
+        cmdResult = self.gitRepo.raw_cmd(cmd)
+        if cmdResult is None:
+            raise Exception("Failed to execute 'git show-ref --'!")
+        lines = cmdResult.strip().split('\n')
+
+        if len(lines) == 0:
+            raise Exception("The 'git show-ref --' command output was empty!")
+
+        rv = []
+        for line in lines:
+            columns = line.split(' ')
+            commitHash, ref = columns[0], columns[1]
+            depotNumber, streamNumber, remainder = self.ParseStreamRef(ref=ref)
+            if None not in [ depotNumber, streamNumber ]:
+                rv.append(ref)
+        return rv
+
 
     # Tries to get the stream name from the data that we have stored in git.
     def GetStreamByName(self, depot, streamName):
@@ -1506,6 +1508,9 @@ class AccuRev2Git(object):
             if streamNumber is not None and remainder == "info":
                 infoRefList.append( (streamNumber, ref) ) # The stream number is extracted and put as the first element for sorting.
         infoRefList.sort()
+
+        if len(infoRefList) == 0:
+            self.config.logger.info("Warning: the refs from which we search for stream information seem to be missing...")
 
         for streamNumber, ref in infoRefList:
             # Execute a `git log -S` command with the pickaxe option to find the stream name in the streams.xml
