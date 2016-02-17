@@ -1491,7 +1491,6 @@ class AccuRev2Git(object):
                 rv.append(ref)
         return rv
 
-
     # Tries to get the stream name from the data that we have stored in git.
     def GetStreamByName(self, depot, streamName):
         refsPrefix = self.GetStreamRefsNamespace(depot)
@@ -2059,7 +2058,7 @@ class AccuRev2Git(object):
                             # This is a manual merge and the srcBranchName should be fastforwarded to this commit since its contents now matches the parent stream.
                             if self.UpdateAndCheckoutRef(ref='refs/heads/{branch}'.format(branch=srcBranchName), commitHash=commitHash, checkout=False) != True:
                                 raise Exception("Failed to update source {branch} to {hash} latest commit.".format(branch=srcBranchName, hash=commitHash[:8]))
-                        self.config.logger.info("promote {tr}. Merged {src} into {dst} {h}.".format(tr=tr.id, src=srcBranchName, dst=branchName, h=commitHash[:8]))
+                        self.config.logger.info("promote {tr}. Merged {src} into {dst} {h}. Fast-forward {src} to {dst} {h}.".format(tr=tr.id, src=srcBranchName, dst=branchName, h=commitHash[:8]))
                     else:
                         self.config.logger.info("promote {tr}. Failed to merge {src} into {dst} - diff was not empty!".format(tr=tr.id, src=srcBranchName, dst=branchName))
                 elif branchName is not None:
