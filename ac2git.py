@@ -2050,6 +2050,10 @@ class AccuRev2Git(object):
                             raise Exception("Invariant error! Either the source hash {sh} or the destination hash {dh} was none!".format(sh=parents[1], dh=parents[0]))
                         
                         commitHash = self.CommitTransaction(tr=tr, stream=stream, parents=parents, treeHash=treeHash, branchName=branchName)
+                        if srcStream.time is None: # If the stream isn't timelocked move its branch to the parent streams branch head after the merge.
+                            # This is a manual merge and the srcBranchName should be fastforwarded to this commit since its contents now matches the parent stream.
+                            if self.UpdateAndCheckoutRef(ref='refs/heads/{branch}'.format(branch=srcBranchName), commitHash=commitHash, checkout=False) != True:
+                                raise Exception("Failed to update source {branch} to {hash} latest commit.".format(branch=srcBranchName, hash=commitHash[:8]))
                         self.config.logger.info("promote {tr}. Merged {src} into {dst} {h}.".format(tr=tr.id, src=srcBranchName, dst=branchName, h=commitHash[:8]))
                     else:
                         self.config.logger.info("promote {tr}. Failed to merge {src} into {dst} - diff was not empty!".format(tr=tr.id, src=srcBranchName, dst=branchName))
@@ -2076,21 +2080,32 @@ class AccuRev2Git(object):
                         diff = self.gitRepo.raw_cmd(diffCmd)
                         if diff is None:
                             raise Exception("Failed to diff branch {nBr} to branch {oBr}! Cmd: {cmd}, Err: {err}".format(nBr=affectedBranchName, oBr=branchName, cmd=' '.join(cmd), err=self.gitRepo.lastStderr))
-       
+
                         if diff is not None and len(diff.strip()) == 0:
                             # Merge by specifying the parent commits.
                             parents = [ self.GetLastCommitHash(branchName=affectedBranchName), commitHash ] # Make this commit a merge of the dstStream into the affectedStream.
                             if None in parents:
                                 raise Exception("Invariant error! Either the source hash {sh} or the destination hash {dh} was none!".format(sh=parents[1], dh=parents[0]))
                             
-                            self.config.logger.info("promote {tr}. Merge {dst} into {b} (affected stream) {h}.".format(tr=tr.id, b=affectedBranchName, dst=branchName, h=commitHash[:8]))
-                            friendlyMessage = "Merge {dst} into {b}".format(b=affectedBranchName, dst=branchName)
+                            # This is probably a fast forward but right now I can't think straight so let's verify it and then make it happen.
+                            # Check if both of the parents of this commit are direct ancestors of each-other. See http://stackoverflow.com/questions/3005392/how-can-i-tell-if-one-commit-is-a-descendant-of-another-commit
+                            cmd = [ 'git', 'merge-base', '--is-ancestor', parents[0], parents[1] ]
+                            mergeBaseHash = self.gitRepo.raw_cmd(cmd)
+                            if mergeBaseHash is None:
+                                # Not in the ancestry so we shouldn't do a fast-forward. Use the old code and do the merge commit.
+                                self.config.logger.info("promote {tr}. Merge {dst} into {b} (affected stream) {h}.".format(tr=tr.id, b=affectedBranchName, dst=branchName, h=commitHash[:8]))
+                            else:
+                                # Yay! The affected branch commit is an ancestor of the new commit so we can just fast-forward the branch!
+                                # This is a manual merge and the srcBranchName should be fastforwarded to this commit since its contents now matches the parent stream.
+                                if self.UpdateAndCheckoutRef(ref='refs/heads/{branch}'.format(branch=srcBranchName), commitHash=commitHash, checkout=False) != True:
+                                    raise Exception("Failed to update source {branch} to {hash} latest commit.".format(branch=srcBranchName, hash=commitHash[:8]))
+                                self.config.logger.info("promote {tr}. Fast-forward {b} to {dst} (affected stream) {h}.".format(tr=tr.id, b=affectedBranchName, dst=branchName, h=commitHash[:8]))
+                                # Now, we don't want to do a commit here so lets skip the rest...
+                                continue
                         else:
                             self.config.logger.info("promote {tr}. Cherry-pick {dst} {dstHash} into {b} (affected stream) - diff between {h1} and {h2} was not empty!".format(tr=tr.id, b=affectedBranchName, dst=branchName, dstHash=commitHash[:8], h1=affectedStreamData["data_hash"][:8], h2=commitHash[:8]))
-                            friendlyMessage = "Cherry-pick {dst} ({dstHash}) into {b}".format(b=affectedBranchName, dst=branchName, dstHash=commitHash[:8])
                     else:
                         self.config.logger.info("promote {tr}. Cherry-pick into {b}. Destination stream {dst} is not tracked.".format(tr=tr.id, b=affectedBranchName, dst=streamName))
-                        friendlyMessage = "Cherry-pick into {b} - dest. stream {s} (id: {id}) is not tracked.".format(b=affectedBranchName, s=streamName, id=streamNumber)
 
                     affectedTreeHash = affectedStreamData["data_tree_hash"]
                     if affectedTreeHash is None:
