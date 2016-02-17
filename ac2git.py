@@ -2102,9 +2102,9 @@ class AccuRev2Git(object):
                                 self.config.logger.info("promote {tr}. Merge {dst} into {b} (affected stream) {h}.".format(tr=tr.id, b=affectedBranchName, dst=branchName, h=commitHash[:8]))
                             else:
                                 # Yay! The affected branch commit is an ancestor of the new commit so we can just fast-forward the branch!
-                                # This is a manual merge and the srcBranchName should be fastforwarded to this commit since its contents now matches the parent stream.
-                                if self.UpdateAndCheckoutRef(ref='refs/heads/{branch}'.format(branch=srcBranchName), commitHash=commitHash, checkout=False) != True:
-                                    raise Exception("Failed to update source {branch} to {hash} latest commit.".format(branch=srcBranchName, hash=commitHash[:8]))
+                                # This is a manual merge and the affectedBranchName should be fastforwarded to this commit since its contents now matches the parent stream.
+                                if self.UpdateAndCheckoutRef(ref='refs/heads/{branch}'.format(branch=affectedBranchName), commitHash=commitHash, checkout=False) != True:
+                                    raise Exception("Failed to update source {branch} to {hash} latest commit.".format(branch=affectedBranchName, hash=commitHash[:8]))
                                 self.config.logger.info("promote {tr}. Fast-forward {b} to {dst} (affected stream) {h}.".format(tr=tr.id, b=affectedBranchName, dst=branchName, h=commitHash[:8]))
                                 # Now, we don't want to do a commit here so lets skip the rest...
                                 continue
@@ -2118,7 +2118,7 @@ class AccuRev2Git(object):
                         raise Exception("Couldn't get tree hash from stream {s}".format(s=affectedStream.name))
 
                     affectedCommitHash = self.CommitTransaction(tr=tr, stream=affectedStream, parents=parents, treeHash=affectedTreeHash, branchName=affectedBranchName, srcStream=srcStream, dstStream=stream)
-                    self.config.logger.info("{Type} {tr}. committed to {branch} {h}.".format(Type=tr.Type, tr=tr.id, branch=branchName, h=affectedCommitHash[:8]))
+                    self.config.logger.info("{Type} {tr}. committed to {branch} {h}.".format(Type=tr.Type, tr=tr.id, branch=affectedBranchName, h=affectedCommitHash[:8]))
 
             else:
                 raise Exception("Not yet implemented! Unrecognized stream type {Type}. Stream {name}".format(Type=stream.Type, name=stream.name))
