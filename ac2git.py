@@ -547,10 +547,8 @@ class AccuRev2Git(object):
 
     def UpdateAndCheckoutRef(self, ref, commitHash, checkout=True):
         if ref is not None and commitHash is not None and len(ref) > 0 and len(commitHash) > 0:
-            if ref.startswith('refs/heads/'):
-                # refs/heads are branches which are updated automatically when you commit to them (provided we have them checked out).
-                # so at least raise a warning for the user.
-                self.config.logger.info( "Warning: overwriting ref {ref} which is a branch.".format(ref=ref) )
+            # refs/heads are branches which are updated automatically when you commit to them (provided we have them checked out).
+            # so at least raise a warning for the user.
 
             # If we were asked to update a ref, not updating it is considered a failure to commit.
             if self.gitRepo.raw_cmd([ u'git', u'update-ref', ref, commitHash ]) is None:
