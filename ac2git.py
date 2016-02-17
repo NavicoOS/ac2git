@@ -1846,11 +1846,15 @@ class AccuRev2Git(object):
         name = name.replace(' ', '_').strip()
         return name
 
-    def CommitTransaction(self, tr, stream, parents=None, treeHash=None, branchName=None, title=None, friendlyMessage=None):
-        branchRef = None if branchName is None else 'refs/heads/{branch}'.format(branch=branchName)
+    def CommitTransaction(self, tr, stream, parents=None, treeHash=None, branchName=None, title=None, srcStream=None, dstStream=None, friendlyMessage=None):
+        branchRef = None
+        if branchName is not None:
+            branchRef = 'refs/heads/{branch}'.format(branch=branchName)
+        else:
+            raise Exception("Error: CommitTransaction() is a helper for ProcessTransaction() and doesn't accept branchNames as None.")
         checkout = (branchName is None)
 
-        commitMessage, notes = self.GenerateCommitMessage(transaction=tr, stream=stream, title=title, friendlyMessage=friendlyMessage)
+        commitMessage, notes = self.GenerateCommitMessage(transaction=tr, stream=stream, title=title, friendlyMessage=friendlyMessage, srcStream=srcStream, dstStream=dstStream)
         commitHash = self.Commit(transaction=tr, allowEmptyCommit=True, messageOverride=commitMessage, parents=parents, treeHash=treeHash, ref=branchRef, checkout=checkout)
         if commitHash is None:
             raise Exception("Failed to commit {Type} {tr}".format(Type=tr.Type, tr=tr.id))
@@ -2051,7 +2055,7 @@ class AccuRev2Git(object):
                         if None in parents:
                             raise Exception("Invariant error! Either the source hash {sh} or the destination hash {dh} was none!".format(sh=parents[1], dh=parents[0]))
                         
-                        commitHash = self.CommitTransaction(tr=tr, stream=stream, parents=parents, treeHash=treeHash, branchName=branchName)
+                        commitHash = self.CommitTransaction(tr=tr, stream=stream, parents=parents, treeHash=treeHash, branchName=branchName, srcStream=srcStream)
                         if srcStream.time is None: # If the stream isn't timelocked move its branch to the parent streams branch head after the merge.
                             # This is a manual merge and the srcBranchName should be fastforwarded to this commit since its contents now matches the parent stream.
                             if self.UpdateAndCheckoutRef(ref='refs/heads/{branch}'.format(branch=srcBranchName), commitHash=commitHash, checkout=False) != True:
@@ -2062,7 +2066,7 @@ class AccuRev2Git(object):
                 elif branchName is not None:
                     # Cherry pick onto destination and merge into all the children.
                     commitHash = self.CommitTransaction(tr=tr, stream=stream, treeHash=treeHash, branchName=branchName)
-                    self.config.logger.info("promote {tr}. Cherry-picked into {dst} {h}. No source stream found.".format(tr=tr.id, src=srcBranchName, dst=branchName, h=commitHash[:8]))
+                    self.config.logger.info("promote {tr}. Cherry-picked into {dst} {h}. No source stream found.".format(tr=tr.id, dst=branchName, h=commitHash[:8]))
 
                 # Process all affected streams.
                 for affectedStreamNumber in affectedStreamMap:
@@ -2113,7 +2117,7 @@ class AccuRev2Git(object):
                     if affectedTreeHash is None:
                         raise Exception("Couldn't get tree hash from stream {s}".format(s=affectedStream.name))
 
-                    affectedCommitHash = self.CommitTransaction(tr=tr, stream=stream, parents=parents, treeHash=affectedTreeHash, branchName=affectedBranchName)
+                    affectedCommitHash = self.CommitTransaction(tr=tr, stream=affectedStream, parents=parents, treeHash=affectedTreeHash, branchName=affectedBranchName, srcStream=srcStream, dstStream=stream)
                     self.config.logger.info("{Type} {tr}. committed to {branch} {h}.".format(Type=tr.Type, tr=tr.id, branch=branchName, h=affectedCommitHash[:8]))
 
             else:
