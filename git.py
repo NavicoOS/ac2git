@@ -833,12 +833,10 @@ def init(isBare=False, path=None):
 def open(path):
     if isRepo(path):
         try:
-            cmd = [ gitCmd, u'-C', path, u'rev-parse', u'--git-dir' ]
+            cmd = [ gitCmd, u'-C', path, u'rev-parse', u'--show-toplevel' ]
             output = subprocess.check_output(cmd)
             output = output.strip()
-            gitDir = os.path.abspath(output)
-            repoPath = os.path.split(gitDir)[0]
-            return repo(repoPath)
+            return repo(output)
         except:
             pass
     return None
