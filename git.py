@@ -796,10 +796,12 @@ class repo(object):
             return self._docmd(cmd=cmd, ref=ref)
         
 def isRepo(path=None):
-    if path is not None and os.path.isdir(path):
-        if os.path.isdir(os.path.join(path, u'.git')):
-            return True
-    return False
+    try:
+        cmd = [ gitCmd, u'-C', path, u'rev-parse', u'--is-inside-work-tree' ]
+        output = subprocess.check_output(cmd)
+        return True
+    except:
+        return False
 
 # GetGitDirPrefix finds the .git/ directory in the given path and returns the path upto the .git/.
 # If the path does not contain a .git/ directory then None is returned.
@@ -830,7 +832,15 @@ def init(isBare=False, path=None):
 
 def open(path):
     if isRepo(path):
-        return repo(path=path)
+        try:
+            cmd = [ gitCmd, u'-C', path, u'rev-parse', u'--git-dir' ]
+            output = subprocess.check_output(cmd)
+            output = output.strip()
+            gitDir = os.path.abspath(output)
+            repoPath = os.path.split(gitDir)[0]
+            return repo(repoPath)
+        except:
+            pass
     return None
 
 def delete(path=None):
