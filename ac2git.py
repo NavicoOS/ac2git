@@ -1940,58 +1940,144 @@ class AccuRev2Git(object):
         return commitHash
 
     def GitRevParse(self, ref):
-	    if ref is not None:
-		    commitHash = self.gitRepo.rev_parse(args=[str(ref)], verify=True)
-		    if commitHash is None:
-		        raise Exception("Failed to parse git revision {ref}. Err: {err}.".format(ref=ref, err=self.gitRepo.lastStderr))
-		    return commitHash.strip()
-	    return None
-	
-	def GitDiff(self, ref1, ref2):
+        if ref is not None:
+            commitHash = self.gitRepo.rev_parse(args=[str(ref)], verify=True)
+            if commitHash is None:
+                raise Exception("Failed to parse git revision {ref}. Err: {err}.".format(ref=ref, err=self.gitRepo.lastStderr))
+            return commitHash.strip()
+        return None
+    
+    def GitDiff(self, ref1, ref2):
         diff = self.gitRepo.diff(refs=[ref1, ref2], stat=True)
         if diff is None:
             raise Exception("Failed to diff {r1} to {r2}! Cmd: {cmd}, Err: {err}".format(r1=ref1, r2=ref2, cmd=' '.join(cmd), err=self.gitRepo.lastStderr))
         return diff.strip()
     
-	def GitMergeBase(self, refs=[], isAncestor=False):
-	    hashes = []
-		for ref in refs:
-		    hashes.append(self.GitRevParse(ref))
-		return self.gitRepo.merge_base(commits=hashes, is_ancestor=isAncestor)
-			
-    def GitMerge(self, targetRef, sourceRef, targetDataCommitHash, updateSourceRef=False):
-	    targetHash = self.GitRevParse(targetRef)
-		sourceHash = self.GitRevParse(sourceRef)
-		if targetHash is None or sourceHash is None:
-		    raise Exception("Failed to parse git revision {r1} or {r2}".format(r1=targetRef, r2=sourceRef))
-		
-		commitHash = None
-		parents = [ self.GetLastCommitHash(branchName=targetRef) ]
-		
-	    isAncestor = self.GitMergeBase(refs=[sourceRef, targetRef], isAncestor=True)
-		if isAncestor == True:
-		    # Fast-forward
-			pass
-		elif isAncestor == False:
-	        diff = self.GitDiff(targetDataCommitHash, sourceRef)
-            if len(diff) == 0:
-		        # Merge
-                parents.append(self.GetLastCommitHash(branchName=sourceRef)) # Make this commit a merge of the last commit on the srcStreamBranch into the branchName.
-                if None in parents:
-                    raise Exception("Invariant error! Either the source hash {sh} or the destination hash {dh} was none!".format(sh=parents[1], dh=parents[0]))
-			else:
-			    updateSourceRef=False
-		else:
-		    # ERROR!!!
-			raise Exception("Couldn't determine the merge-base for {r1}, {r2}".format(r1=targetRef, r2=sourceRef))
-		
-		commitHash = self.CommitTransaction(tr=tr, stream=stream, parents=parents, treeHash=treeHash, branchName=branchName, srcStream=srcStream)
-		
-		if updateSourceRef and commitHash is not None:
-			# This is an option for the merge to update both branches to the latest commit.
-			if self.UpdateAndCheckoutRef(ref=sourceRef, commitHash=commitHash, checkout=False) != True:
-				raise Exception("Failed to update source {branch} to {hash} latest commit.".format(branch=sourceRef, hash=commitHash[:8]))
-            self.config.logger.info("promote {tr}. Merged {src} into {dst} {h}. Fast-forward {src} to {dst} {h}.".format(tr=tr.id, src=srcBranchName, dst=branchName, h=commitHash[:8]))
+    def GitMergeBase(self, refs=[], isAncestor=False):
+        hashes = []
+        for ref in refs:
+            hashes.append(self.GitRevParse(ref))
+        return self.gitRepo.merge_base(commits=hashes, is_ancestor=isAncestor)
+            
+    #def GitMerge(self, targetRef, sourceRef, targetDataCommitHash, updateSourceRef=False):
+    #    targetHash = self.GitRevParse(targetRef)
+    #    sourceHash = self.GitRevParse(sourceRef)
+    #    if targetHash is None or sourceHash is None:
+    #        raise Exception("Failed to parse git revision {r1} or {r2}".format(r1=targetRef, r2=sourceRef))
+    #    
+    #    commitHash = None
+    #    parents = [ self.GetLastCommitHash(branchName=targetRef) ]
+    #    
+    #    isAncestor = self.GitMergeBase(refs=[sourceRef, targetRef], isAncestor=True)
+    #    if isAncestor == True:
+    #        # Fast-forward
+    #        pass
+    #    elif isAncestor == False:
+    #        diff = self.GitDiff(targetDataCommitHash, sourceRef)
+    #        if len(diff) == 0:
+    #            # Merge
+    #            parents.append(self.GetLastCommitHash(branchName=sourceRef)) # Make this commit a merge of the last commit on the srcStreamBranch into the branchName.
+    #            if None in parents:
+    #                raise Exception("Invariant error! Either the source hash {sh} or the destination hash {dh} was none!".format(sh=parents[1], dh=parents[0]))
+    #        else:
+    #            updateSourceRef=False
+    #    else:
+    #        # ERROR!!!
+    #        raise Exception("Couldn't determine the merge-base for {r1}, {r2}".format(r1=targetRef, r2=sourceRef))
+    #    
+    #    commitHash = self.CommitTransaction(tr=tr, stream=stream, parents=parents, treeHash=treeHash, branchName=branchName, srcStream=srcStream)
+    #    
+    #    if updateSourceRef and commitHash is not None:
+    #        # This is an option for the merge to update both branches to the latest commit.
+    #        if self.UpdateAndCheckoutRef(ref=sourceRef, commitHash=commitHash, checkout=False) != True:
+    #            raise Exception("Failed to update source {branch} to {hash} latest commit.".format(branch=sourceRef, hash=commitHash[:8]))
+    #        self.config.logger.info("promote {tr}. Merged {src} into {dst} {h}. Fast-forward {src} to {dst} {h}.".format(tr=tr.id, src=srcBranchName, dst=branchName, h=commitHash[:8]))
+
+    def MergeIntoChildren(tr, streamTree, streamMap, affectedStreamMap, streams, streamNumber=None):
+        srcStream, dstStream = None, None
+        dstStreamName, dstStreamNumber = tr.affectedStream()
+        if dstStreamNumber is not None:
+            dstStream = streams.getStream(dstStreamNumber)
+        srcStreamName, srcStreamNumber = tr.fromStream()
+        if srcStreamNumber is not None:
+            srcStream = streams.getStream(srcStreamNumber)
+
+        if streamNumber is None:
+            for sn in streamTree:
+                if streamTree[sn]["parent"] is None:
+                    stream, branchName, streamData, treeHash = self.UnpackStreamDetails(streamMap=streamMap, affectedStreamMap=affectedStreamMap, streamNumber=streamNumber)
+                    
+                    parents = None # If left as none it will become a cherry-pick.
+                    if treeHash is None:
+                        raise Exception("Couldn't get tree hash from stream {s}".format(s=stream.name))
+
+                    commitHash = self.CommitTransaction(tr=tr, stream=stream, parents=parents, treeHash=treeHash, branchName=branchName, srcStream=srcStream, dstStream=dstStream)
+                    self.config.logger.info("{Type} {tr}. cherry-picked to {branch} {h}. Promote to an untracked parent stream {ps}.".format(Type=tr.Type, tr=tr.id, branch=branchName, h=commitHash[:8], ps=dstStreamName))
+
+                    # Recurse down into children.
+                    MergeIntoChildren(streamTree, sn)
+        else:
+            stream, branchName, streamData, treeHash = self.UnpackStreamDetails(streamMap=streamMap, affectedStreamMap=affectedStreamMap, streamNumber=streamNumber)
+            
+            s = streamTree[streamNumber]
+            for c in s["children"]:
+                if c is None:
+                    raise Exception("Invariant error! Invalid dictionary structure. Data: {d1}, from: {d2}".format(d1=s, d2=streamTree))
+
+                childStream, childBranchName, childStreamData, childTreeHash = self.UnpackStreamDetails(streamMap=streamMap, affectedStreamMap=affectedStreamMap, streamNumber=c)
+
+                lastChildCommitHash = self.GetLastCommitHash(branchName=childBranchName)
+
+                # Do a diff
+                parents = None # Used to decide if we need to perform the commit. If None, don't commit, otherwise we manually set the parent chain.
+                diff = self.GitDiff(branchName, childStreamData["data_hash"])
+                if diff is None:
+                    raise Exception("Failed to diff branch {nBr} to branch {oBr}! Cmd: {cmd}, Err: {err}".format(nBr=childBranchName, oBr=branchName, cmd=' '.join(cmd), err=self.gitRepo.lastStderr))
+                elif len(diff.strip()) == 0:
+                    lastCommitHash = self.GetLastCommitHash(branchName=branchName)
+                    if self.GitMergeBase(refs=[ lastChildCommitHash, lastCommitHash ], isAncestor=True):
+                        # Fast-forward the child branch to here.
+                        if self.UpdateAndCheckoutRef(ref='refs/heads/{branch}'.format(branch=childBranchName), commitHash=lastCommitHash, checkout=False) != True:
+                            raise Exception("Failed to fast-forward {branch} to {hash} (latest commit on {parentBranch}.".format(branch=childBranchName, hash=commitHash[:8], parentBranch=branchName))
+                    else:
+                        # Merge by specifying the parent commits.
+                        parents = [ lastChildCommitHash , lastCommitHash ] # Make this commit a merge of the parent stream into the child stream.
+                        if None in parents:
+                            raise Exception("Invariant error! Either the source hash {sh} or the destination hash {dh} was none!".format(sh=parents[1], dh=parents[0]))
+                        
+                        self.config.logger.info("promote {tr}. Merge {dst} into {b} (affected stream) {h}.".format(tr=tr.id, b=childBranchName, dst=branchName, h=commitHash[:8]))
+                else:
+                    parents = [ lastChildCommitHash ] # Make this commit a cherry-pick with no relationship to the parent stream.
+                    self.config.logger.info("promote {tr}. Cherry-pick {dst} {dstHash} into {b} (affected stream) - diff between {h1} and {h2} was not empty!".format(tr=tr.id, b=childBranchName, dst=branchName, dstHash=commitHash[:8], h1=childStreamData["data_hash"][:8], h2=commitHash[:8]))
+
+                if parents is not None:
+                    commitHash = self.CommitTransaction(tr=tr, stream=childStream, treeHash=childTreeHash, parents=parents, branchName=childBranchName, srcStream=srcStream, dstStream=dstStream)
+                    if commitHash is None:
+                        raise Exception("Failed to commit transaction {trId} to branch {branchName}.".format(trId=tr.id, branchName=childBranchName))
+
+                # Recurse into each child and do the same for its children.
+                MergeIntoChildren(streamTree, c)
+
+    def UnpackStreamDetails(self, streamMap, affectedStreamMap, streamNumber):
+        if streamNumber is not None and not isinstance(streamNumber, int):
+            streamNumber = int(streamNumber)
+
+        # Get the information for the stream on which this transaction had occurred.
+        stream, branchName, streamData, treeHash = None, None, None, None
+        if streamNumber is not None:
+            # Check if the destination stream is a part of our processing.
+            if str(streamNumber) in streamMap:
+                branchName = streamMap[str(streamNumber)]["branch"]
+                streamData = affectedStreamMap[streamNumber]
+                treeHash = streamData["data_tree_hash"]
+                if treeHash is None:
+                    raise Exception("Couldn't get tree hash from stream {s}".format(s=streamName))
+
+            # Get the deserialized stream object.
+            stream = streams.getStream(streamNumber)
+
+        return stream, branchName, streamData, treeHash
+            
 
     # Processes a single transaction whose id is the trId (int) and which has been recorded against the streams outlined in the affectedStreamMap.
     # affectedStreamMap is a dictionary with the following format { <key:stream_num_str>: { "state_hash": <val:state_ref_commit_hash>, "data_hash": <val:data_ref_commit_hash> } }
@@ -2016,18 +2102,7 @@ class AccuRev2Git(object):
         self.config.logger.dbg( "Transaction #{tr} - {Type} by {user} to {stream} at {time}".format(tr=tr.id, Type=tr.Type, time=tr.time, user=tr.user, stream=streamName) )
 
         # Get the information for the stream on which this transaction had occurred.
-        stream, branchName, streamData, treeHash = None, None, None, None
-        if streamNumber is not None:
-            # Check if the destination stream is a part of our processing.
-            if str(streamNumber) in streamMap:
-                branchName = streamMap[str(streamNumber)]["branch"]
-                streamData = affectedStreamMap[streamNumber]
-                treeHash = streamData["data_tree_hash"]
-                if treeHash is None:
-                    raise Exception("Couldn't get tree hash from stream {s}".format(s=streamName))
-
-            # Get the deserialized stream object.
-            stream = streams.getStream(streamNumber)
+        stream, branchName, streamData, treeHash = self.UnpackStreamDetails(streamMap=streamMap, affectedStreamMap=affectedStreamMap, streamNumber=streamNumber)
 
         # Process the transaction based on type.
         if tr.Type in [ "defcomp" ]: # Ignored transactions.
@@ -2173,14 +2248,18 @@ class AccuRev2Git(object):
                 commitHash = None
                 if srcBranchName is not None and branchName is not None:
                     # Do a git diff between the two data commits that we will be merging.
-                    diffCmd = [u'git', u'diff', u'--stat', streamData["data_hash"], lastSrcBranchHash, u'--' ]
-                    diff = self.gitRepo.raw_cmd(diffCmd)
+                    diff = self.GitDiff(streamData["data_hash"], lastSrcBranchHash)
                     if diff is None:
                         raise Exception("Failed to diff new branch {nBr} to old branch {oBr}! Cmd: {cmd}, Err: {err}".format(nBr=branchName, oBr=srcBranchName, cmd=' '.join(cmd), err=self.gitRepo.lastStderr))
-        
-                    if diff is not None and len(diff.strip()) == 0:
-                        # Merge
-                        parents = [ self.GetLastCommitHash(branchName=branchName), lastSrcBranchHash ] # Make this commit a merge of the last commit on the srcStreamBranch into the branchName.
+                    elif len(diff.strip()) == 0:
+                        parents = [ self.GetLastCommitHash(branchName=branchName) ]
+                        isAncestor = self.GitMergeBase(refs=[ lastSrcBranchHash, parents[0] ], isAncestor=True)
+                        if isAncestor is None:
+                            raise Exception("Invariant error! Failed to determine merge base between {c1} and {c2}!".format(c1=lastSrcBranchHash, c2=parents[0]))
+                        elif not isAncestor:
+                            # Merge
+                            parents = [ lastCommitHash, lastSrcBranchHash ] # Make this commit a merge of the last commit on the srcStreamBranch into the branchName.
+
                         if None in parents:
                             raise Exception("Invariant error! Either the source hash {sh} or the destination hash {dh} was none!".format(sh=parents[1], dh=parents[0]))
                         
@@ -2198,56 +2277,9 @@ class AccuRev2Git(object):
                     self.config.logger.info("promote {tr}. Cherry-picked into {dst} {h}. No source stream found.".format(tr=tr.id, dst=branchName, h=commitHash[:8]))
 
                 # Process all affected streams.
-                for affectedStreamNumber in affectedStreamMap:
-                    affectedStreamNumberStr = str(affectedStreamNumber)
-                    if commitHash is not None and affectedStreamNumber == streamNumber:
-                        # If we have a destination branch then we don't want to perform another commit on it...
-                        continue
-                    affectedStream = streams.getStream(affectedStreamNumber)
-                    affectedBranchName = streamMap[affectedStreamNumberStr]["branch"]
-                    affectedStreamData = affectedStreamMap[affectedStreamNumber]
-                    
-                    parents = None # If left as none it will become a cherry-pick.
-
-                    if commitHash is not None: # We have committed to a destination stream.
-                        # Do a diff
-                        diffCmd = [u'git', u'diff', u'--stat', affectedStreamData["data_hash"], commitHash, u'--' ]
-                        diff = self.gitRepo.raw_cmd(diffCmd)
-                        if diff is None:
-                            raise Exception("Failed to diff branch {nBr} to branch {oBr}! Cmd: {cmd}, Err: {err}".format(nBr=affectedBranchName, oBr=branchName, cmd=' '.join(cmd), err=self.gitRepo.lastStderr))
-
-                        if diff is not None and len(diff.strip()) == 0:
-                            # Merge by specifying the parent commits.
-                            parents = [ self.GetLastCommitHash(branchName=affectedBranchName), commitHash ] # Make this commit a merge of the dstStream into the affectedStream.
-                            if None in parents:
-                                raise Exception("Invariant error! Either the source hash {sh} or the destination hash {dh} was none!".format(sh=parents[1], dh=parents[0]))
-                            
-                            # This is probably a fast forward but right now I can't think straight so let's verify it and then make it happen.
-                            # Check if both of the parents of this commit are direct ancestors of each-other. See http://stackoverflow.com/questions/3005392/how-can-i-tell-if-one-commit-is-a-descendant-of-another-commit
-                            cmd = [ 'git', 'merge-base', '--is-ancestor', parents[0], parents[1] ]
-                            mergeBaseHash = self.gitRepo.raw_cmd(cmd)
-                            if mergeBaseHash is None:
-                                # Not in the ancestry so we shouldn't do a fast-forward. Use the old code and do the merge commit.
-                                self.config.logger.info("promote {tr}. Merge {dst} into {b} (affected stream) {h}.".format(tr=tr.id, b=affectedBranchName, dst=branchName, h=commitHash[:8]))
-                            else:
-                                # Yay! The affected branch commit is an ancestor of the new commit so we can just fast-forward the branch!
-                                # This is a manual merge and the affectedBranchName should be fastforwarded to this commit since its contents now matches the parent stream.
-                                if self.UpdateAndCheckoutRef(ref='refs/heads/{branch}'.format(branch=affectedBranchName), commitHash=commitHash, checkout=False) != True:
-                                    raise Exception("Failed to update source {branch} to {hash} latest commit.".format(branch=affectedBranchName, hash=commitHash[:8]))
-                                self.config.logger.info("promote {tr}. Fast-forward {b} to {dst} (affected stream) {h}.".format(tr=tr.id, b=affectedBranchName, dst=branchName, h=commitHash[:8]))
-                                # Now, we don't want to do a commit here so lets skip the rest...
-                                continue
-                        else:
-                            self.config.logger.info("promote {tr}. Cherry-pick {dst} {dstHash} into {b} (affected stream) - diff between {h1} and {h2} was not empty!".format(tr=tr.id, b=affectedBranchName, dst=branchName, dstHash=commitHash[:8], h1=affectedStreamData["data_hash"][:8], h2=commitHash[:8]))
-                    else:
-                        self.config.logger.info("promote {tr}. Cherry-pick into {b}. Destination stream {dst} is not tracked.".format(tr=tr.id, b=affectedBranchName, dst=streamName))
-
-                    affectedTreeHash = affectedStreamData["data_tree_hash"]
-                    if affectedTreeHash is None:
-                        raise Exception("Couldn't get tree hash from stream {s}".format(s=affectedStream.name))
-
-                    affectedCommitHash = self.CommitTransaction(tr=tr, stream=affectedStream, parents=parents, treeHash=affectedTreeHash, branchName=affectedBranchName, srcStream=srcStream, dstStream=stream)
-                    self.config.logger.info("{Type} {tr}. committed to {branch} {h}.".format(Type=tr.Type, tr=tr.id, branch=affectedBranchName, h=affectedCommitHash[:8]))
+                allStreamTree = self.BuildStreamTree(streams=streams)
+                affectedStreamTree = self.PruneStreamTree(streamTree=allStreamTree, keepList=[ sn for sn in affectedStreamMap ])
+                self.MergeIntoChildren(tr=tr, streamTree=affectedStreamTree, streamMap=streamMap, affectedStreamMap=affectedStreamMap, streams=streams, streamNumber=None if commitHash is None else streamNumber)
 
             else:
                 raise Exception("Not yet implemented! Unrecognized stream type {Type}. Stream {name}".format(Type=stream.Type, name=stream.name))
