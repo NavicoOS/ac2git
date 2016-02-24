@@ -1846,7 +1846,6 @@ class AccuRev2Git(object):
         name = name.replace(' ', '_').strip()
         return name
 
-    # TODO: Determine which of these functions is most useful in organizing affected streams into a hierarchy tree!
     def BuildStreamTree(self, streams):
         rv = {}
         for s in streams:
@@ -1893,35 +1892,6 @@ class AccuRev2Git(object):
 
         return rv
 
-    def IsStreamAncestorOf(self, streams, ancestorStreamNumber, streamNumber):
-        if streams is not None and isinstance(ancestorStreamNumber, int) and isinstance(streamNumber, int):
-            # Build a map of streams by number so it is quicker to traverse.
-            sm = {}
-            for s in streams:
-                sm[s.streamNumber] = s
-            # Search for the parent.
-            if streamNumber not in sm or ancestorStreamNumber not in sm:
-                return None
-            p = sm[streamNumber].basisStreamNumber
-            while p is not None and p != ancestorStreamNumber:
-                p = sm[p].basisStreamNumber
-            return (p == ancestorStreamNumber)
-        raise Exception("Invalid arguments to IsAnyParentOf(ancestorStreamNumber={a}, streamNumber={c}, streams={s}).".format(s=streams, p=ancestorStreamNumber, c=streamNumber))
-
-    def GetStreamAndChildren(self, streams, streamNumber):
-        children = None
-        if streams is not None:
-            # Find all the children of the dstStream.
-            children = [ streamNumber ]
-            lastCount = 0
-            while lastCount != len(children):
-                lastCount = len(children)
-                for s in streams:
-                    if s.basisStreamNumber in children and s.streamNumber not in children:
-                        children.append(s.streamNumber)
-        return children
-    # END TODO
-
     def CommitTransaction(self, tr, stream, parents=None, treeHash=None, branchName=None, title=None, srcStream=None, dstStream=None, friendlyMessage=None):
         branchRef = None
         if branchName is not None:
@@ -1959,40 +1929,6 @@ class AccuRev2Git(object):
             hashes.append(self.GitRevParse(ref))
         return self.gitRepo.merge_base(commits=hashes, is_ancestor=isAncestor)
             
-    #def GitMerge(self, targetRef, sourceRef, targetDataCommitHash, updateSourceRef=False):
-    #    targetHash = self.GitRevParse(targetRef)
-    #    sourceHash = self.GitRevParse(sourceRef)
-    #    if targetHash is None or sourceHash is None:
-    #        raise Exception("Failed to parse git revision {r1} or {r2}".format(r1=targetRef, r2=sourceRef))
-    #    
-    #    commitHash = None
-    #    parents = [ self.GetLastCommitHash(branchName=targetRef) ]
-    #    
-    #    isAncestor = self.GitMergeBase(refs=[sourceRef, targetRef], isAncestor=True)
-    #    if isAncestor == True:
-    #        # Fast-forward
-    #        pass
-    #    elif isAncestor == False:
-    #        diff = self.GitDiff(targetDataCommitHash, sourceRef)
-    #        if len(diff) == 0:
-    #            # Merge
-    #            parents.append(self.GetLastCommitHash(branchName=sourceRef)) # Make this commit a merge of the last commit on the srcStreamBranch into the branchName.
-    #            if None in parents:
-    #                raise Exception("Invariant error! Either the source hash {sh} or the destination hash {dh} was none!".format(sh=parents[1], dh=parents[0]))
-    #        else:
-    #            updateSourceRef=False
-    #    else:
-    #        # ERROR!!!
-    #        raise Exception("Couldn't determine the merge-base for {r1}, {r2}".format(r1=targetRef, r2=sourceRef))
-    #    
-    #    commitHash = self.CommitTransaction(tr=tr, stream=stream, parents=parents, treeHash=treeHash, branchName=branchName, srcStream=srcStream)
-    #    
-    #    if updateSourceRef and commitHash is not None:
-    #        # This is an option for the merge to update both branches to the latest commit.
-    #        if self.UpdateAndCheckoutRef(ref=sourceRef, commitHash=commitHash, checkout=False) != True:
-    #            raise Exception("Failed to update source {branch} to {hash} latest commit.".format(branch=sourceRef, hash=commitHash[:8]))
-    #        self.config.logger.info("promote {tr}. Merged {src} into {dst} {h}. Fast-forward {src} to {dst} {h}.".format(tr=tr.id, src=srcBranchName, dst=branchName, h=commitHash[:8]))
-
     def MergeIntoChildren(tr, streamTree, streamMap, affectedStreamMap, streams, streamNumber=None):
         srcStream, dstStream = None, None
         dstStreamName, dstStreamNumber = tr.affectedStream()
