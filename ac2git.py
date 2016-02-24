@@ -1969,6 +1969,10 @@ class AccuRev2Git(object):
                 elif childTreeHash is None:
                     raise Exception("Couldn't get tree hash from stream {s}".format(s=childStream.name))
 
+                if childStream.time is not None and accurev.GetTimestamp(childStream.time) != 0:
+                    self.config.logger.info("{trType} {trId}. Child stream {s} is timelocked to {t}. Skipping affected child stream.".format(trType=tr.Type, trId=tr.id, s=childBranchName, t=childStream.time))
+                    continue
+
                 lastChildCommitHash = self.GetLastCommitHash(branchName=childBranchName)
                 lastCommitHash = self.GetLastCommitHash(branchName=branchName)
 
@@ -1988,10 +1992,10 @@ class AccuRev2Git(object):
                         if None in parents:
                             raise Exception("Invariant error! Either the source hash {sh} or the destination hash {dh} was none!".format(sh=parents[1], dh=parents[0]))
                         
-                        self.config.logger.info("promote {trId}. Merge {dst} into {b} {h} (affected child stream).".format(trId=tr.id, b=childBranchName, dst=branchName, h=lastCommitHash[:8]))
+                        self.config.logger.info("{trType} {trId}. Merge {dst} into {b} {h} (affected child stream).".format(trType=tr.Type, trId=tr.id, b=childBranchName, dst=branchName, h=lastCommitHash[:8]))
                 else:
                     parents = [ lastChildCommitHash ] # Make this commit a cherry-pick with no relationship to the parent stream.
-                    self.config.logger.info("promote {trId}. Cherry-pick {dst} {dstHash} into {b} - diff between {h1} and {dstHash} was not empty! (affected child stream)".format(trId=tr.id, b=childBranchName, dst=branchName, dstHash=lastCommitHash[:8], h1=childStreamData["data_hash"][:8]))
+                    self.config.logger.info("{trType} {trId}. Cherry-pick {dst} {dstHash} into {b} - diff between {h1} and {dstHash} was not empty! (affected child stream)".format(trType=tr.Type, trId=tr.id, b=childBranchName, dst=branchName, dstHash=lastCommitHash[:8], h1=childStreamData["data_hash"][:8]))
 
                 if parents is not None:
                     commitHash = self.CommitTransaction(tr=tr, stream=childStream, treeHash=childTreeHash, parents=parents, branchName=childBranchName, srcStream=srcStream, dstStream=dstStream)
@@ -2083,7 +2087,7 @@ class AccuRev2Git(object):
 
             if self.gitRepo.checkout(branchName=newBranchName, isNewBranch=True) is None:
                 raise Exception("Failed to create new branch {br}. Error: {err}".format(br=newBranchName, err=self.gitRepo.lastStderr))
-            self.config.logger.info("mkstream name={name}, number={num}, basis={basis}, basis-number={basisNumber}".format(name=newStream.name, num=newStream.streamNumber, basis=newStream.basis, basisNumber=newStream.basisStreamNumber))
+            self.config.logger.info("{trType} {trId} name={name}, number={num}, basis={basis}, basis-number={basisNumber}".format(trType=tr.Type, trId=tr.id, name=newStream.name, num=newStream.streamNumber, basis=newStream.basis, basisNumber=newStream.basisStreamNumber))
             # Modify the commit message (the mkstream transaction comments are usually empty so let's make the title useful).
             title = 'Created {name}'.format(name=newBranchName)
             if basisBranchName is not None:
@@ -2133,14 +2137,15 @@ class AccuRev2Git(object):
                         parents = []
 
                 if tr.stream.prevTime != tr.stream.time:
-                    raise Exception("Not yet implemented! Time lock changes are not yet handled! tr: {trId}, time: {t}, prevTime: {pt}".format(trId=tr.id, t=tr.stream.time, pt=tr.stream.prevTime))
                     # Get the commit just before the time on the basis branch.
                     lastCommitHash = self.GetLastCommitHash(branchName=branchName)
                     basisStream, basisBranchName, basisStreamData, basisTreeHash = self.UnpackStreamDetails(streams=streams, streamMap=streamMap, affectedStreamMap=affectedStreamMap, streamNumber=tr.stream.basisStreamNumber)
+                    while basisStream is not None and basisBranchName is None: # Find the first tracked basis stream.
+                        basisStream, basisBranchName, basisStreamData, basisTreeHash = self.UnpackStreamDetails(streams=streams, streamMap=streamMap, affectedStreamMap=affectedStreamMap, streamNumber=basisStream.basisStreamNumber)
+
                     timelockISO8601Str = None
-                    if tr.stream.time is not None:
+                    if tr.stream.time is not None and accurev.GetTimestamp(tr.stream.time) != 0: # A timestamp of 0 indicates that a timelock was removed.
                         timelockISO8601Str = "{datetime}Z".format(datetime=tr.stream.time.isoformat('T')) # The time is in UTC and ISO8601 requires us to specify Z for UTC.
-                        print("timelock string:", timelockISO8601Str, "tr:", tr.id, "branch:", branchName)
                     lastBasisCommitHash = self.GetLastCommitHash(branchName=basisBranchName, before=timelockISO8601Str)
 
                     isAncestor1 = self.GitMergeBase(refs=[ lastBasisCommitHash, lastCommitHash ], isAncestor=True)
@@ -2153,11 +2158,11 @@ class AccuRev2Git(object):
                             raise Exception("Failed to fast-forward {branch} to {hash} (latest commit on {parentBranch}.".format(branch=branchName, hash=lastBasisCommitHash[:8], parentBranch=basisBranchName))
                     else:
                         # Merge by specifying the parent commits.
-                        parents = [ lastChildCommitHash , lastCommitHash ] # Make this commit a merge of the parent stream into the child stream.
+                        parents = [ lastBasisCommitHash , lastCommitHash ] # Make this commit a merge of the parent stream into the child stream.
                         if None in parents:
                             raise Exception("Invariant error! Either the source hash {sh} or the destination hash {dh} was none!".format(sh=parents[1], dh=parents[0]))
                         
-                        self.config.logger.info("promote {trId}. Merge {dst} into {b} (affected stream) {h}.".format(trId=tr.id, b=childBranchName, dst=branchName, h=commitHash[:8]))
+                        self.config.logger.info("{trType} {trId}. Timelock changed. Merging {b} {h} as first parent into {dst}.".format(trType=tr.Type, trId=tr.id, b=basisBranchName, h=lastBasisCommitHash[:8], dst=branchName))
                     parents = [ lastBasisCommitHash, lastCommitHash ] # Make this a merge commit that looks like we branched off from the basis and then merged everything that was left in the stream.
 
                 commitHash = self.CommitTransaction(tr=tr, stream=stream, treeHash=treeHash, parents=parents, branchName=branchName)
@@ -2232,20 +2237,23 @@ class AccuRev2Git(object):
                             raise Exception("Invariant error! Either the source hash {sh} or the destination hash {dh} was none!".format(sh=parents[1], dh=parents[0]))
                         
                         commitHash = self.CommitTransaction(tr=tr, stream=stream, parents=parents, treeHash=treeHash, branchName=branchName, srcStream=srcStream, dstStream=stream)
-                        if srcStream.time is None: # If the stream isn't timelocked move its branch to the parent streams branch head after the merge.
-                            # This is a manual merge and the srcBranchName should be fastforwarded to this commit since its contents now matches the parent stream.
-                            if self.UpdateAndCheckoutRef(ref='refs/heads/{branch}'.format(branch=srcBranchName), commitHash=commitHash, checkout=False) != True:
-                                raise Exception("Failed to update source {branch} to {hash} latest commit.".format(branch=srcBranchName, hash=commitHash[:8]))
+                        # TODO: Does the following make sense? Should we bring up the source stream to the latest commit?
+                        # This is a manual merge and the srcBranchName should be fastforwarded to this commit since its contents now matches the parent stream.
+                        if self.UpdateAndCheckoutRef(ref='refs/heads/{branch}'.format(branch=srcBranchName), commitHash=commitHash, checkout=False) != True:
+                            raise Exception("Failed to update source {branch} to {hash} latest commit.".format(branch=srcBranchName, hash=commitHash[:8]))
                         self.config.logger.info("promote {tr}. Merged {src} into {dst} {h}. Fast-forward {src} to {dst} {h}.".format(tr=tr.id, src=srcBranchName, dst=branchName, h=commitHash[:8]))
                     else:
                         commitHash = self.CommitTransaction(tr=tr, stream=stream, treeHash=treeHash, branchName=branchName, srcStream=None, dstStream=stream)
-                        self.config.logger.info("promote {tr}. Cherry-picked {src} into {dst} {h}. Diff was not empty.".format(tr=tr.id, src=srcBranchName, dst=branchName, h=commitHash[:8]))
+                        msg = "promote {tr}. Cherry-picked {src} into {dst} {h}.".format(tr=tr.id, src=srcBranchName, dst=branchName, h=commitHash[:8])
+                        if len(diff.strip()) == 0:
+                            msg = "{0} Diff was not empty.".format(msg)
+                        self.config.logger.info(msg)
                 elif branchName is not None:
                     # Cherry pick onto destination and merge into all the children.
                     commitHash = self.CommitTransaction(tr=tr, stream=stream, treeHash=treeHash, branchName=branchName, srcStream=None, dstStream=stream)
-                    self.config.logger.info("promote {tr}. Cherry-picked into {dst} {h}. Accurev 'from stream' information missing.".format(tr=tr.id, dst=branchName, h=commitHash[:8]))
+                    self.config.logger.info("{trType} {tr}. Cherry-picked into {dst} {h}. Accurev 'from stream' information missing.".format(trType=tr.Type, tr=tr.id, dst=branchName, h=commitHash[:8]))
                 else:
-                    self.config.logger.info("promote {tr}. Destination stream {dst} is not tracked.".format(tr=tr.id, dst=streamName))
+                    self.config.logger.info("{trType} {tr}. Destination stream {dst} is not tracked.".format(trType=tr.Type, tr=tr.id, dst=streamName))
 
                 # Process all affected streams.
                 allStreamTree = self.BuildStreamTree(streams=streams.streams)
