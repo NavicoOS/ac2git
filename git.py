@@ -793,51 +793,51 @@ class repo(object):
             
             return self._docmd(cmd=cmd, ref=ref)
         
-        def diff(self, refs=[], files=[], stat=False):
-            cmd = [u'git', u'diff' ]
-            if stat:
-                cmd.append(u'--stat')
-            cmd.extend(refs)
-            cmd.append(u'--')
-            cmd.extend(files)
-            return self._docmd(cmd=cmd)
+    def diff(self, refs=[], files=[], stat=False):
+        cmd = [u'git', u'diff' ]
+        if stat:
+            cmd.append(u'--stat')
+        cmd.extend(refs)
+        cmd.append(u'--')
+        cmd.extend(files)
+        return self._docmd(cmd=cmd)
+    
+    def merge_base(self, commits=[], all=False, octopus=False, is_ancestor=False, independent=False, fork_point=False, ref=None):
+        cmd = [u'git', u'merge-base']
+        if all:
+            cmd.append(u'--all')
+        elif octopus:
+            cmd.append(u'--octopus')
+        elif is_ancestor:
+            cmd.append(u'--is-ancestor')
+            if len(commits) != 2:
+                raise Exception("git merge-base --is-ancestor <commit> <commit>, only accepts two commits!")
+        elif independent:
+            cmd.append(u'--independent')
+        elif fork_point:
+            if ref is None:
+                raise Exception("Must provide ref to git merge-base when specifying fork_point=True!")
+            elif len(commits) > 1:
+                raise Exception("Only one, optional, commit can be provided to git merge-base when fork_point=True is specified!")
+            cmd.extend(['--fork-point', ref])
+        cmd.extend(commits)
         
-        def merge_base(self, commits=[], all=False, octopus=False, is_ancestor=False, independent=False, fork_point=False, ref=None):
-            cmd = [u'git', u'merge-base']
-            if all:
-                cmd.append(u'--all')
-            elif octopus:
-                cmd.append(u'--octopus')
-            elif is_ancestor:
-                cmd.append(u'--is-ancestor')
-                if len(commits) != 2:
-                    raise Exception("git merge-base --is-ancestor <commit> <commit>, only accepts two commits!")
-            elif independent:
-                cmd.append(u'--independent')
-            elif fork_point:
-                if ref is None:
-                    raise Exception("Must provide ref to git merge-base when specifying fork_point=True!")
-                elif len(commits) > 1:
-                    raise Exception("Only one, optional, commit can be provided to git merge-base when fork_point=True is specified!")
-                cmd.extend(['--fork-point', ref])
-            cmd.extend(commits)
-            
-            output = self._docmd(cmd=cmd)
-            if is_ancestor:
-                if self.lastReturnCode == 0:
-                    return True
-                elif self.lastReturnCode == 1:
-                    return False
-                else:
-                    return None
-            return output
-        
-        def rev_parse(self, args=[], verify=False):
-            cmd = [u'git', u'rev-parse']
-            if verify:
-                cmd.append(u'--verify')
-            cmd.extend(args)
-            return self._docmd(cmd=cmd)
+        output = self._docmd(cmd=cmd)
+        if is_ancestor:
+            if self.lastReturnCode == 0:
+                return True
+            elif self.lastReturnCode == 1:
+                return False
+            else:
+                return None
+        return output
+    
+    def rev_parse(self, args=[], verify=False):
+        cmd = [u'git', u'rev-parse']
+        if verify:
+            cmd.append(u'--verify')
+        cmd.extend(args)
+        return self._docmd(cmd=cmd)
         
 def isRepo(path=None):
     try:
