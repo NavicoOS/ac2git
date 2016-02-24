@@ -1864,7 +1864,7 @@ class AccuRev2Git(object):
             if keepList is None:
                 return streamTree
             elif len(keepList) == 1:
-                return { "parent": None, "children": [], "self": streamTree[keepList[0]]["self"] }
+                return { keepList[0]: { "parent": None, "children": [], "self": streamTree[keepList[0]]["self"] } }
             rv = streamTree.copy()
             # Remove all the streams that are not in the keepList and take their children and add them to the parent stream.
             for s in streamTree:
@@ -1929,7 +1929,7 @@ class AccuRev2Git(object):
             hashes.append(self.GitRevParse(ref))
         return self.gitRepo.merge_base(commits=hashes, is_ancestor=isAncestor)
             
-    def MergeIntoChildren(tr, streamTree, streamMap, affectedStreamMap, streams, streamNumber=None):
+    def MergeIntoChildren(self, tr, streamTree, streamMap, affectedStreamMap, streams, streamNumber=None):
         srcStream, dstStream = None, None
         dstStreamName, dstStreamNumber = tr.affectedStream()
         if dstStreamNumber is not None:
@@ -1941,26 +1941,26 @@ class AccuRev2Git(object):
         if streamNumber is None:
             for sn in streamTree:
                 if streamTree[sn]["parent"] is None:
-                    stream, branchName, streamData, treeHash = self.UnpackStreamDetails(streamMap=streamMap, affectedStreamMap=affectedStreamMap, streamNumber=streamNumber)
+                    stream, branchName, streamData, treeHash = self.UnpackStreamDetails(streams=streams, streamMap=streamMap, affectedStreamMap=affectedStreamMap, streamNumber=streamNumber)
                     
                     parents = None # If left as none it will become a cherry-pick.
                     if treeHash is None:
                         raise Exception("Couldn't get tree hash from stream {s}".format(s=stream.name))
 
                     commitHash = self.CommitTransaction(tr=tr, stream=stream, parents=parents, treeHash=treeHash, branchName=branchName, srcStream=srcStream, dstStream=dstStream)
-                    self.config.logger.info("{Type} {tr}. cherry-picked to {branch} {h}. Promote to an untracked parent stream {ps}.".format(Type=tr.Type, tr=tr.id, branch=branchName, h=commitHash[:8], ps=dstStreamName))
+                    self.config.logger.info("{Type} {trId}. cherry-picked to {branch} {h}. Promote to an untracked parent stream {ps}.".format(Type=tr.Type, trId=tr.id, branch=branchName, h=commitHash[:8], ps=dstStreamName))
 
                     # Recurse down into children.
-                    MergeIntoChildren(streamTree, sn)
+                    MergeIntoChildren(tr=tr, streamTree=streamTree, streamMap=streamMap, affectedStreamMap=affectedStreamMap, streams=streams, streamNumber=sn)
         else:
-            stream, branchName, streamData, treeHash = self.UnpackStreamDetails(streamMap=streamMap, affectedStreamMap=affectedStreamMap, streamNumber=streamNumber)
+            stream, branchName, streamData, treeHash = self.UnpackStreamDetails(streams=streams, streamMap=streamMap, affectedStreamMap=affectedStreamMap, streamNumber=streamNumber)
             
             s = streamTree[streamNumber]
             for c in s["children"]:
                 if c is None:
                     raise Exception("Invariant error! Invalid dictionary structure. Data: {d1}, from: {d2}".format(d1=s, d2=streamTree))
 
-                childStream, childBranchName, childStreamData, childTreeHash = self.UnpackStreamDetails(streamMap=streamMap, affectedStreamMap=affectedStreamMap, streamNumber=c)
+                childStream, childBranchName, childStreamData, childTreeHash = self.UnpackStreamDetails(streams=streams, streamMap=streamMap, affectedStreamMap=affectedStreamMap, streamNumber=c)
 
                 lastChildCommitHash = self.GetLastCommitHash(branchName=childBranchName)
 
@@ -1981,10 +1981,10 @@ class AccuRev2Git(object):
                         if None in parents:
                             raise Exception("Invariant error! Either the source hash {sh} or the destination hash {dh} was none!".format(sh=parents[1], dh=parents[0]))
                         
-                        self.config.logger.info("promote {tr}. Merge {dst} into {b} (affected stream) {h}.".format(tr=tr.id, b=childBranchName, dst=branchName, h=commitHash[:8]))
+                        self.config.logger.info("promote {trId}. Merge {dst} into {b} (affected stream) {h}.".format(trId=tr.id, b=childBranchName, dst=branchName, h=commitHash[:8]))
                 else:
                     parents = [ lastChildCommitHash ] # Make this commit a cherry-pick with no relationship to the parent stream.
-                    self.config.logger.info("promote {tr}. Cherry-pick {dst} {dstHash} into {b} (affected stream) - diff between {h1} and {h2} was not empty!".format(tr=tr.id, b=childBranchName, dst=branchName, dstHash=commitHash[:8], h1=childStreamData["data_hash"][:8], h2=commitHash[:8]))
+                    self.config.logger.info("promote {trId}. Cherry-pick {dst} {dstHash} into {b} (affected stream) - diff between {h1} and {h2} was not empty!".format(trId=tr.id, b=childBranchName, dst=branchName, dstHash=commitHash[:8], h1=childStreamData["data_hash"][:8], h2=commitHash[:8]))
 
                 if parents is not None:
                     commitHash = self.CommitTransaction(tr=tr, stream=childStream, treeHash=childTreeHash, parents=parents, branchName=childBranchName, srcStream=srcStream, dstStream=dstStream)
@@ -1992,9 +1992,9 @@ class AccuRev2Git(object):
                         raise Exception("Failed to commit transaction {trId} to branch {branchName}.".format(trId=tr.id, branchName=childBranchName))
 
                 # Recurse into each child and do the same for its children.
-                MergeIntoChildren(streamTree, c)
+                MergeIntoChildren(tr=tr, streamTree=streamTree, streamMap=streamMap, affectedStreamMap=affectedStreamMap, streams=streams, streamNumber=c)
 
-    def UnpackStreamDetails(self, streamMap, affectedStreamMap, streamNumber):
+    def UnpackStreamDetails(self, streams, streamMap, affectedStreamMap, streamNumber):
         if streamNumber is not None and not isinstance(streamNumber, int):
             streamNumber = int(streamNumber)
 
@@ -2038,7 +2038,7 @@ class AccuRev2Git(object):
         self.config.logger.dbg( "Transaction #{tr} - {Type} by {user} to {stream} at {time}".format(tr=tr.id, Type=tr.Type, time=tr.time, user=tr.user, stream=streamName) )
 
         # Get the information for the stream on which this transaction had occurred.
-        stream, branchName, streamData, treeHash = self.UnpackStreamDetails(streamMap=streamMap, affectedStreamMap=affectedStreamMap, streamNumber=streamNumber)
+        stream, branchName, streamData, treeHash = self.UnpackStreamDetails(streams=streams, streamMap=streamMap, affectedStreamMap=affectedStreamMap, streamNumber=streamNumber)
 
         # Process the transaction based on type.
         if tr.Type in [ "defcomp" ]: # Ignored transactions.
@@ -2123,6 +2123,9 @@ class AccuRev2Git(object):
                     else:
                         # We want to make a new orphaned branch and potentially save the data that has not been merged into the HEAD.
                         parents = []
+
+                if tr.stream.prevTime != tr.stream.time:
+                    raise Exception("Not yet implemented! Time lock changes are not yet handled! tr: {trId}, time: {t}, prevTime: {pt}".format(trId=tr.id, t=tr.stream.time, pt=tr.stream.prevTime))
 
                 commitHash = self.CommitTransaction(tr=tr, stream=stream, treeHash=treeHash, parents=parents, branchName=branchName)
                 self.config.logger.info("{Type} {tr}. committed to {branch} {h}.".format(Type=tr.Type, tr=tr.id, branch=branchName, h=commitHash[:8]))
@@ -2213,9 +2216,9 @@ class AccuRev2Git(object):
                     self.config.logger.info("promote {tr}. Cherry-picked into {dst} {h}. No source stream found.".format(tr=tr.id, dst=branchName, h=commitHash[:8]))
 
                 # Process all affected streams.
-                allStreamTree = self.BuildStreamTree(streams=streams)
+                allStreamTree = self.BuildStreamTree(streams=streams.streams)
                 affectedStreamTree = self.PruneStreamTree(streamTree=allStreamTree, keepList=[ sn for sn in affectedStreamMap ])
-                self.MergeIntoChildren(tr=tr, streamTree=affectedStreamTree, streamMap=streamMap, affectedStreamMap=affectedStreamMap, streams=streams, streamNumber=None if commitHash is None else streamNumber)
+                self.MergeIntoChildren(tr=tr, streamTree=affectedStreamTree, streamMap=streamMap, affectedStreamMap=affectedStreamMap, streams=streams, streamNumber=(None if commitHash is None else streamNumber))
 
             else:
                 raise Exception("Not yet implemented! Unrecognized stream type {Type}. Stream {name}".format(Type=stream.Type, name=stream.name))
