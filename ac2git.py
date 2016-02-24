@@ -515,33 +515,30 @@ class AccuRev2Git(object):
 
         return hist, histXml
 
-    def GetLastCommitHash(self, branchName=None, ref=None):
+    def GetLastCommitHash(self, branchName=None, ref=None, before=None):
         cmd = []
         commitHash = None
         if ref is not None:
-            for i in range(0, AccuRev2Git.commandFailureRetryCount):
-                cmd = [ u'git', u'show-ref', u'--hash', ref ]
-                commitHash = self.gitRepo.raw_cmd(cmd)
-                if commitHash is None or len(commitHash.strip()) > 0:
-                    break
+            cmd = [ u'git', u'show-ref', u'--hash', ref ]
         else:
-            for i in range(0, AccuRev2Git.commandFailureRetryCount):
-                cmd = [u'git', u'log', u'-1', u'--format=format:%H']
-                if branchName is not None:
-                    cmd.append(branchName)
-                commitHash = self.gitRepo.raw_cmd(cmd)
-                if commitHash is not None:
-                    commitHash = commitHash.strip()
-                    if len(commitHash) == 0:
-                        commitHash = None
-                    else:
-                        break
-                time.sleep(AccuRev2Git.commandFailureSleepSeconds)
+            cmd = [u'git', u'log', u'-1', u'--format=format:%H']
+            if before is not None:
+                cmd.append(u'--before={before}'.format(before=before))
+            if branchName is not None:
+                cmd.append(branchName)
+
+        for i in range(0, AccuRev2Git.commandFailureRetryCount):
+            commitHash = self.gitRepo.raw_cmd(cmd)
+            if commitHash is not None:
+                commitHash = commitHash.strip()
+                if len(commitHash) == 0:
+                    commitHash = None
+                else:
+                    break
+            time.sleep(AccuRev2Git.commandFailureSleepSeconds)
 
         if commitHash is None:
             self.config.logger.error("Failed to retrieve last git commit hash. Command `{0}` failed.".format(' '.join(cmd)))
-        else:
-            commitHash = commitHash.strip()
 
         return commitHash
 
@@ -2126,6 +2123,31 @@ class AccuRev2Git(object):
 
                 if tr.stream.prevTime != tr.stream.time:
                     raise Exception("Not yet implemented! Time lock changes are not yet handled! tr: {trId}, time: {t}, prevTime: {pt}".format(trId=tr.id, t=tr.stream.time, pt=tr.stream.prevTime))
+                    # Get the commit just before the time on the basis branch.
+                    lastCommitHash = self.GetLastCommitHash(branchName=branchName)
+                    basisStream, basisBranchName, basisStreamData, basisTreeHash = self.UnpackStreamDetails(streams=streams, streamMap=streamMap, affectedStreamMap=affectedStreamMap, streamNumber=tr.stream.basisStreamNumber)
+                    timelockISO8601Str = None
+                    if tr.stream.time is not None:
+                        timelockISO8601Str = "{datetime}Z".format(datetime=tr.stream.time.isoformat('T')) # The time is in UTC and ISO8601 requires us to specify Z for UTC.
+                        print("timelock string:", timelockISO8601Str, "tr:", tr.id, "branch:", branchName)
+                    lastBasisCommitHash = self.GetLastCommitHash(branchName=basisBranchName, before=timelockISO8601Str)
+
+                    isAncestor1 = self.GitMergeBase(refs=[ lastBasisCommitHash, lastCommitHash ], isAncestor=True)
+                    isAncestor2 = self.GitMergeBase(refs=[ lastCommitHash, lastBasisCommitHash ], isAncestor=True)
+                    if isAncestor1 is None or isAncestor2 is None:
+                        raise Exception("Error! The git merge-base command failed!")
+                    elif isAncestor1 or isAncestor2:
+                        # Fast-forward the timelocked stream branch to the correct commit.
+                        if self.UpdateAndCheckoutRef(ref='refs/heads/{branch}'.format(branch=branchName), commitHash=lastBasisCommitHash, checkout=False) != True:
+                            raise Exception("Failed to fast-forward {branch} to {hash} (latest commit on {parentBranch}.".format(branch=branchName, hash=lastBasisCommitHash[:8], parentBranch=basisBranchName))
+                    else:
+                        # Merge by specifying the parent commits.
+                        parents = [ lastChildCommitHash , lastCommitHash ] # Make this commit a merge of the parent stream into the child stream.
+                        if None in parents:
+                            raise Exception("Invariant error! Either the source hash {sh} or the destination hash {dh} was none!".format(sh=parents[1], dh=parents[0]))
+                        
+                        self.config.logger.info("promote {trId}. Merge {dst} into {b} (affected stream) {h}.".format(trId=tr.id, b=childBranchName, dst=branchName, h=commitHash[:8]))
+                    parents = [ lastBasisCommitHash, lastCommitHash ] # Make this a merge commit that looks like we branched off from the basis and then merged everything that was left in the stream.
 
                 commitHash = self.CommitTransaction(tr=tr, stream=stream, treeHash=treeHash, parents=parents, branchName=branchName)
                 self.config.logger.info("{Type} {tr}. committed to {branch} {h}.".format(Type=tr.Type, tr=tr.id, branch=branchName, h=commitHash[:8]))
