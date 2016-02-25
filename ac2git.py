@@ -2267,10 +2267,10 @@ class AccuRev2Git(object):
                         # This is a manual merge and the srcBranchName should be fastforwarded to this commit since its contents now matches the parent stream.
                         if self.UpdateAndCheckoutRef(ref='refs/heads/{branch}'.format(branch=srcBranchName), commitHash=commitHash, checkout=False) != True:
                             raise Exception("Failed to update source {branch} to {hash} latest commit.".format(branch=srcBranchName, hash=commitHash[:8]))
-                        self.config.logger.info("promote {tr}. Merged {src} into {dst} {h}. Fast-forward {src} to {dst} {h}.".format(tr=tr.id, src=srcBranchName, dst=branchName, h=commitHash[:8]))
+                        self.config.logger.info("{trType} {tr}. Merged {src} into {dst} {h}. Fast-forward {src} to {dst} {h}.".format(tr=tr.id, trType=tr.Type, src=srcBranchName, dst=branchName, h=commitHash[:8]))
                     else:
                         commitHash = self.CommitTransaction(tr=tr, stream=stream, treeHash=treeHash, branchName=branchName, srcStream=None, dstStream=stream)
-                        msg = "promote {tr}. Cherry-picked {src} into {dst} {h}.".format(tr=tr.id, src=srcBranchName, dst=branchName, h=commitHash[:8])
+                        msg = "{trType} {tr}. Cherry-picked {src} into {dst} {h}.".format(tr=tr.id, trType=tr.Type, src=srcBranchName, dst=branchName, h=commitHash[:8])
                         if len(diff.strip()) == 0:
                             msg = "{0} Diff was not empty.".format(msg)
                         self.config.logger.info(msg)
