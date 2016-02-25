@@ -1809,8 +1809,12 @@ class AccuRev2Git(object):
             if stream.prevTime is not None:
                 suffixList.append( ('{linePrefix}-prev-timelock:'.format(linePrefix=linePrefix), '{prevTime} (UTC)'.format(time=stream.prevTime)) )
 
-    def GenerateCommitMessageSuffix(self, transaction, stream=None, dstStream=None, srcStream=None):
+    def GenerateCommitMessageSuffix(self, transaction, stream=None, dstStream=None, srcStream=None, friendlyMessage=None):
         suffixList = []
+
+        if friendlyMessage is not None:
+            suffixList.append(friendlyMessage)
+
         suffixList.append( ('Accurev-transaction:', '{id} (type: {Type})'.format(id=transaction.id, Type=transaction.Type)) )
         if stream is not None:
             self.AppendCommitMessageSuffixStreamInfo(suffixList=suffixList, linePrefix='Accurev-stream', stream=stream)
@@ -1845,11 +1849,9 @@ class AccuRev2Git(object):
                 messageSections.append(title)
             if transaction.comment is not None:
                 messageSections.append(transaction.comment)
-            if friendlyMessage is not None:
-                messageSections.append(friendlyMessage)
             
             notes = None
-            suffix = self.GenerateCommitMessageSuffix(transaction=transaction, stream=stream, dstStream=dstStream, srcStream=srcStream)
+            suffix = self.GenerateCommitMessageSuffix(transaction=transaction, stream=stream, dstStream=dstStream, srcStream=srcStream, friendlyMessage=friendlyMessage)
             if suffix is not None:
                 if style == "normal":
                     messageSections.append(suffix)
