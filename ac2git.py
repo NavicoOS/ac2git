@@ -1458,8 +1458,8 @@ class AccuRev2Git(object):
                         self.config.logger.info(pushOutput)
                     except subprocess.CalledProcessError as e:
                         self.config.logger.error("Push to '{remote}' failed!".format(remote=remoteName))
-                        self.config.logger.dbg("'{cmd}', returned {returncode} and failed with:".format(cmd="' '".join(e.cmd), returncode=e.returncode))
-                        self.config.logger.dbg("{output}".format(output=e.output.decode('utf-8')))
+                        self.config.logger.error("'{cmd}', returned {returncode} and failed with:".format(cmd="' '".join(e.cmd), returncode=e.returncode))
+                        self.config.logger.error("{output}".format(output=e.output.decode('utf-8')))
         
         if self.config.accurev.commandCacheFilename is not None:
             accurev.ext.disable_command_cache()
