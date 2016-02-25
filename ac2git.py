@@ -2085,22 +2085,25 @@ class AccuRev2Git(object):
             if newBranchName is None:
                 raise Exception("Failed to retrieve branch name for stream {s} (id: {id})".format(s=newStream.name, id=newStream.streamNumber))
 
-            if self.gitRepo.checkout(branchName=newBranchName, isNewBranch=True) is None:
-                raise Exception("Failed to create new branch {br}. Error: {err}".format(br=newBranchName, err=self.gitRepo.lastStderr))
-            self.config.logger.info("{trType} {trId} name={name}, number={num}, basis={basis}, basis-number={basisNumber}".format(trType=tr.Type, trId=tr.id, name=newStream.name, num=newStream.streamNumber, basis=newStream.basis, basisNumber=newStream.basisStreamNumber))
             # Modify the commit message (the mkstream transaction comments are usually empty so let's make the title useful).
             title = 'Created {name}'.format(name=newBranchName)
             if basisBranchName is not None:
-                title = '{title} based on {basis}'.format(title=title, basis=basisBranchName)
+                title = 'Created {title} based on {basis}'.format(title=title, basis=basisBranchName)
             commitMessage, notes = self.GenerateCommitMessage(transaction=tr, stream=newStream, title=title)
             if arbitraryStreamData["data_tree_hash"] is None:
                 raise Exception("Couldn't get tree hash from stream {s}".format(s=arbitraryStreamData))
-            commitHash = self.Commit(transaction=tr, allowEmptyCommit=True, messageOverride=commitMessage, parents=parents, treeHash=arbitraryStreamData["data_tree_hash"])
+            commitHash = self.Commit(transaction=tr, allowEmptyCommit=True, messageOverride=commitMessage, parents=parents, treeHash=arbitraryStreamData["data_tree_hash"], ref='refs/heads/{branch}'.format(branch=newBranchName), checkout=False)
             if commitHash is None:
-                raise Exception("Failed to add empty mkstream commit")
+                raise Exception("Failed to create new branch {br}. Error: {err}".format(br=newBranchName, err=self.gitRepo.lastStderr))
             if notes is not None and self.AddNote(transaction=tr, commitHash=commitHash, ref=AccuRev2Git.gitNotesRef_accurevInfo, note=notes) is None:
                 self.config.logger.error("Failed to add note for commit {h} (transaction {trId}) to {br}.".format(trId=tr.id, br=branchName, h=commitHash))
                 return None
+            msg = "{trType} {trId}. Created branch {branch} {h} for stream {name} (id: {num}).".format(trType=tr.Type, trId=tr.id, branch=newBranchName, h=commitHash[:8], name=newStream.name, num=newStream.streamNumber)
+            if basisBranchName is not None:
+                msg = "{msg} Branched from {basisBranch} {h}.".format(msg=msg, basisBranch=basisBranchName, h=parents[0][:8])
+            else:
+                msg = "{msg} Orphaned branch.".format(msg=msg)
+            self.config.logger.info(msg)
         
         elif tr.Type == "chstream":
             if branchName is not None:
