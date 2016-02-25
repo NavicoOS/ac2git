@@ -1488,9 +1488,28 @@ class AccuRev2Git(object):
 
     # Tries to get the stream name from the data that we have stored in git.
     def GetStreamByName(self, depot, streamName):
-        refsPrefix = self.GetStreamRefsNamespace(depot)
+        depot = self.GetDepot(depot)
 
-        refList = self.GetAllKnownStreamRefs(depot)
+        streamNamesRefspec = u'{refsNS}cache/depots/{depotNumber}/stream_names'.format(refsNS=AccuRev2Git.gitRefsNamespace, depotNumber=depot.number)
+        streamNames = {} # This is so we cache the stream name to stream number mapping which can take about 10 seconds to compute in a large-ish repo...
+        streamNamesText = self.ReadFileRef(ref=streamNamesRefspec)
+        if streamNamesText is not None:
+            streamNames = json.loads(streamNamesText)
+
+        if streamName in streamNames:
+            commitHash = streamNames[streamName]
+            if commitHash is not None:
+                streamsXml, streams = self.GetStreamsInfo(ref=commitHash)
+                for s in streams.streams:
+                    if s.name == streamName:
+                        self.config.logger.dbg("Loaded cached stream '{name}' by name.".format(name=streamName))
+                        return s # Found it!
+
+        self.config.logger.dbg("Searching for stream '{name}' by name.".format(name=streamName))
+
+        refsPrefix = self.GetStreamRefsNamespace(depot.number)
+
+        refList = self.GetAllKnownStreamRefs(depot.number)
         if refList is None:
             refList = []
         # The stream with the lowest number is most likely to have a transaction with a streams.xml that contains
@@ -1520,6 +1539,8 @@ class AccuRev2Git(object):
                     streamsXml, streams = self.GetStreamsInfo(ref=commitHash)
                     for s in streams.streams:
                         if s.name == streamName:
+                            streamNames[streamName] = commitHash # Write the commit hash where we found the stream name in the cache.
+                            self.WriteFileRef(ref=streamNamesRefspec, text=json.dumps(streamNames)) # Do it for each stream since this is cheaper than searching.
                             return s
                     raise Exception("Invariant error! We successfully found that the hash {h} on ref {r} mentions the stream {sn} but couldn't match it?!".format(h=commitHash, r=ref, sn=streamName))
         return None
@@ -2333,7 +2354,6 @@ class AccuRev2Git(object):
 
         # Git refspec for the state ref in which we will store a blob.
         stateRefspec = u'{refsNS}state/depots/{depotNumber}/transactions'.format(refsNS=AccuRev2Git.gitRefsNamespace, depotNumber=depot.number)
-        streamNamesRefspec = u'{refsNS}state/depots/{depotNumber}/stream_names'.format(refsNS=AccuRev2Git.gitRefsNamespace, depotNumber=depot.number)
 
         streamMap = None
 
@@ -2377,28 +2397,18 @@ class AccuRev2Git(object):
                 self.config.logger.info("Warning: branch {branch} is missing from the repo!".format(branch=missingBranch))
 
         else:
-            streamNames = {} # This is so we cache the stream name to stream number mapping which can take about 10 seconds to compute in a large-ish repo...
-            streamNamesText = self.ReadFileRef(ref=streamNamesRefspec)
-            if streamNamesText is not None:
-                streamNames = json.loads(streamNamesText)
-
             self.config.logger.info("No last state in {ref}, starting new conversion.".format(ref=stateRefspec))
             streamMap = OrderedDict()
             for configStream in self.config.accurev.streamMap:
                 branchName = self.config.accurev.streamMap[configStream]
 
-                if configStream not in streamNames:
-                    self.config.logger.info("Searching for stream '{name}' (branch '{branch}') by name.".format(name=configStream, branch=branchName))
-                    stream = self.GetStreamByName(depot.number, configStream)
-                    if stream is None:
-                        raise Exception("Failed to get stream information for {s}".format(s=configStream))
-                    streamNames[configStream] = stream.streamNumber
-                    self.WriteFileRef(ref=streamNamesRefspec, text=json.dumps(streamNames)) # Do it for each stream since this is cheaper than searching.
-                else:
-                    self.config.logger.info("Loaded cached stream '{name}' (branch '{branch}').".format(name=configStream, branch=branchName))
+                self.config.logger.info("Getting stream information for stream '{name}' which will be committed to branch '{branch}'.".format(name=configStream, branch=branchName))
+                stream = self.GetStreamByName(depot.number, configStream)
+                if stream is None:
+                    raise Exception("Failed to get stream information for {s}".format(s=configStream))
                 # Since we will be storing this state in JSON we need to make sure that we don't have
                 # numeric indices for dictionaries...
-                streamMap[str(streamNames[configStream])] = { "stream": configStream, "branch": branchName }
+                streamMap[str(stream.streamNumber)] = { "stream": configStream, "branch": branchName }
 
             # Default state
             state = { "depot_number": depot.number,
