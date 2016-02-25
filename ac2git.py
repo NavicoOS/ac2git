@@ -700,11 +700,16 @@ class AccuRev2Git(object):
 
     def GetStreamMap(self):
         streamMap = self.config.accurev.streamMap
-        if streamMap is None or len(streamMap) == 0:
+
+        if streamMap is None:
+            streamMap = OrderedDict()
+
+        if len(streamMap) == 0:
             # When the stream map is missing or empty we intend to process all streams
             streams = accurev.show.streams(depot=self.config.accurev.depot)
             for stream in streams.streams:
-                streamMap[stream.name] = stream.name
+                streamMap[stream.name] = self.SanitizeBranchName(stream.name)
+
         return streamMap
 
     def FindNextChangeTransaction(self, streamName, startTrNumber, endTrNumber, deepHist=None):
@@ -2724,7 +2729,7 @@ def DumpExampleConfigFile(outputFilename):
     <git repo-path="/put/the/git/repo/here" message-style="normal" >  <!-- The system path where you want the git repo to be populated. Note: this folder should already exist. 
                                                                            The message-style attribute can either be "normal", "clean" or "notes". When set to "normal" accurev transaction information is included
                                                                            at the end (in the footer) of each commit message. When set to "clean" the transaction comment is the commit message without any
-                                                                           additional information. When set to "notes" a note is added to each commit in the "accurev" namespace (to show them use `git log --notes=accurev`),
+                                                                           additional information. When set to "notes" a note is added to each commit in the "accurev" namespace (to show them use `git log -notes=accurev`),
                                                                            with the same accurev information that would have been shown in the commit message footer in the "normal" mode.
                                                                       -->
         <remote name="origin" url="https://github.com/orao/ac2git.git" push-url="https://github.com/orao/ac2git.git" /> <!-- Optional: Specifies the remote to which the converted
