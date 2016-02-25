@@ -2376,6 +2376,7 @@ class AccuRev2Git(object):
                 self.config.logger.info("Warning: branch {branch} is missing from the repo!".format(branch=missingBranch))
 
         else:
+            self.config.logger.info("No last state in {ref}, starting new conversion.".format(ref=stateRefspec))
             streamMap = OrderedDict()
             for configStream in self.config.accurev.streamMap:
                 branchName = self.config.accurev.streamMap[configStream]
@@ -2401,10 +2402,12 @@ class AccuRev2Git(object):
             stateRef, dataRef, hwmRef = self.GetStreamRefs(depot=state["depot_number"], streamNumber=streamNumber)
 
             # Get the state ref's known transactions list.
+            self.config.logger.info("Getting transaction to info commit mapping for stream number {s}. Ref: {ref}".format(s=streamNumber, ref=stateRef))
             stateMap = self.GetRefMap(ref=stateRef, mapType="tr2commit")
             if stateMap is None:
                 raise Exception("Failed to retrieve the state map for stream {s} (id: {id}).".format(s=state["stream_map"][streamNumberStr]["stream"], id=streamNumber))
 
+            self.config.logger.info("Merging transaction to info commit mapping for stream number {s} with previous mappings. Ref: {ref}".format(s=streamNumber, ref=stateRef))
             for tr in reversed(stateMap):
                 if tr not in transactionsMap:
                     transactionsMap[tr] = {}
@@ -2414,6 +2417,7 @@ class AccuRev2Git(object):
             del stateMap # Make sure we free this, it could get big...
 
             # Get the data ref's known transactions list.
+            self.config.logger.info("Getting transaction to data commit mapping for stream number {s}. Ref: {ref}".format(s=streamNumber, ref=stateRef))
             dataMap = None
             dataHashList = self.GetGitLogList(ref=dataRef, gitLogFormat='%H %s %T')
             if dataHashList is None:
@@ -2428,6 +2432,7 @@ class AccuRev2Git(object):
             if dataMap is None:
                 raise Exception("Failed to retrieve the data map for stream {s} (id: {id}).".format(s=state["stream_map"][streamNumberStr], id=streamNumber))
 
+            self.config.logger.info("Merging transaction to data commit mapping for stream number {s} with previous mappings. Ref: {ref}".format(s=streamNumber, ref=stateRef))
             for tr in reversed(dataMap):
                 if tr not in transactionsMap or streamNumber not in transactionsMap[tr]:
                     raise Exception("Invariant error! The data ref should contain a subset of the state ref information, not a superset!")
@@ -2437,6 +2442,7 @@ class AccuRev2Git(object):
                 
         # Other state variables
         endTransaction = self.GetDepotHighWaterMark(self.config.accurev.depot)
+        self.config.logger.info("{depot} depot high-water mark is {hwm}.".format(depot=self.config.accurev.depot, hwm=endTransaction))
         try:
             endTransaction = min(int(endTransaction), int(self.config.accurev.endTransaction))
         except:
@@ -2444,6 +2450,7 @@ class AccuRev2Git(object):
                  # that the configured end transaction is lower than the lowest high-water-mark we
                  # have for the depot.
 
+        self.config.logger.info("Processing transactions for {depot} depot.".format(depot=self.config.accurev.depot))
         knownBranchSet = set([ state["stream_map"][x]["branch"] for x in state["stream_map"] ]) # Get the list of all branches that we will create.
         for tr in sorted(transactionsMap):
             if tr < state["next_transaction"]:
