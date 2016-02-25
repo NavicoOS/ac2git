@@ -855,6 +855,8 @@ gitDirRegex = re.compile(pattern=r'((^|.*[\\/]).git)([\\/]|$)')
 def GetGitDirPrefix(path):
     # This regex will work even for paths which mix \ and /.
     global gitDirRegex
+    if not isinstance(path, str):
+        path = path.decode("utf-8")
     gitDirMatch = gitDirRegex.match(path)
     if gitDirMatch is not None:
         return gitDirMatch.group(1)
