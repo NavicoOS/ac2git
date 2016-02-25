@@ -2380,6 +2380,7 @@ class AccuRev2Git(object):
             streamMap = OrderedDict()
             for configStream in self.config.accurev.streamMap:
                 branchName = self.config.accurev.streamMap[configStream]
+                self.config.logger.info("Getting stream information for stream '{name}' which will be committed to branch '{branch}'.".format(name=configStream, branch=branchName))
                 stream = self.GetStreamByName(depot.number, configStream)
                 if stream is None:
                     raise Exception("Failed to get stream information for {s}".format(s=configStream))
