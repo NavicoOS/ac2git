@@ -363,6 +363,8 @@ def getDatetimeString(date, timezone=None):
 
 class repo(object):
     def __init__(self, path):
+        if not isinstance(path, str):
+            path = path.decode("utf-8")
         self.path = path
         self.notes = repo.notes(self)
         # Debug
