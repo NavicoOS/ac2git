@@ -2111,7 +2111,7 @@ class AccuRev2Git(object):
             # Modify the commit message (the mkstream transaction comments are usually empty so let's make the title useful).
             title = 'Created {name}'.format(name=newBranchName)
             if basisBranchName is not None:
-                title = 'Created {title} based on {basis}'.format(title=title, basis=basisBranchName)
+                title = '{title} based on {basis}'.format(title=title, basis=basisBranchName)
             commitMessage, notes = self.GenerateCommitMessage(transaction=tr, stream=newStream, title=title)
             if arbitraryStreamData["data_tree_hash"] is None:
                 raise Exception("Couldn't get tree hash from stream {s}".format(s=arbitraryStreamData))
