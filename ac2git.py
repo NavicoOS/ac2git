@@ -2254,9 +2254,14 @@ class AccuRev2Git(object):
                 elif branchName is not None:
                     # Cherry pick onto destination and merge into all the children.
                     commitHash = self.CommitTransaction(tr=tr, stream=stream, treeHash=treeHash, branchName=branchName, srcStream=None, dstStream=stream)
-                    self.config.logger.info("{trType} {tr}. Cherry-picked into {dst} {h}. Accurev 'from stream' information missing.".format(trType=tr.Type, tr=tr.id, dst=branchName, h=commitHash[:8]))
+                    msgSuffix = ''
+                    if srcStreamNumber is None:
+                        msgSuffix = "Accurev 'from stream' information missing."
+                    else:
+                        msgSuffix = "Source stream {name} (id: {number}) is not tracked.".format(name=srcStreamName, number=srcStreamNumber)
+                    self.config.logger.info("{trType} {tr}. Cherry-picked into {dst} {h}. {suffix}".format(trType=tr.Type, tr=tr.id, dst=branchName, h=commitHash[:8], suffix=msgSuffix))
                 else:
-                    self.config.logger.info("{trType} {tr}. Destination stream {dst} is not tracked.".format(trType=tr.Type, tr=tr.id, dst=streamName))
+                    self.config.logger.info("{trType} {tr}. Destination stream {dst} (id: {num}) is not tracked.".format(trType=tr.Type, tr=tr.id, dst=streamName, num=streamNumber))
 
                 # Process all affected streams.
                 allStreamTree = self.BuildStreamTree(streams=streams.streams)
