@@ -1975,7 +1975,7 @@ class AccuRev2Git(object):
                         raise Exception("Couldn't get tree hash from stream {s}".format(s=stream.name))
 
                     commitHash = self.CommitTransaction(tr=tr, stream=stream, parents=parents, treeHash=treeHash, branchName=branchName, srcStream=srcStream, dstStream=dstStream)
-                    self.config.logger.info("{Type} {trId}. cherry-picked to {branch} {h}. Promote to an untracked parent stream {ps}.".format(Type=tr.Type, trId=tr.id, branch=branchName, h=commitHash[:8], ps=dstStreamName))
+                    self.config.logger.info("{Type} {trId}. cherry-picked to {branch} {h}. Untracked parent stream {ps}.".format(Type=tr.Type, trId=tr.id, branch=branchName, h=commitHash[:8], ps=dstStreamName))
 
                     # Recurse down into children.
                     self.MergeIntoChildren(tr=tr, streamTree=streamTree, streamMap=streamMap, affectedStreamMap=affectedStreamMap, streams=streams, streamNumber=sn)
@@ -2162,10 +2162,11 @@ class AccuRev2Git(object):
                             raise Exception("Failed to retrieve the last commit hash for new basis stream branch {bs}".format(bs=basisBranchName))
                         if self.gitRepo.raw_cmd([ u'git', u'reset', u'--hard', newBasisCommitHash ]) is None:
                             raise Exception("Failed to rebase branch {br} from {old} to {new}. Err: {err}".format(br=branchName, old=prevBasisBranchName, new=basisBranchName, err=self.gitRepo.lastStderr))
-                        self.config.logger.info("Rebased branch {name} from {oldBasis} to {newBasis}".format(name=branchName, oldBasis=prevBasisBranchName, newBasis=basisBranchName))
+                        self.config.logger.info("{trType} {trId}. Rebased branch {name} from {oldBasis} to {newBasis}".format(trType=tr.Type, trId=tr.id, name=branchName, oldBasis=prevBasisBranchName, newBasis=basisBranchName))
                     else:
                         # We want to make a new orphaned branch and potentially save the data that has not been merged into the HEAD.
                         parents = []
+                        self.config.logger.info("{trType} {trId}. Orphaned branch {name}. New basis {newBasis} is not tracked (old basis was {oldBasis}).".format(trType=tr.Type, trId=tr.id, name=branchName, oldBasis=tr.stream.prevBasis, newBasis=tr.stream.basis))
 
                 if tr.stream.prevTime != tr.stream.time:
                     # Get the commit just before the time on the basis branch.
@@ -2187,19 +2188,20 @@ class AccuRev2Git(object):
                         # Fast-forward the timelocked stream branch to the correct commit.
                         if self.UpdateAndCheckoutRef(ref='refs/heads/{branch}'.format(branch=branchName), commitHash=lastBasisCommitHash, checkout=False) != True:
                             raise Exception("Failed to fast-forward {branch} to {hash} (latest commit on {parentBranch}.".format(branch=branchName, hash=lastBasisCommitHash[:8], parentBranch=basisBranchName))
+                        self.config.logger.info("{trType} {trId}. Timelock changed. Fast-forward {dst} to {b} {h}.".format(trType=tr.Type, trId=tr.id, b=basisBranchName, h=lastBasisCommitHash[:8], dst=branchName))
                     else:
                         # Merge by specifying the parent commits.
-                        parents = [ lastBasisCommitHash , lastCommitHash ] # Make this commit a merge of the parent stream into the child stream.
+                        if parents is None:
+                            parents = []
+                        parents.extend([ lastBasisCommitHash , lastCommitHash ]) # Make this commit a merge of the parent stream into the child stream.
                         if None in parents:
                             raise Exception("Invariant error! Either the source hash {sh} or the destination hash {dh} was none!".format(sh=parents[1], dh=parents[0]))
-                        
                         self.config.logger.info("{trType} {trId}. Timelock changed. Merging {b} {h} as first parent into {dst}.".format(trType=tr.Type, trId=tr.id, b=basisBranchName, h=lastBasisCommitHash[:8], dst=branchName))
-                    parents = [ lastBasisCommitHash, lastCommitHash ] # Make this a merge commit that looks like we branched off from the basis and then merged everything that was left in the stream.
 
                 commitHash = self.CommitTransaction(tr=tr, stream=stream, treeHash=treeHash, parents=parents, branchName=branchName)
                 if commitHash is None:
                     raise Exception("Failed to commit chstream {trId}".format(trId=tr.id))
-                self.config.logger.info("{Type} {tr}. committed to {branch} {h}.".format(Type=tr.Type, tr=tr.id, branch=branchName, h=commitHash[:8]))
+                self.config.logger.info("{Type} {tr}. committed to {branch} {h}. Parents: {p}".format(Type=tr.Type, tr=tr.id, branch=branchName, h=commitHash[:8], p=parents))
 
                 # Process all affected streams.
                 allStreamTree = self.BuildStreamTree(streams=streams.streams)
