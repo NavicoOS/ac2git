@@ -2141,43 +2141,18 @@ class AccuRev2Git(object):
                     self.config.logger.info("Stream renamed from {oldName} to {newName}. Branch name is {branch}, ignoring.".format(oldName=tr.stream.prevName, newName=tr.stream.name, branch=branchName))
 
                 parents = None
-                # Check if the stream has changed basis and if it has change our branch pointer (irrespective of whether it is merged) over to the new basis stream's branch (if tracked).
-                if tr.stream.prevBasis is not None and len(tr.stream.prevBasis) > 0:
-                    # We need to change where our stream is parented, i.e. rebase it...
-                    prevBasisBranchName = None
-                    if str(tr.stream.prevBasisStreamNumber) in streamMap:
-                        prevBasisBranchName = streamMap[str(tr.stream.prevBasisStreamNumber)]["branch"]
+                basisStream, basisBranchName, basisStreamData, basisTreeHash = self.UnpackStreamDetails(streams=streams, streamMap=streamMap, affectedStreamMap=affectedStreamMap, streamNumber=tr.stream.basisStreamNumber)
+                while basisStream is not None and basisBranchName is None: # Find the first tracked basis stream.
+                    basisStream, basisBranchName, basisStreamData, basisTreeHash = self.UnpackStreamDetails(streams=streams, streamMap=streamMap, affectedStreamMap=affectedStreamMap, streamNumber=basisStream.basisStreamNumber)
 
-                    basisBranchName = None
-                    if str(tr.stream.basisStreamNumber) in streamMap:
-                        basisBranchName = streamMap[str(tr.stream.basisStreamNumber)]["branch"]
+                # Get the commit just before the time on the basis branch.
+                lastCommitHash = self.GetLastCommitHash(branchName=branchName)
 
-                    if basisBranchName is not None:
-                        # If the prevBasisBranchName is None, this would mean that we haven't been tracking that stream and that this stream is potentially not rooted/merged
-                        # anywhere (i.e. it is an orphaned branch). If we just reset the branch we will likely lose all the history up until this point. But do we care?
-                        # We could drop a tag at the current point to preserve the history but is it necessary? All the relevant changes will appear on the new branch anyway,
-                        # since we are not doing a rebase. Which conveniently mentions the other option, rebase, which could be used here.
-                        newBasisCommitHash = self.GetLastCommitHash(branchName=basisBranchName)
-                        if newBasisCommitHash is None:
-                            raise Exception("Failed to retrieve the last commit hash for new basis stream branch {bs}".format(bs=basisBranchName))
-                        if self.gitRepo.raw_cmd([ u'git', u'reset', u'--hard', newBasisCommitHash ]) is None:
-                            raise Exception("Failed to rebase branch {br} from {old} to {new}. Err: {err}".format(br=branchName, old=prevBasisBranchName, new=basisBranchName, err=self.gitRepo.lastStderr))
-                        self.config.logger.info("{trType} {trId}. Rebased branch {name} from {oldBasis} to {newBasis}".format(trType=tr.Type, trId=tr.id, name=branchName, oldBasis=prevBasisBranchName, newBasis=basisBranchName))
-                    else:
-                        # We have a decision to make here. We could orphan this branch and lose all the history or we could just treat this as a cherry pick. I chose cherry-pick
-                        # because it is better to keep history information than lose it. Additionally, it makes more sense if you consider the rest of the code.
-                        self.config.logger.info("{trType} {trId}. Cherry-pick onto branch {name}. New basis {newBasis} is not tracked (old basis was {oldBasis}).".format(trType=tr.Type, trId=tr.id, name=branchName, oldBasis=tr.stream.prevBasis, newBasis=tr.stream.basis))
-
-                if tr.stream.prevTime != tr.stream.time:
-                    # Get the commit just before the time on the basis branch.
-                    lastCommitHash = self.GetLastCommitHash(branchName=branchName)
-                    basisStream, basisBranchName, basisStreamData, basisTreeHash = self.UnpackStreamDetails(streams=streams, streamMap=streamMap, affectedStreamMap=affectedStreamMap, streamNumber=tr.stream.basisStreamNumber)
-                    while basisStream is not None and basisBranchName is None: # Find the first tracked basis stream.
-                        basisStream, basisBranchName, basisStreamData, basisTreeHash = self.UnpackStreamDetails(streams=streams, streamMap=streamMap, affectedStreamMap=affectedStreamMap, streamNumber=basisStream.basisStreamNumber)
-
-                    timelockISO8601Str = None
-                    if tr.stream.time is not None and accurev.GetTimestamp(tr.stream.time) != 0: # A timestamp of 0 indicates that a timelock was removed.
-                        timelockISO8601Str = "{datetime}Z".format(datetime=tr.stream.time.isoformat('T')) # The time is in UTC and ISO8601 requires us to specify Z for UTC.
+                timelockISO8601Str = None
+                if tr.stream.time is not None and accurev.GetTimestamp(tr.stream.time) != 0: # A timestamp of 0 indicates that a timelock was removed.
+                    timelockISO8601Str = "{datetime}Z".format(datetime=tr.stream.time.isoformat('T')) # The time is in UTC and ISO8601 requires us to specify Z for UTC.
+                lastBasisCommitHash = None
+                if basisBranchName is not None:
                     lastBasisCommitHash = self.GetLastCommitHash(branchName=basisBranchName, before=timelockISO8601Str)
 
                     isAncestor1 = self.GitMergeBase(refs=[ lastBasisCommitHash, lastCommitHash ], isAncestor=True)
@@ -2187,14 +2162,16 @@ class AccuRev2Git(object):
                     elif isAncestor1 or isAncestor2:
                         # Fast-forward the timelocked stream branch to the correct commit.
                         if self.UpdateAndCheckoutRef(ref='refs/heads/{branch}'.format(branch=branchName), commitHash=lastBasisCommitHash, checkout=False) != True:
-                            raise Exception("Failed to fast-forward {branch} to {hash} (latest commit on {parentBranch}.".format(branch=branchName, hash=lastBasisCommitHash[:8], parentBranch=basisBranchName))
-                        self.config.logger.info("{trType} {trId}. Timelock changed. Fast-forward {dst} to {b} {h}.".format(trType=tr.Type, trId=tr.id, b=basisBranchName, h=lastBasisCommitHash[:8], dst=branchName))
+                            raise Exception("Failed to fast-forward {branch} to {hash} (latest commit on {parentBranch}).".format(branch=branchName, hash=lastBasisCommitHash[:8], parentBranch=basisBranchName))
+                        self.config.logger.info("{trType} {trId}. Fast-forward {dst} to {b} {h}.".format(trType=tr.Type, trId=tr.id, b=basisBranchName, h=lastBasisCommitHash[:8], dst=branchName))
                     else:
                         # Merge by specifying the parent commits.
                         parents = [ lastBasisCommitHash , lastCommitHash ] # Make this commit a merge of the parent stream into the child stream.
                         if None in parents:
                             raise Exception("Invariant error! Either the source hash {sh} or the destination hash {dh} was none!".format(sh=parents[1], dh=parents[0]))
-                        self.config.logger.info("{trType} {trId}. Timelock changed. Merging {b} {h} as first parent into {dst}.".format(trType=tr.Type, trId=tr.id, b=basisBranchName, h=lastBasisCommitHash[:8], dst=branchName))
+                        self.config.logger.info("{trType} {trId}. Merging {b} {h} as first parent into {dst}.".format(trType=tr.Type, trId=tr.id, b=basisBranchName, h=lastBasisCommitHash[:8], dst=branchName))
+                else: # No basis stream is tracked!
+                    self.config.logger.info("{trType} {trId}. Cherry-picked into {dst}. No tracked basis found. Basis {b}.".format(trType=tr.Type, trId=tr.id, dst=branchName, b=tr.stream.basis))
 
                 commitHash = self.CommitTransaction(tr=tr, stream=stream, treeHash=treeHash, parents=parents, branchName=branchName)
                 if commitHash is None:
