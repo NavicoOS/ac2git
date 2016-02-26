@@ -1972,7 +1972,7 @@ class AccuRev2Git(object):
                     if stream is None:
                         raise Exception("Couldn't get the stream from its number {n}".format(n=sn))
                     elif treeHash is None:
-                        raise Exception("Couldn't get tree hash from stream {s}".format(s=stream.name))
+                        raise Exception("Couldn't get tree hash from stream {s} (branch {b}). tr {trId} {trType}".format(s=stream.name, b=branchName, trId=tr.id, trType=tr.Type))
 
                     commitHash = self.CommitTransaction(tr=tr, stream=stream, parents=parents, treeHash=treeHash, branchName=branchName, srcStream=srcStream, dstStream=dstStream)
                     self.config.logger.info("{Type} {trId}. cherry-picked to {branch} {h}. Untracked parent stream {ps}.".format(Type=tr.Type, trId=tr.id, branch=branchName, h=commitHash[:8], ps=dstStreamName))
@@ -1983,9 +1983,10 @@ class AccuRev2Git(object):
             stream, branchName, streamData, treeHash = self.UnpackStreamDetails(streams=streams, streamMap=streamMap, affectedStreamMap=affectedStreamMap, streamNumber=streamNumber)
             if stream is None:
                 raise Exception("Couldn't get the stream from its number {n}".format(n=sn))
-            elif treeHash is None:
-                raise Exception("Couldn't get tree hash from stream {s}".format(s=stream.name))
+            elif streamNumber not in streamTree:
+                raise Exception("Requested stream {s} (branch {b}) is not in the supplied tree {tree}. tr {trId} {trType}".format(s=stream.name, b=branchName, trId=tr.id, trType=tr.Type, tree=streamTree))
             
+            lastCommitHash = self.GetLastCommitHash(branchName=branchName)
             s = streamTree[streamNumber]
             for c in s["children"]:
                 if c is None:
@@ -2002,7 +2003,6 @@ class AccuRev2Git(object):
                     continue
 
                 lastChildCommitHash = self.GetLastCommitHash(branchName=childBranchName)
-                lastCommitHash = self.GetLastCommitHash(branchName=branchName)
 
                 # Do a diff
                 parents = None # Used to decide if we need to perform the commit. If None, don't commit, otherwise we manually set the parent chain.
@@ -2180,7 +2180,9 @@ class AccuRev2Git(object):
 
                 # Process all affected streams.
                 allStreamTree = self.BuildStreamTree(streams=streams.streams)
-                affectedStreamTree = self.PruneStreamTree(streamTree=allStreamTree, keepList=[ sn for sn in affectedStreamMap ])
+                keepList = [ sn for sn in affectedStreamMap ]
+                keepList.append(tr.stream.streamNumber) # The stream on which the chstream transaction occurred will never be affected so we have to keep it in there explicitly for the MergeIntoChildren() algorithm.
+                affectedStreamTree = self.PruneStreamTree(streamTree=allStreamTree, keepList=keepList)
                 self.MergeIntoChildren(tr=tr, streamTree=affectedStreamTree, streamMap=streamMap, affectedStreamMap=affectedStreamMap, streams=streams, streamNumber=streamNumber)
 
         else:
