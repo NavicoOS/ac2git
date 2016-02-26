@@ -2164,9 +2164,9 @@ class AccuRev2Git(object):
                             raise Exception("Failed to rebase branch {br} from {old} to {new}. Err: {err}".format(br=branchName, old=prevBasisBranchName, new=basisBranchName, err=self.gitRepo.lastStderr))
                         self.config.logger.info("{trType} {trId}. Rebased branch {name} from {oldBasis} to {newBasis}".format(trType=tr.Type, trId=tr.id, name=branchName, oldBasis=prevBasisBranchName, newBasis=basisBranchName))
                     else:
-                        # We want to make a new orphaned branch and potentially save the data that has not been merged into the HEAD.
-                        parents = []
-                        self.config.logger.info("{trType} {trId}. Orphaned branch {name}. New basis {newBasis} is not tracked (old basis was {oldBasis}).".format(trType=tr.Type, trId=tr.id, name=branchName, oldBasis=tr.stream.prevBasis, newBasis=tr.stream.basis))
+                        # We have a decision to make here. We could orphan this branch and lose all the history or we could just treat this as a cherry pick. I chose cherry-pick
+                        # because it is better to keep history information than lose it. Additionally, it makes more sense if you consider the rest of the code.
+                        self.config.logger.info("{trType} {trId}. Cherry-pick onto branch {name}. New basis {newBasis} is not tracked (old basis was {oldBasis}).".format(trType=tr.Type, trId=tr.id, name=branchName, oldBasis=tr.stream.prevBasis, newBasis=tr.stream.basis))
 
                 if tr.stream.prevTime != tr.stream.time:
                     # Get the commit just before the time on the basis branch.
@@ -2191,9 +2191,7 @@ class AccuRev2Git(object):
                         self.config.logger.info("{trType} {trId}. Timelock changed. Fast-forward {dst} to {b} {h}.".format(trType=tr.Type, trId=tr.id, b=basisBranchName, h=lastBasisCommitHash[:8], dst=branchName))
                     else:
                         # Merge by specifying the parent commits.
-                        if parents is None:
-                            parents = []
-                        parents.extend([ lastBasisCommitHash , lastCommitHash ]) # Make this commit a merge of the parent stream into the child stream.
+                        parents = [ lastBasisCommitHash , lastCommitHash ] # Make this commit a merge of the parent stream into the child stream.
                         if None in parents:
                             raise Exception("Invariant error! Either the source hash {sh} or the destination hash {dh} was none!".format(sh=parents[1], dh=parents[0]))
                         self.config.logger.info("{trType} {trId}. Timelock changed. Merging {b} {h} as first parent into {dst}.".format(trType=tr.Type, trId=tr.id, b=basisBranchName, h=lastBasisCommitHash[:8], dst=branchName))
@@ -2201,7 +2199,7 @@ class AccuRev2Git(object):
                 commitHash = self.CommitTransaction(tr=tr, stream=stream, treeHash=treeHash, parents=parents, branchName=branchName)
                 if commitHash is None:
                     raise Exception("Failed to commit chstream {trId}".format(trId=tr.id))
-                self.config.logger.info("{Type} {tr}. committed to {branch} {h}. Parents: {p}".format(Type=tr.Type, tr=tr.id, branch=branchName, h=commitHash[:8], p=parents))
+                self.config.logger.info("{Type} {tr}. committed to {branch} {h}.".format(Type=tr.Type, tr=tr.id, branch=branchName, h=commitHash[:8]))
 
                 # Process all affected streams.
                 allStreamTree = self.BuildStreamTree(streams=streams.streams)
