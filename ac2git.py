@@ -1766,14 +1766,15 @@ class AccuRev2Git(object):
 
         # Get the stream information for the configured streams from accurev (this is because stream names can change and accurev doesn't care about this while we do).
         processingList = []
-        for stream in self.config.accurev.streamMap:
+        streamMap = self.GetStreamMap()
+        for stream in streamMap:
             streamInfo = self.GetStreamByName(depot=depot, streamName=stream)
             if depot is None or len(depot) == 0:
                 depot = streamInfo.depotName
             elif depot != streamInfo.depotName:
                 self.config.logger.info("Stream {name} (id: {id}) is in depot {streamDepot} which is different than the configured depot {depot}. Ignoring...".format(name=streamInfo.name, id=streamInfo.streamNumber, streamDepot=streamInfo.depotName, depot=depot))
 
-            processingList.append( (streamInfo.streamNumber, streamInfo, self.config.accurev.streamMap[stream]) )
+            processingList.append( (streamInfo.streamNumber, streamInfo, streamMap[stream]) )
 
         if orderByStreamNumber:
             processingList.sort()
@@ -2385,8 +2386,9 @@ class AccuRev2Git(object):
         else:
             self.config.logger.info("No last state in {ref}, starting new conversion.".format(ref=stateRefspec))
             streamMap = OrderedDict()
-            for configStream in self.config.accurev.streamMap:
-                branchName = self.config.accurev.streamMap[configStream]
+            configStreamMap = self.GetStreamMap()
+            for configStream in configStreamMap:
+                branchName = configStreamMap[configStream]
 
                 self.config.logger.info("Getting stream information for stream '{name}' which will be committed to branch '{branch}'.".format(name=configStream, branch=branchName))
                 stream = self.GetStreamByName(depot.number, configStream)
