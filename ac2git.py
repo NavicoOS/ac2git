@@ -469,10 +469,11 @@ class AccuRev2Git(object):
         return usertime, tz
 
     def GetFirstTransaction(self, depot, streamName, startTransaction=None, endTransaction=None, useCache=False):
+        invalidRetVal = (None, None)
         # Get the stream creation transaction (mkstream). Note: The first stream in the depot doesn't have an mkstream transaction.
         mkstream, mkstreamXml = self.TryHist(depot=depot, timeSpec="now", streamName=streamName, transactionKind="mkstream")
         if mkstream is None:
-            return None
+            return invalidRetVal
 
         tr = None
         if len(mkstream.transactions) == 0:
@@ -493,7 +494,7 @@ class AccuRev2Git(object):
         if startTransaction is not None:
             startTrHist, startTrXml = self.TryHist(depot=depot, timeSpec=startTransaction)
             if startTrHist is None:
-                return None
+                return invalidRetVal
 
             startTr = startTrHist.transactions[0]
             if tr.id < startTr.id:
@@ -505,13 +506,13 @@ class AccuRev2Git(object):
         if endTransaction is not None:
             endTrHist, endTrHistXml = self.TryHist(depot=depot, timeSpec=endTransaction)
             if endTrHist is None:
-                return None
+                return invalidRetVal
 
             endTr = endTrHist.transactions[0]
             if endTr.id < tr.id:
                 self.config.logger.info( "The first transaction (#{0}) for stream {1} is later than the conversion end transaction (#{2}).".format(tr.id, streamName, startTr.id) )
                 tr = None
-                return None
+                return invalidRetVal
 
         return hist, histXml
 
