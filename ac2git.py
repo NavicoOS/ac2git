@@ -2105,7 +2105,7 @@ class AccuRev2Git(object):
                 if tr.stream is not None:
                     stream, branchName, streamData, treeHash = self.UnpackStreamDetails(streams=streams, streamMap=streamMap, affectedStreamMap=affectedStreamMap, streamNumber=tr.stream.streamNumber)
                     stream = tr.stream
-                title = 'Rebased {name}'.format(name=newBranchName)
+                title = 'Rebased {name}'.format(name=branchName)
                 lastCommitHash = self.GetLastCommitHash(branchName=branchName)
                 if lastCommitHash is None:
                     raise Exception("Error! Failed to get the last commit hash for {trType} {trId}! Basis {b} at {t}".format(trType=tr.Type, trId=tr.id, b=basisBranchName, t=timelockISO8601Str))
