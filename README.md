@@ -2,14 +2,14 @@
 
 This tool was inspired by the work done by [Ryan LaNeve](https://github.com/rlaneve) in his https://github.com/rlaneve/accurev2git repository and the desire to improve it. Since this script is sufficiently different I have placed it in a separate repository here. I must also thank [Tom Isaacson](https://github.com/parsley72) for his contribusion to the discussions about the tool and how it could be improved. It was his work that prompted me to start on this implementation. You can find his fork of the original repo here https://github.com/parsley72/accurev2git.
 
-The algorithm used here was devised by [Robert Smithson](https://github.com/fatfreddie) whose stated goal is to rid the multiverse of AccuRev since ridding just our verse is not good enough.
+The algorithm used here was colaboratibely devised by [Robert Smithson](https://github.com/fatfreddie), whose stated goal is to rid the multiverse of Accurev since ridding just our verse is not good enough, and myself.
 
-My work is merely in the implementation and I humbly offer it to anyone who doesn't want to remain stuck with AccuRev.
+My work is in the implementation and the merging part of the algorithm all of which I humbly offer to anyone who doesn't want to remain stuck with Accurev.
 
 
 ### Overview ###
 
-AccuRev2Git is a tool to convert an AccuRev depot into a git repo. A specified AccuRev stream will be the target of the conversion, and all promotes to that stream will be turned into commits within the new git repository.
+ac2git is a tool to convert an Accurev depot into a git repo. All specified Accurev streams will be the target of the conversion, and an attempt is made to map the Accurev stream model to a Git branching model. There are fundemental differences between the two that can make the converted repo history look strange at times but we've done our best to maintain correctness over beauty.
 
 ### Getting started ###
 - Install python 3.4
@@ -25,9 +25,9 @@ AccuRev2Git is a tool to convert an AccuRev depot into a git repo. A specified A
 - Follow the steps outlined in the **How to use** section.
 
 ### Tested with ###
-- `AccuRev 6.1.1 (2014/05/05)`, `git version 2.1.0` and `Python 2.7.8` on a Fedora 21 host.
+- `Accurev 6.1.1 (2014/05/05)`, `git version 2.1.0` and `Python 2.7.8` on a Fedora 21 host.
 
-- `AccuRev 6.1.1 (2014/05/05)`, `git version 1.9.0.msysgit.0` and `Python 2.7.6` on a Window 7 host.
+- `Accurev 6.1.1 (2014/05/05)`, `git version 1.9.0.msysgit.0` and `Python 2.7.6` on a Window 7 host.
 
 - `Accurev 6.0`, `git 1.9.5` on a Windows 8.1 host. By [Gary](https://github.com/bigminer) in [this comment](https://github.com/orao/ac2git/issues/13#issuecomment-136392393) from issue #13.
 
@@ -46,7 +46,7 @@ AccuRev2Git is a tool to convert an AccuRev depot into a git repo. A specified A
 
 - Modify the configuration file and add the following information:
 
- - AccuRev username & password
+ - Accurev username & password
  
  - The name of the Depot. You may only convert a single depot at a time and it is recommended that one Depot is mapped to one git repository.
 
@@ -56,7 +56,7 @@ AccuRev2Git is a tool to convert an AccuRev depot into a git repo. A specified A
 
  - The path to the git repository that the script is to create. The folder must exist and should preferably be empty, although it is ok for it to be an existing git repository.
 
- - A user mapping from AccuRev usernames to git. _Hint: Run `accurev show -fi users` to see a list of all the users which you might need to add._
+ - A user mapping from Accurev usernames to git. _Hint: Run `accurev show -fi users` to see a list of all the users which you might need to add._
 
  - Choose the preferred method to use for converting the streams. If the streams are sparse (the transactions that have changed the stream contents are far apart) I recommend the `deep-hist` method, otherwise the `diff` method may be more optimal (read the _"Converting the contents of a single stream"_ section for more details). If in doubt, use `deep-hist`.
 
@@ -97,7 +97,7 @@ _Note: I recommend using the `.git/info/attributes` file and not making a `.gita
 
 ### Dear contributors ###
 
-I am not a python developer which should be evident to anyone who's seen the code. A lot of it was written late at night and was meant to be just a brain dump, to be cleaned up at a later date, but it remained. Please don't be dissuaded from contributing and helping me improve it because it will get us all closer to ditching AccuRev! I will do my best to add some notes about my method and how the code works in the sections that follow so please read them.
+I am not a python developer which should be evident to anyone who's seen the code. A lot of it was written late at night and was meant to be just a brain dump, to be cleaned up at a later date, but it remained. Please don't be dissuaded from contributing and helping me improve it because it will get us all closer to ditching Accurev! I will do my best to add some notes about my method and how the code works in the sections that follow so please read them.
 
 I strongly recommend reading the `how_it_works.md` for a word explanation of what the algorithm is meant to do and the `hacking_guide.md` for more information on the file structure and interesting functions.
 
