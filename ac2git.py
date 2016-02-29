@@ -2109,7 +2109,7 @@ class AccuRev2Git(object):
                 lastCommitHash = self.GetLastCommitHash(branchName=branchName)
                 if lastCommitHash is None:
                     raise Exception("Error! Failed to get the last commit hash for {trType} {trId}! Basis {b} at {t}".format(trType=tr.Type, trId=tr.id, b=basisBranchName, t=timelockISO8601Str))
-                parents = [ lastCommitHash ] # First, orphaned, commit is denoted with an empty parents list.
+                parents = [ lastCommitHash ]
             else:
                 raise Exception("Not yet implemented! {trId} {trType}, unrecognized transaction type.".format(trId=tr.id, trType=tr.Type))
 
@@ -2148,6 +2148,7 @@ class AccuRev2Git(object):
                         # Fast-forward the timelocked stream branch to the correct commit.
                         if self.UpdateAndCheckoutRef(ref='refs/heads/{branch}'.format(branch=branchName), commitHash=lastBasisCommitHash, checkout=False) != True:
                             raise Exception("Failed to fast-forward {branch} to {hash} (latest commit on {parentBranch}).".format(branch=branchName, hash=lastBasisCommitHash[:8], parentBranch=basisBranchName))
+                        parents = [ lastBasisCommitHash ] # We will not base our commit on the last hash of our branch but from the basis commit that we took at the timelock.
                         self.config.logger.info("{trType} {trId}. Fast-forward {dst} to {b} {h}.".format(trType=tr.Type, trId=tr.id, b=basisBranchName, h=lastBasisCommitHash[:8], dst=branchName))
                     else:
                         # Merge by specifying the parent commits.
