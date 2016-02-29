@@ -2159,6 +2159,9 @@ class AccuRev2Git(object):
                 else: # No basis stream is tracked!
                     self.config.logger.info("{trType} {trId}. Cherry-picked into {dst}. No tracked basis found. Basis {b}.".format(trType=tr.Type, trId=tr.id, dst=branchName, b=stream.basis))
 
+                if treeHash is None:
+                    raise Exception("Couldn't get tree for {trType} {trId} on stream {s}".format(trType=tr.Type, trId=tr.id, s=stream.name))
+
                 commitHash = self.CommitTransaction(tr=tr, stream=stream, treeHash=treeHash, parents=parents, branchName=branchName, title=title)
                 if commitHash is None:
                     raise Exception("Failed to commit chstream {trId}".format(trId=tr.id))
@@ -2175,6 +2178,9 @@ class AccuRev2Git(object):
                 self.config.logger.info("{Type} {tr}. No known branch for stream {s} (id: {sn}).".format(Type=tr.Type, tr=tr.id, s=stream.name, sn=stream.streamNumber))
 
         else:
+            if branchName is not None and treeHash is None:
+                raise Exception("Couldn't retrieve data for {trType} {trId} from stream {s}, branch {b}".format(trType=tr.Type, trId=tr.id, s=stream.name, b=branchName))
+
             # The rest of the transactions can be processed by stream type. Normal streams that have children need to try and merge down while workspaces which don't have children can skip this step.
             if stream.Type in [ "workspace" ]:
                 # Workspaces don't have child streams 
