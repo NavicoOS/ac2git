@@ -2094,6 +2094,9 @@ class AccuRev2Git(object):
                 raise Exception("Invariant error! There is no way to know for what stream this mkstream transaction was made!")
 
             newStream = streams.getStream(int(arbitraryStreamNumberStr))
+            timelockISO8601Str = None
+            if newStream.time is not None and accurev.GetTimestamp(newStream.time) != 0: # A timestamp of 0 indicates that a timelock was removed.
+                timelockISO8601Str = "{datetime}Z".format(datetime=newStream.time.isoformat('T')) # The time is in UTC and ISO8601 requires us to specify Z for UTC.
 
             # Find the first parent stream that is in the streamMap
             basisStream = None if newStream.basisStreamNumber is None else streams.getStream(newStream.basisStreamNumber)
@@ -2105,7 +2108,7 @@ class AccuRev2Git(object):
             if basisStream is not None:
                 parents = None # When parents are none then the Commit() function automatically gets the last parent.
                 basisBranchName = streamMap[str(basisStream.streamNumber)]["branch"]
-                parents = [ self.GetLastCommitHash(branchName=basisBranchName) ] # The branch will start at this hash.
+                parents = [ self.GetLastCommitHash(branchName=basisBranchName, before=timelockISO8601Str) ] # The branch will start at this hash.
                 if None in parents:
                     raise Exception("Failed to get last hash for branch {b}, stream {s} (id: {id})".format(b=basisBranchName, s=newStream.basis, id=newStream.basisStreamNumber))
 
