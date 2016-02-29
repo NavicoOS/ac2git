@@ -1811,10 +1811,10 @@ class AccuRev2Git(object):
                 suffixList.append( ('{linePrefix}-basis:'.format(linePrefix=linePrefix), '{name} (id: {id})'.format(name=stream.basis, id=stream.basisStreamNumber)) )
             if stream.prevBasis is not None and len(stream.prevBasis) > 0:
                 suffixList.append( ('{linePrefix}-prev-basis:'.format(linePrefix=linePrefix), '{name} (id: {id})'.format(name=stream.prevBasis, id=stream.prevBasisStreamNumber)) )
-            if stream.time is not None:
+            if stream.time is not None and accurev.GetTimestamp(stream.time) != 0:
                 suffixList.append( ('{linePrefix}-timelock:'.format(linePrefix=linePrefix), '{time} (UTC)'.format(time=stream.time)) )
-            if stream.prevTime is not None:
-                suffixList.append( ('{linePrefix}-prev-timelock:'.format(linePrefix=linePrefix), '{prevTime} (UTC)'.format(time=stream.prevTime)) )
+            if stream.prevTime is not None and accurev.GetTimestamp(stream.prevTime) != 0:
+                suffixList.append( ('{linePrefix}-prev-timelock:'.format(linePrefix=linePrefix), '{prevTime} (UTC)'.format(prevTime=stream.prevTime)) )
 
     def GenerateCommitMessageSuffix(self, transaction, stream=None, dstStream=None, srcStream=None, friendlyMessage=None):
         suffixList = []
