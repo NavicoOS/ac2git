@@ -2349,9 +2349,8 @@ class AccuRev2Git(object):
                 for br in state["branch_list"]:
                     if not br["is_current"]:
                         self.config.logger.dbg( "Restore branch {branchName} at commit {commit}".format(branchName=br["name"], commit=br["commit"]) )
-                        result = self.gitRepo.raw_cmd([u'git', u'checkout', u'-B', br["name"], br["commit"]])
-                        if result is None:
-                            raise Exception("Failed to restore last state. git checkout -B {br} {c}; failed.".format(br=br["name"], c=br["commit"]))
+                        if self.UpdateAndCheckoutRef(ref='refs/heads/{branch}'.format(branch=br["name"]), commitHash=br["commit"], checkout=False) != True:
+                            raise Exception("Failed to restore last state for branch {br} at {c}.".format(br=br["name"], c=br["commit"]))
                     else:
                         currentBranch = br
                 if currentBranch is not None:
