@@ -2994,6 +2994,8 @@ def PrintMissingUsers(config):
             config.logger.info("Unmapped accurev users:")
             for user in missingUsers:
                 config.logger.info("    {0}".format(user))
+            return True
+    return False
 
 def SetConfigFromArgs(config, args):
     if args.accurevUsername is not None:
@@ -3067,17 +3069,17 @@ def AccuRev2GitMain(argv):
     parser.add_argument('-c', '--config', dest='configFilename', default=configFilename, metavar='<config-filename>', help="The XML configuration file for this script. This file is required for the script to operate. By default this filename is set to be `{0}`.".format(configFilename))
     parser.add_argument('-u', '--accurev-username',  dest='accurevUsername', metavar='<accurev-username>',  help="The username which will be used to retrieve and populate the history from AccuRev.")
     parser.add_argument('-p', '--accurev-password',  dest='accurevPassword', metavar='<accurev-password>',  help="The password for the provided accurev username.")
-    parser.add_argument('-t', '--accurev-depot', dest='accurevDepot',        metavar='<accurev-depot>',     help="The AccuRev depot in which the streams that are being converted are located. This script currently assumes only one depot is being converted at a time.")
+    parser.add_argument('-d', '--accurev-depot', dest='accurevDepot',        metavar='<accurev-depot>',     help="The AccuRev depot in which the streams that are being converted are located. This script currently assumes only one depot is being converted at a time.")
     parser.add_argument('-g', '--git-repo-path', dest='gitRepoPath',         metavar='<git-repo-path>',     help="The system path to an existing folder where the git repository will be created.")
     parser.add_argument('-M', '--method', dest='conversionMethod', choices=['skip', 'pop', 'diff', 'deep-hist'], metavar='<conversion-method>', help="Specifies the method which is used to perform the conversion. Can be either 'pop', 'diff' or 'deep-hist'. 'pop' specifies that every transaction is populated in full. 'diff' specifies that only the differences are populated but transactions are iterated one at a time. 'deep-hist' specifies that only the differences are populated and that only transactions that could have affected this stream are iterated.")
-    parser.add_argument('-j', '--merge-strategy', dest='mergeStrategy', choices=['skip', 'normal', 'orphanage'], metavar='<merge-strategy>', help="Sets the merge strategy which dictates how the git repository branches are generated. Depending on the value chosen the branches can be orphan branches ('orphanage' strategy) or have merges where promotes have occurred with the 'normal' strategy. The 'skip' strategy forces the script to skip making the git branches and will cause it to only do the retrieving of information from accurev for use with some strategy at a later date.")
+    parser.add_argument('-S', '--merge-strategy', dest='mergeStrategy', choices=['skip', 'normal', 'orphanage'], metavar='<merge-strategy>', help="Sets the merge strategy which dictates how the git repository branches are generated. Depending on the value chosen the branches can be orphan branches ('orphanage' strategy) or have merges where promotes have occurred with the 'normal' strategy. The 'skip' strategy forces the script to skip making the git branches and will cause it to only do the retrieving of information from accurev for use with some strategy at a later date.")
     parser.add_argument('-r', '--restart',    dest='restart', action='store_const', const=True, help="Discard any existing conversion and start over.")
     parser.add_argument('-v', '--verbose',    dest='debug',   action='store_const', const=True, help="Print the script debug information. Makes the script more verbose.")
     parser.add_argument('-L', '--log-file',   dest='logFile', metavar='<log-filename>',         help="Sets the filename to which all console output will be logged (console output is still printed).")
     parser.add_argument('-q', '--no-log-file', dest='disableLogFile',  action='store_const', const=True, help="Do not log info to the log file. Alternatively achieved by not specifying a log file filename in the configuration file.")
     parser.add_argument('-l', '--reset-log-file', dest='resetLogFile', action='store_const', const=True, help="Instead of appending new log info to the file truncate it instead and start over.")
     parser.add_argument('--example-config', nargs='?', dest='exampleConfigFilename', const=defaultExampleConfigFilename, default=None, metavar='<example-config-filename>', help="Generates an example configuration file and exits. If the filename isn't specified a default filename '{0}' is used. Commandline arguments, if given, override all options in the configuration file.".format(defaultExampleConfigFilename, configFilename))
-    parser.add_argument('-m', '--check-missing-users', dest='checkMissingUsers', action='store_const', const=True, help="It will print a list of usernames that are in accurev but were not found in the usermap.")
+    parser.add_argument('-m', '--check-missing-users', dest='checkMissingUsers', choices=['warn', 'strict', 'ignore'], default='strict', help="When 'ignore' is used it disables the missing user check. When either 'warn' or 'strict' are used a list of usernames that are in accurev but were not found in the configured usermap is printed. Using 'strict' will cause the script to abort the conversion process if there are any missing users while using 'warn' will not.")
     parser.add_argument('--auto-config', nargs='?', dest='autoConfigFilename', const=configFilename, default=None, metavar='<config-filename>', help="Auto-generate the configuration file from known AccuRev information. It is required that an accurev username and password are provided either in an existing config file or via the -u and -p options. If there is an existing config file it is backed up and only the accurev username and password will be copied to the new configuration file. If you wish to preserve the config but add more information to it then it is recommended that you use the --fixup-config option instead.")
     parser.add_argument('--fixup-config', nargs='?', dest='fixupConfigFilename', const=configFilename, default=None, metavar='<config-filename>', help="Fixup the configuration file by adding updated AccuRev information. It is the same as the --auto-config option but the existing configuration file options are preserved. Other command line arguments that are provided will override the existing configuration file options for the new configuration file.")
     parser.add_argument('-T', '--track',    dest='track', action='store_const', const=True, help="Tracking mode. Sets the 'tracking' flag which makes the script run continuously in a loop. The configuration file is reloaded on each iteration so changes are picked up. Only makes sense for when you want this script to continuously track the accurev depot's newest transactions (i.e. you're using 'highest' or 'now' as your end transactions).")
@@ -3122,7 +3124,7 @@ def AccuRev2GitMain(argv):
         config.logger.isDbgEnabled = ( args.debug == True )
 
         state = AccuRev2Git(config)
-        
+
         if config.logFilename is not None and not args.disableLogFile:
             mode = 'a'
             if args.resetLogFile:
@@ -3133,15 +3135,19 @@ def AccuRev2GitMain(argv):
                 state.config.logger.logFileDbgEnabled = ( args.debug == True )
         
                 PrintConfigSummary(state.config)
-                if args.checkMissingUsers:
-                    PrintMissingUsers(state.config)
+                if args.checkMissingUsers in [ "warn", "strict" ]:
+                    if PrintMissingUsers(state.config) and args.checkMissingUsers == "strict":
+                        sys.stderr.write("Found missing users. Exiting.\n".format(args.configFilename))
+                        return 1
                 state.config.logger.info("Restart:" if args.restart else "Start:")
                 state.config.logger.referenceTime = datetime.now()
                 rv = state.Start(isRestart=args.restart)
         else:
             PrintConfigSummary(state.config)
-            if args.checkMissingUsers:
-                PrintMissingUsers(state.config)
+            if args.checkMissingUsers in [ "warn", "strict" ]:
+                if PrintMissingUsers(state.config) and args.checkMissingUsers == "strict":
+                    sys.stderr.write("Found missing users. Exiting.\n".format(args.configFilename))
+                    return 1
             state.config.logger.info("Restart:" if args.restart else "Start:")
             state.config.logger.referenceTime = datetime.now()
             rv = state.Start(isRestart=args.restart)
