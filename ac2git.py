@@ -471,25 +471,11 @@ class AccuRev2Git(object):
     def GetFirstTransaction(self, depot, streamName, startTransaction=None, endTransaction=None, useCache=False):
         invalidRetVal = (None, None)
         # Get the stream creation transaction (mkstream). Note: The first stream in the depot doesn't have an mkstream transaction.
-        mkstream, mkstreamXml = self.TryHist(depot=depot, timeSpec="now", streamName=streamName, transactionKind="mkstream")
-        if mkstream is None:
-            return invalidRetVal
+        tr = accurev.ext.get_mkstream_transaction(stream=streamName, depot=depot, useCache=useCache)
+        if tr is None:
+            raise Exception("Failed to find the mkstream transaction for stream {s}".format(s=streamName))
 
-        tr = None
-        if len(mkstream.transactions) == 0:
-            self.config.logger.info( "The root stream has no mkstream transaction. Starting at transaction 1." )
-            # the assumption is that the depot name matches the root stream name (for which there is no mkstream transaction)
-            mkstream, mkstreamXml = self.TryHist(depot=depot, timeSpec="1")
-            if mkstream is None or len(mkstream.transactions) == 0:
-                raise Exception("Error: assumption that the root stream has the same name as the depot doesn't hold. Aborting...")
-            tr = mkstream.transactions[0]
-        else:
-            tr = mkstream.transactions[0]
-            if len(mkstream.transactions) != 1:
-                self.config.logger.error( "There seem to be multiple mkstream transactions for this stream... Using {0}".format(tr.id) )
-
-        hist = mkstream
-        histXml = mkstreamXml
+        hist, histXml = self.TryHist(depot=depot, timeSpec=tr.id) # Make the first transaction be the mkstream transaction.
 
         if startTransaction is not None:
             startTrHist, startTrXml = self.TryHist(depot=depot, timeSpec=startTransaction)
@@ -834,10 +820,10 @@ class AccuRev2Git(object):
         
         return popResult
 
-    def TryStreams(self, depot, timeSpec):
+    def TryStreams(self, depot, timeSpec, stream=None):
         streams = None
         for i in range(0, AccuRev2Git.commandFailureRetryCount):
-            streamsXml = accurev.raw.show.streams(depot=depot, timeSpec=timeSpec, isXmlOutput=True, includeDeactivatedItems=True, includeHasDefaultGroupAttribute=True, useCache=self.config.accurev.UseCommandCache())
+            streamsXml = accurev.raw.show.streams(depot=depot, timeSpec=timeSpec, stream=stream, isXmlOutput=True, includeDeactivatedItems=True, includeHasDefaultGroupAttribute=True, useCache=self.config.accurev.UseCommandCache())
             if streamsXml is not None:
                 streams = accurev.obj.Show.Streams.fromxmlstring(streamsXml)
                 if streams is not None:
@@ -1147,6 +1133,8 @@ class AccuRev2Git(object):
             self.config.logger.info("Deep-hist returned {count} transactions to process.".format(count=len(deepHist)))
             if deepHist is None:
                 raise Exception("accurev.ext.deep_hist() failed to return a result!")
+            elif len(deepHist) == 0:
+                return (None, None)
         while True:
             nextTr, diff = self.FindNextChangeTransaction(streamName=stream.name, startTrNumber=tr.id, endTrNumber=endTr.id, deepHist=deepHist)
             if nextTr is None:
@@ -1264,7 +1252,8 @@ class AccuRev2Git(object):
             # Get the list of new hashes that have been committed to the stateRef but we haven't processed on the dataRef just yet.
             stateHashList = self.GetGitLogList(ref=stateRef, afterCommitHash=lastStateCommitHash, gitLogFormat='%H')
             if stateHashList is None:
-                raise Exception("Couldn't get the commit hash list to process from the Accurev state ref {stateRef}.".format(stateRef=stateRef))
+                self.config.logger.error("Couldn't get the commit hash list to process from the Accurev state ref {stateRef}.".format(stateRef=stateRef))
+                return (None, None)
             elif len(stateHashList) == 0:
                 self.config.logger.error( "{dataRef} is upto date. Couldn't load any more transactions after tr. ({trId}) from Accurev state ref {stateRef}.".format(trId=lastTrId, dataRef=dataRef, stateRef=stateRef, lastHash=lastStateCommitHash) )
 

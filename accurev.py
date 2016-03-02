@@ -2314,6 +2314,73 @@ class ext(object):
     def disable_command_cache():
         raw._commandCacheFilename = None
 
+
+
+    # Get the mkstream transaction for the stream. This can sometimes be a non-trivial operation depending on how old the depot is (version of accurev).
+    @staticmethod
+    def get_mkstream_transaction(stream, depot=None, useCache=False):
+        mkstreamTr = None
+
+        # Since we don't know if this stream has been renamed in the past, we can't optimize this for the cache
+        # like we do subsequently (by using Show.Streams(obj).getStream()).
+        streamInfo = show.streams(depot=depot, stream=stream, useCache=useCache).streams[0]
+        if depot is None:
+            depot = streamInfo.depotName
+
+        # Next, we need to ensure that we don't query things before the stream existed.
+        if streamInfo.streamNumber == 1:
+            # Assumptions:
+            #   - The depot name matches the root stream name
+            #   - The root stream number is always 1.
+            #   - There is no mkstream transaction for the root stream.
+            firstTr = hist(depot=depot, timeSpec="1", useCache=useCache)
+            if firstTr is None or len(firstTr.transactions) == 0:
+                raise Exception("Error: assumption that the root stream has the same name as the depot doesn't hold. Aborting...")
+            mkstreamTr = firstTr.transactions[0]
+        else:
+            mkstream = hist(stream=stream, transactionKind="mkstream", timeSpec="highest", useCache=useCache)
+            if mkstream is None or len(mkstream.transactions) == 0:
+                # Warning: if you are unlucky enough to hit this path, it is really, really slow... Probably can be optimized but doesn't happen often enough for me to do it.
+
+                # The root stream has no mkstream transaction and it has a stream number of 1. However, I have found that other streams
+                # can also have a missing mkstream transaction (one that doesn't appear in the `accurev hist` output) for old depots that
+                # have seen a number of upgrades. In this case we should find the mkstream transaction by looking at the startTime of a stream.
+                # We have no choice but to continue querying accurev here if we want to be correct.
+
+                # We need to find the mkstream transaction that occurred at the time when this stream was created. The `accurev show streams -fx`
+                # command returns a `startTime=...` attribute which corresponds to the the timestamp of the last chstream or mkstream transaction.
+                # so what we will do is to find the first transaction that we do have a record of on this stream, we will then get the result of
+                # the `accurev show streams -s <stream> -t <first-transaction>` to get the correct `startTime=...` which will identify which mkstream
+                # transaction corresponds to this stream.
+
+                # Get all the transactions for this stream.
+                firstTr = hist(depot=depot, timeSpec="highest-1", stream=streamInfo.name).transactions[-1]
+
+                # Update the stream data from the time of the first transaction which will give us the correct startTime.
+                streamInfo = show.streams(depot=depot, timeSpec=firstTr.id, stream=stream).streams[0]
+
+                # Get all the mkstream transactions before the first transaction on this stream.
+                mkstreams = hist(depot=depot, timeSpec="{trId}-1".format(trId=firstTr.id), transactionKind="mkstream")
+
+                for t in mkstreams.transactions:
+                    print("Test mkstream:", t.id, "time", t.time, "==", streamInfo.startTime)
+                    if GetTimestamp(t.time) == GetTimestamp(streamInfo.startTime):
+                        if mkstreamTr is None:
+                            mkstreamTr = t
+                        else:
+                            raise Exception("Invariant error! Ambiguous: multiple mkstream transactions match! Could not determine if stream {s} was created by transaction {t1} or {t2}!".format(s=streamName, t1=mkstreamTr.id, t2=t.id))
+                    elif GetTimestamp(t.time) < GetTimestamp(streamInfo.startTime):
+                        break # There's no point in looking for it any further than this since the transactions are sorted in descending order of transaction number and hence by time as well.
+                if mkstreamTr is None:
+                    raise Exception("Failed to find the mkstream transaction for stream {s} (id: {id}, created: {t} UTC)!".format(s=streamName, id=stream.streamNumber, t=stream.startTime))
+            else:
+                # We found the mkstream transaction cheaply, return it.
+                mkstreamTr = mkstream.transactions[0]
+                if len(mkstream.transactions) != 1:
+                    raise Exception("There seem to be multiple mkstream transactions for the stream {0}".format(stream))
+
+        return mkstreamTr
+
     # Get the last chstream transaction. If no chstream transactions have been made the mkstream
     # transaction is returned. If no mkstream transaction exists None is returned.
     # returns obj.Transaction
@@ -2488,14 +2555,12 @@ class ext(object):
                 raise Exception("Error: assumption that the root stream has the same name as the depot doesn't hold. Aborting...")
             mkstreamTr = firstTr.transactions[0]
         else:
-            mkstream = hist(stream=stream, transactionKind="mkstream", timeSpec=ts.end, useCache=useCache)
-            if len(mkstream.transactions) == 0:
+            mkstreamTr = ext.get_mkstream_transaction(stream=streamInfo.streamNumber, depot=depot, useCache=useCache)
+            if mkstreamTr is None:
+                raise Exception("Failed to get mkstream transaction for the stream {0}".format(stream))
+            if mkstreamTr.id > ts.end:
                 # The stream didn't exist during the requested time span.
                 return []
-
-            mkstreamTr = mkstream.transactions[0]
-            if len(mkstream.transactions) != 1:
-                raise Exception("There seem to be multiple mkstream transactions for the stream {0}".format(stream))
 
         if ts.start < mkstreamTr.id:
             if ts.end < mkstreamTr.id:
@@ -2619,6 +2684,16 @@ def clAffectedStreams(args):
         print("No affected streams")
         return 1
 
+def clGetMkstreamTransaction(args):
+    mkstreamTr = ext.get_mkstream_transaction(stream=args.stream, depot=args.depot, useCache=args.useCache)
+    if mkstreamTr is not None:
+        print("tr. type; destination stream; tr. number; username;")
+        print("{Type}; {stream}; {id}; {user};".format(id=mkstreamTr.id, user=mkstreamTr.user, Type=mkstreamTr.Type, stream=mkstreamTr.affectedStream()[0]))
+        return 0
+    else:
+        print("No mkstream transaction")
+        return 1
+
 if __name__ == "__main__":
     # Define the argument parser
     argparser = argparse.ArgumentParser(description='Custom extensions to the main accurev command line tool.')
@@ -2647,6 +2722,15 @@ if __name__ == "__main__":
     affectedStreamsParser.add_argument('-c', '--cache', dest='useCache', action='store_true', default=False, help='Use the command cache for the needed operations (mainly diffs).')
 
     affectedStreamsParser.set_defaults(func=clAffectedStreams)
+
+    # find mkstream subcommand
+    findMkstreamParser = subparsers.add_parser('find-mkstream', help='Finds the mkstream transaction for the requested stream.')
+    findMkstreamParser.description = 'Finds the mkstream transaction for the requested stream which may be non-trivial for old depots that have undergone a number of accurev version updates.'
+    findMkstreamParser.add_argument('-p', '--depot',  dest='depot',    help='The name of the depot in which the stream was created (optional).')
+    findMkstreamParser.add_argument('-s', '--stream', dest='stream',   required=True, help='The name or number of the stream for which we wish to find the mkstream transaction.')
+    findMkstreamParser.add_argument('-c', '--cache',  dest='useCache', action='store_true', default=False, help='Use the command cache for the needed operations (mainly diffs).')
+
+    findMkstreamParser.set_defaults(func=clGetMkstreamTransaction)
 
     # Parse the arguments and execute
     args = argparser.parse_args()
