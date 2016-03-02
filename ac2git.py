@@ -376,7 +376,7 @@ class AccuRev2Git(object):
         preservedDirs = []
         for root, dirs, files in os.walk(self.gitRepo.path, topdown=True):
             for name in dirs:
-                path = os.path.join(root, name).replace('\\','/')
+                path = ToUnixPath(os.path.join(root, name))
                 # Preserve empty directories that are not under the .git/ directory.
                 if git.GetGitDirPrefix(path) is None and len(os.listdir(path)) == 0:
                     filename = os.path.join(path, '.gitignore')
@@ -391,7 +391,7 @@ class AccuRev2Git(object):
         deletedDirs = []
         for root, dirs, files in os.walk(self.gitRepo.path, topdown=True):
             for name in dirs:
-                path = os.path.join(root, name).replace('\\','/')
+                path = ToUnixPath(os.path.join(root, name))
                 # Delete empty directories that are not under the .git/ directory.
                 if git.GetGitDirPrefix(path) is None:
                     dirlist = os.listdir(path)
@@ -763,8 +763,32 @@ class AccuRev2Git(object):
             for change in element.changes:
                 for stream in [ change.stream1, change.stream2 ]:
                     if stream is not None and stream.name is not None:
-                        name = stream.name.replace('\\', '/').lstrip('/')
-                        path = os.path.join(self.gitRepo.path, name)
+                        name = stream.name
+                        if name.startswith('\\.\\') or name.startswith('/./'):
+                            # Replace the accurev depot relative path start with a normal relative path.
+                            name = name[3:]
+                        if os.path.isabs(name):
+                            # For os.path.join() to work we need a non absolute path so turn the absolute path (minus any drive letter or UNC path part) into a relative path w.r.t. the git repo.
+                            name = os.path.splitdrive(name)[1][1:]
+                        path = os.path.abspath(os.path.join(self.gitRepo.path, name))
+
+                        # Ensure we restrict the deletion to the git repository and that we don't delete the git repository itself.
+                        doClearAll = False
+                        relPath = os.path.relpath(path, self.gitRepo.path)
+                        relPathDirs = SplitPath(relPath)
+                        if relPath.startswith('..'):
+                            self.config.logger.error("Trying to delete path outside the worktree! Deleting worktree instead. git path: {gp}, depot path: {dp}".format(gp=path, dp=stream.name))
+                            doClearAll = True
+                        elif relPathDirs[0] == '.git':
+                            self.config.logger.error("Trying to delete git directory! Ignored... git path: {gp}, depot path: {dp}".format(gp=path, dp=stream.name))
+                        elif relPath == '.':
+                            self.config.logger.error("Deleting the entire worktree due to diff with bad '..' elements! git path: {gp}, depot path: {dp}".format(gp=path, dp=stream.name))
+                            doClearAll = True
+
+                        if doClearAll:
+                            self.ClearGitRepo()
+                            return [ self.gitRepo.path ]
+
                         if os.path.lexists(path): # Ensure that broken links are also deleted!
                             if not self.DeletePath(path):
                                 self.config.logger.error("Failed to delete '{0}'.".format(path))
@@ -1266,7 +1290,7 @@ class AccuRev2Git(object):
             stateHash = stateHashList.pop()
             if stateHash is None or len(stateHash) == 0:
                 raise Exception("Invariant error! We shouldn't have empty strings in the stateHashList")
-            self.config.logger.info( "No {dr} found. Processing {h} on {sr} first.".format(dr=dataRef, h=stateHash, sr=stateRef) )
+            self.config.logger.info( "No {dr} found. Processing {h} on {sr} first.".format(dr=dataRef, h=stateHash[:8], sr=stateRef) )
 
             # Get the first transaction that we are about to process.
             trHistXml, trHist = self.GetHistInfo(ref=stateHash)
@@ -2894,6 +2918,15 @@ def AutoConfigFile(filename, args, preserveConfig=False):
         """)
         return 0
     return 1
+
+def ToUnixPath(path):
+    rv = SplitPath(path)
+    if rv is not None:
+        if rv[0] == '/':
+            rv = '/' + '/'.join(rv[1:])
+        else:
+            rv = '/'.join(rv)
+    return rv
 
 def SplitPath(path):
     rv = None
