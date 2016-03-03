@@ -1709,8 +1709,12 @@ CREATE TABLE IF NOT EXISTS command_cache (
                 ts = obj.TimeSpec.fromstring(timeSpec)
             else:
                 ts = timeSpec
-                
-            useCache = ts is not None and not (isinstance(ts.start, str) or isinstance(ts.end, str)) # If both values are non-keywords, we can cache them.
+
+            # For cache optimization convert highest and now keywords to numbers.
+            if ts is not None and not ts.is_cacheable() and depot is not None:
+                ts = ext.normalize_timespec(depot=depot, timeSpec=ts)
+
+            useCache = ts is not None and ts.is_cacheable() # If both values are non-keywords, we can cache them.
             useCache = useCache and listFile is None and outputFilename is None   # Ensure that we don't have any file operations...
         
         cmd = [ raw._accurevCmd, "hist" ]
@@ -2354,16 +2358,15 @@ class ext(object):
                 # transaction corresponds to this stream.
 
                 # Get all the transactions for this stream.
-                firstTr = hist(depot=depot, timeSpec="highest-1", stream=streamInfo.name).transactions[-1]
+                firstTr = hist(depot=depot, timeSpec="highest-1", stream=streamInfo.name, useCache=useCache).transactions[-1]
 
                 # Update the stream data from the time of the first transaction which will give us the correct startTime.
                 streamInfo = show.streams(depot=depot, timeSpec=firstTr.id, stream=stream).streams[0]
 
                 # Get all the mkstream transactions before the first transaction on this stream.
-                mkstreams = hist(depot=depot, timeSpec="{trId}-1".format(trId=firstTr.id), transactionKind="mkstream")
+                mkstreams = hist(depot=depot, timeSpec="{trId}-1".format(trId=firstTr.id), transactionKind="mkstream", useCache=useCache)
 
                 for t in mkstreams.transactions:
-                    print("Test mkstream:", t.id, "time", t.time, "==", streamInfo.startTime)
                     if GetTimestamp(t.time) == GetTimestamp(streamInfo.startTime):
                         if mkstreamTr is None:
                             mkstreamTr = t
@@ -2456,12 +2459,12 @@ class ext(object):
         #   1. Change the accurev keywords (e.g. highest, now) and dates into transaction numbers:
         #      Note: The keywords highest/now are translated w.r.t. the depot and not the stream.
         #            Otherwise we might miss later promotes to parent streams...
-        if not isinstance(ts.start, int):
-            ts.start = hist(depot=depot, timeSpec=ts.start).transactions[0].id
-        if not isinstance(ts.end, int):
-            ts.end = hist(depot=depot, timeSpec=ts.end).transactions[0].id
+        if not isinstance(ts.start, int) and ts.start is not None:
+            ts.start = hist(depot=depot, timeSpec=ts.start, useCache=False).transactions[0].id
+        if not isinstance(ts.end, int) and ts.end is not None:
+            ts.end = hist(depot=depot, timeSpec=ts.end, useCache=False).transactions[0].id
         #   2. If there is a limit set on the number of transactions convert it into a start and end without a limit...
-        if ts.limit is not None:
+        if ts.start is not None and ts.end is not None and ts.limit is not None:
             if ts.end is None or abs(ts.end - ts.start + 1) > ts.limit:
                 if ts.end > ts.start:
                     ts.end = ts.start - ts.limit + 1
@@ -2663,7 +2666,7 @@ import sys
 import argparse
 
 def clDeepHist(args):
-    transactions = ext.deep_hist(depot=args.depot, stream=args.stream, timeSpec=args.timeSpec, ignoreTimelocks=args.ignoreTimelocks)
+    transactions = ext.deep_hist(depot=args.depot, stream=args.stream, timeSpec=args.timeSpec, ignoreTimelocks=args.ignoreTimelocks, useCache=(args.cacheFile is not None))
     if transactions is not None and len(transactions) > 0:
         print("tr. type; destination stream; tr. number; username;")
         for tr in transactions:
@@ -2674,7 +2677,7 @@ def clDeepHist(args):
         return 1
 
 def clAffectedStreams(args):
-    streams = ext.affected_streams(depot=args.depot, transaction=args.transaction, includeWorkspaces=args.includeWorkspaces, ignoreTimelocks=args.ignoreTimelocks, doDiffs=args.diffCheck, useCache=args.useCache)
+    streams = ext.affected_streams(depot=args.depot, transaction=args.transaction, includeWorkspaces=args.includeWorkspaces, ignoreTimelocks=args.ignoreTimelocks, doDiffs=args.diffCheck, useCache=(args.cacheFile is not None))
     if streams is not None and len(streams) > 0:
         print("stream name; stream id; stream type;")
         for s in streams:
@@ -2685,7 +2688,7 @@ def clAffectedStreams(args):
         return 1
 
 def clGetMkstreamTransaction(args):
-    mkstreamTr = ext.get_mkstream_transaction(stream=args.stream, depot=args.depot, useCache=args.useCache)
+    mkstreamTr = ext.get_mkstream_transaction(stream=args.stream, depot=args.depot, useCache=(args.cacheFile is not None))
     if mkstreamTr is not None:
         print("tr. type; destination stream; tr. number; username;")
         print("{Type}; {stream}; {id}; {user};".format(id=mkstreamTr.id, user=mkstreamTr.user, Type=mkstreamTr.Type, stream=mkstreamTr.affectedStream()[0]))
@@ -2707,6 +2710,7 @@ if __name__ == "__main__":
     deepHistParser.add_argument('-s', '--stream',    dest='stream',   help='The accurev stream for which we want to know all the transactions which could have affected it.')
     deepHistParser.add_argument('-t', '--time-spec', dest='timeSpec', required=True, help='The accurev time-spec. e.g. 17-21 or 99.')
     deepHistParser.add_argument('-i', '--ignore-timelocks', dest='ignoreTimelocks', action='store_true', default=False, help='The returned set of transactions will include transactions which occurred in the parent stream before the timelock of the child stream (if any).')
+    deepHistParser.add_argument('-c', '--cache', dest='cacheFile', help='Specifies the command cacne filename to use for caching of accurev commands.')
 
     deepHistParser.set_defaults(func=clDeepHist)
 
@@ -2719,7 +2723,7 @@ if __name__ == "__main__":
     affectedStreamsParser.add_argument('-w', '--include-workspaces', dest='includeWorkspaces', action='store_true', default=False, help='The returned set of streams will include workspaces if this option is specified.')
     affectedStreamsParser.add_argument('-i', '--ignore-timelocks', dest='ignoreTimelocks', action='store_true', default=False, help='The returned set of streams will include streams whose timelocks would have otherwise prevented this stream from affecting them.')
     affectedStreamsParser.add_argument('-d', '--diff-check', dest='diffCheck', action='store_true', default=False, help='The returned set of streams will not include streams whose diffs to previous transaction return empty.')
-    affectedStreamsParser.add_argument('-c', '--cache', dest='useCache', action='store_true', default=False, help='Use the command cache for the needed operations (mainly diffs).')
+    affectedStreamsParser.add_argument('-c', '--cache', dest='cacheFile', help='Specifies the command cacne filename to use for caching of accurev commands.')
 
     affectedStreamsParser.set_defaults(func=clAffectedStreams)
 
@@ -2728,14 +2732,21 @@ if __name__ == "__main__":
     findMkstreamParser.description = 'Finds the mkstream transaction for the requested stream which may be non-trivial for old depots that have undergone a number of accurev version updates.'
     findMkstreamParser.add_argument('-p', '--depot',  dest='depot',    help='The name of the depot in which the stream was created (optional).')
     findMkstreamParser.add_argument('-s', '--stream', dest='stream',   required=True, help='The name or number of the stream for which we wish to find the mkstream transaction.')
-    findMkstreamParser.add_argument('-c', '--cache',  dest='useCache', action='store_true', default=False, help='Use the command cache for the needed operations (mainly diffs).')
+    findMkstreamParser.add_argument('-c', '--cache', dest='cacheFile', help='Specifies the command cacne filename to use for caching of accurev commands.')
 
     findMkstreamParser.set_defaults(func=clGetMkstreamTransaction)
 
     # Parse the arguments and execute
     args = argparser.parse_args()
 
+    if args.cacheFile is not None:
+        ext.enable_command_cache(args.cacheFile)
+
     rv = args.func(args)
+
+    if args.cacheFile is not None:
+        ext.disable_command_cache()
+
     if rv != 0:
         sys.exit(rv)
 
