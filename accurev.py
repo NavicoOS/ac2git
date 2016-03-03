@@ -2360,7 +2360,7 @@ class ext(object):
                 # Get the stream's information just before the first chstream transaction for this stream, which will by assumption have the `startTime` for the mkstream transaction.
                 chstreams = hist(depot=depot, timeSpec="highest-1", stream=streamInfo.name, transactionKind="chstream", useCache=useCache) # chstreams are rare so this should be quicker than looking for everything.
                 mkstreamsTimeSpecStr = "highest-1"
-                if chstreams is not None:
+                if chstreams is not None and len(chstreams.transactions) > 0:
                     firstChstreamTr = chstreams.transactions[-1]
                     # Update the stream data from the time of the first transaction which will give us the correct startTime.
                     streamInfo = show.streams(depot=depot, timeSpec=(firstChstreamTr.id - 1), stream=stream).streams[0]
