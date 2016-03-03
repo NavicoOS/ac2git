@@ -2357,14 +2357,17 @@ class ext(object):
                 # the `accurev show streams -s <stream> -t <first-transaction>` to get the correct `startTime=...` which will identify which mkstream
                 # transaction corresponds to this stream.
 
-                # Get all the transactions for this stream.
-                firstTr = hist(depot=depot, timeSpec="highest-1", stream=streamInfo.name, useCache=useCache).transactions[-1]
-
-                # Update the stream data from the time of the first transaction which will give us the correct startTime.
-                streamInfo = show.streams(depot=depot, timeSpec=firstTr.id, stream=stream).streams[0]
+                # Get the stream's information just before the first chstream transaction for this stream, which will by assumption have the `startTime` for the mkstream transaction.
+                chstreams = hist(depot=depot, timeSpec="highest-1", stream=streamInfo.name, transactionKind="chstream", useCache=useCache) # chstreams are rare so this should be quicker than looking for everything.
+                mkstreamsTimeSpecStr = "highest-1"
+                if chstreams is not None:
+                    firstChstreamTr = chstreams.transactions[-1]
+                    # Update the stream data from the time of the first transaction which will give us the correct startTime.
+                    streamInfo = show.streams(depot=depot, timeSpec=(firstChstreamTr.id - 1), stream=stream).streams[0]
+                    mkstreamsTimeSpecStr = "{trId}-1".format(trId=firstChstreamTr.id - 1)
 
                 # Get all the mkstream transactions before the first transaction on this stream.
-                mkstreams = hist(depot=depot, timeSpec="{trId}-1".format(trId=firstTr.id), transactionKind="mkstream", useCache=useCache)
+                mkstreams = hist(depot=depot, timeSpec=mkstreamsTimeSpecStr, transactionKind="mkstream", useCache=useCache)
 
                 for t in mkstreams.transactions:
                     if GetTimestamp(t.time) == GetTimestamp(streamInfo.startTime):
