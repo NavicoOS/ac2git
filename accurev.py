@@ -2371,11 +2371,11 @@ class ext(object):
                         if mkstreamTr is None:
                             mkstreamTr = t
                         else:
-                            raise Exception("Invariant error! Ambiguous: multiple mkstream transactions match! Could not determine if stream {s} was created by transaction {t1} or {t2}!".format(s=streamName, t1=mkstreamTr.id, t2=t.id))
+                            raise Exception("Invariant error! Ambiguous: multiple mkstream transactions match! Could not determine if stream {s} (name: {n}, id: {sn}) was created by transaction {t1} or {t2}!".format(s=stream, n=streamInfo.name, sn=streamInfo.streamNumber, t1=mkstreamTr.id, t2=t.id))
                     elif GetTimestamp(t.time) < GetTimestamp(streamInfo.startTime):
                         break # There's no point in looking for it any further than this since the transactions are sorted in descending order of transaction number and hence by time as well.
                 if mkstreamTr is None:
-                    raise Exception("Failed to find the mkstream transaction for stream {s} (id: {id}, created: {t} UTC)!".format(s=streamName, id=stream.streamNumber, t=stream.startTime))
+                    raise Exception("Failed to find the mkstream transaction for stream {s} (name: {n}, id: {sn}, created: {t} UTC)!".format(s=stream, n=streamInfo.name, sn=streamInfo.streamNumber, t=streamInfo.startTime))
             else:
                 # We found the mkstream transaction cheaply, return it.
                 mkstreamTr = mkstream.transactions[0]
