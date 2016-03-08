@@ -523,12 +523,15 @@ class AccuRev2Git(object):
         commitHash = None
         if ref is not None:
             cmd = [ u'git', u'show-ref', u'--hash', ref ]
-        else:
+        elif self.config.git.authorIsCommitter:
             cmd = [u'git', u'log', u'-1', u'--format=format:%H']
             if before is not None:
                 cmd.append(u'--before={before}'.format(before=before))
             if branchName is not None:
                 cmd.append(branchName)
+        else:
+            # See http://stackoverflow.com/questions/13987273/git-log-filter-by-commits-author-date
+            raise Exception("Not yet implemented! The search for a commit by date when the author time is not the same as the commiter time can't use the --before flag for git log.")
 
         for i in range(0, AccuRev2Git.commandFailureRetryCount):
             commitHash = self.gitRepo.raw_cmd(cmd)
