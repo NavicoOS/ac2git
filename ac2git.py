@@ -147,6 +147,7 @@ class Config(object):
             if xmlElement is not None and xmlElement.tag == 'git':
                 repoPath     = xmlElement.attrib.get('repo-path')
                 messageStyle = xmlElement.attrib.get('message-style')
+                messageKey   = xmlElement.attrib.get('message-key')
                 
                 remoteMap = OrderedDict()
                 remoteElementList = xmlElement.findall('remote')
@@ -157,19 +158,22 @@ class Config(object):
                     
                     remoteMap[remoteName] = git.GitRemoteListItem(name=remoteName, url=remoteUrl, pushUrl=remotePushUrl)
 
-                return cls(repoPath=repoPath, messageStyle=messageStyle, remoteMap=remoteMap)
+                return cls(repoPath=repoPath, messageStyle=messageStyle, messageKey=messageKey, remoteMap=remoteMap)
             else:
                 return None
             
-        def __init__(self, repoPath, messageStyle=None, remoteMap=None):
+        def __init__(self, repoPath, messageStyle=None, messageKey=None, remoteMap=None):
             self.repoPath     = repoPath
             self.messageStyle = messageStyle
+            self.messageKey   = messageKey
             self.remoteMap    = remoteMap
 
         def __repr__(self):
             str = "Config.Git(repoPath=" + repr(self.repoPath)
             if self.messageStyle is not None:
                 str += ", messageStyle=" + repr(self.messageStyle)
+            if self.messageKey is not None:
+                str += ", messageKey=" + repr(self.messageKey)
             if self.remoteMap is not None:
                 str += ", remoteMap="    + repr(self.remoteMap)
             str += ")"
@@ -1858,17 +1862,36 @@ class AccuRev2Git(object):
     def GenerateCommitMessage(self, transaction, stream=None, dstStream=None, srcStream=None, title=None, friendlyMessage=None):
         messageSections = []
         
-        style = "normal"
+        # The optional transaction key tag can be added to the footer or the header of the comment before anything else is done.
+        trComment = transaction.comment
+        messageKey = None
+        if self.config.git.messageKey is not None:
+            messageKey = self.config.git.messageKey.lower()
+
+            trKey = '{stream}/{transaction}'.format(stream=transaction.affectedStream()[0], transaction=transaction.id)
+
+            if trComment is None:
+                trComment = trKey
+            else:
+                if messageKey == "footer":
+                    trComment = '\n\n'.join([trComment, trKey])
+                elif messageKey == "header":
+                    trComment = '\n\n'.join([trKey, trComment])
+                else:
+                    raise Exception("Unrecognized value '{v}' for message-key attribute of the git configuration file element.".format(v=self.config.git.messageKey))
+
+        # The messageStyle option determines additional information that is far more detailed than the simple transaction key and is processed here.
+        style = "notes"
         if self.config.git.messageStyle is not None:
             style = self.config.git.messageStyle.lower()
 
         if style == "clean":
-            return (transaction.comment, None)
+            return (trComment, None)
         elif style in [ "normal", "notes" ]:
             if title is not None:
                 messageSections.append(title)
-            if transaction.comment is not None:
-                messageSections.append(transaction.comment)
+            if trComment is not None:
+                messageSections.append(trComment)
             
             notes = None
             suffix = self.GenerateCommitMessageSuffix(transaction=transaction, stream=stream, dstStream=dstStream, srcStream=srcStream, friendlyMessage=friendlyMessage)
@@ -2728,11 +2751,13 @@ def DumpExampleConfigFile(outputFilename):
             <stream>some_other_stream</stream>
         </stream-list>
     </accurev>
-    <git repo-path="/put/the/git/repo/here" message-style="normal" >  <!-- The system path where you want the git repo to be populated. Note: this folder should already exist. 
-                                                                           The message-style attribute can either be "normal", "clean" or "notes". When set to "normal" accurev transaction information is included
+    <git repo-path="/put/the/git/repo/here" message-style="notes" message-key="footer" >  <!-- The system path where you want the git repo to be populated. Note: this folder should already exist. 
+                                                                             The message-style attribute can either be "normal", "clean" or "notes". When set to "normal" accurev transaction information is included
                                                                            at the end (in the footer) of each commit message. When set to "clean" the transaction comment is the commit message without any
                                                                            additional information. When set to "notes" a note is added to each commit in the "accurev" namespace (to show them use `git log -notes=accurev`),
                                                                            with the same accurev information that would have been shown in the commit message footer in the "normal" mode.
+                                                                             The message-key attribute can be either "footer", "header" or omitted and adds a simple key with the destination-stream/transaction-number format either
+                                                                           before (header) or after (footer) the commit message which can be used to quickly go back to accurev and figure out where this transaction came from.
                                                                       -->
         <remote name="origin" url="https://github.com/orao/ac2git.git" push-url="https://github.com/orao/ac2git.git" /> <!-- Optional: Specifies the remote to which the converted
                                                                                                                              branches will be pushed. The push-url attribute is optional. -->
@@ -2876,12 +2901,14 @@ def AutoConfigFile(filename, args, preserveConfig=False):
         file.write("""
         </stream-list>
     </accurev>
-    <git repo-path="{git_repo_path}" message-style="{message_style}" >  <!-- The system path where you want the git repo to be populated. Note: this folder should already exist.
+    <git repo-path="{git_repo_path}" message-style="{message_style}" message-key="{message_key}" >  <!-- The system path where you want the git repo to be populated. Note: this folder should already exist.
                                                                              The message-style attribute can either be "normal", "clean" or "notes". When set to "normal" accurev transaction information is included
                                                                            at the end (in the footer) of each commit message. When set to "clean" the transaction comment is the commit message without any
                                                                            additional information. When set to "notes" a note is added to each commit in the "accurev" namespace (to show them use `git log --notes=accurev`),
                                                                            with the same accurev information that would have been shown in the commit message footer in the "normal" mode.
-                                                                        -->""".format(git_repo_path=config.git.repoPath, message_style=config.git.messageStyle if config.git.messageStyle is not None else 'normal'))
+                                                                             The message-key attribute can be either "footer" or "header" and adds a simple key with the <destination-stream>/<transaction-number> format either
+                                                                           before or after the commit message which can be used to quickly go back to accurev and figure out where this transaction came from.
+                                                                        -->""".format(git_repo_path=config.git.repoPath, message_style=config.git.messageStyle if config.git.messageStyle is not None else 'notes', message_key=config.git.messageKey if config.git.messageKey is not None else 'footer'))
         if config.git.remoteMap is not None:
             for remoteName in remoteMap:
                 remote = remoteMap[remoteName]
@@ -3036,6 +3063,7 @@ def PrintConfigSummary(config):
         config.logger.info('  git')
         config.logger.info('    repo path: {0}'.format(config.git.repoPath))
         config.logger.info('    message style: {0}'.format(config.git.messageStyle))
+        config.logger.info('    message key: {0}'.format(config.git.messageKey))
         if config.git.remoteMap is not None:
             for remoteName in config.git.remoteMap:
                 remote = config.git.remoteMap[remoteName]
