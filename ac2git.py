@@ -2181,7 +2181,7 @@ class AccuRev2Git(object):
                         raise Exception("Failed to commit chstream {trId}".format(trId=tr.id))
                     self.config.logger.info("{Type} {tr}. committed to {branch} {h}. {title}".format(Type=tr.Type, tr=tr.id, branch=branchName, h=commitHash[:8], title=title))
                 else:
-                    self.config.logger.info("{Type} {tr}. skiping commit to {branch}. (fast-forward to {h}) {title}".format(Type=tr.Type, tr=tr.id, branch=branchName, h=lastBasisCommitHash[:8], title=title))
+                    self.config.logger.dbg("{Type} {tr}. skiping commit to {branch}. (fast-forward to {h}) {title}".format(Type=tr.Type, tr=tr.id, branch=branchName, h=lastBasisCommitHash[:8], title=title))
 
                 # Process all affected streams.
                 allStreamTree = self.BuildStreamTree(streams=streams.streams)
