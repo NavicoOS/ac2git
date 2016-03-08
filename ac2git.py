@@ -148,7 +148,8 @@ class Config(object):
                 repoPath     = xmlElement.attrib.get('repo-path')
                 messageStyle = xmlElement.attrib.get('message-style')
                 messageKey   = xmlElement.attrib.get('message-key')
-                
+                authorIsCommitter = xmlElement.attrib.get('author-is-committer')
+
                 remoteMap = OrderedDict()
                 remoteElementList = xmlElement.findall('remote')
                 for remoteElement in remoteElementList:
@@ -158,15 +159,24 @@ class Config(object):
                     
                     remoteMap[remoteName] = git.GitRemoteListItem(name=remoteName, url=remoteUrl, pushUrl=remotePushUrl)
 
-                return cls(repoPath=repoPath, messageStyle=messageStyle, messageKey=messageKey, remoteMap=remoteMap)
+                return cls(repoPath=repoPath, messageStyle=messageStyle, messageKey=messageKey, authorIsCommitter=authorIsCommitter, remoteMap=remoteMap)
             else:
                 return None
             
-        def __init__(self, repoPath, messageStyle=None, messageKey=None, remoteMap=None):
+        def __init__(self, repoPath, messageStyle=None, messageKey=None, authorIsCommitter=None, remoteMap=None):
             self.repoPath     = repoPath
             self.messageStyle = messageStyle
             self.messageKey   = messageKey
             self.remoteMap    = remoteMap
+
+            if authorIsCommitter is not None:
+                authorIsCommitter = authorIsCommitter.lower()
+                if authorIsCommitter not in [ "true", "false" ]:
+                    raise Exception("The author-is-committer attribute only accepts true or false but was set to '{v}'.".format(v=authorIsCommitter))
+                authorIsCommitter = (authorIsCommitter == "true")
+            else:
+                authroIsCommitter = True
+            self.authorIsCommitter = authorIsCommitter
 
         def __repr__(self):
             str = "Config.Git(repoPath=" + repr(self.repoPath)
@@ -176,6 +186,8 @@ class Config(object):
                 str += ", messageKey=" + repr(self.messageKey)
             if self.remoteMap is not None:
                 str += ", remoteMap="    + repr(self.remoteMap)
+            if self.authorIsCommitter is not None:
+                str += ", authorIsCommitter="    + repr(self.authorIsCommitter)
             str += ")"
             
             return str
@@ -625,11 +637,16 @@ class AccuRev2Git(object):
             return None
 
         # Get the author's and committer's name, email and timezone information.
-        committerName, committerEmail = None, None
-        committerDate, committerTimezone = None, None
+        authorName, authorEmail, authorDate, authorTimezone = None, None, None, None
         if transaction is not None:
-            committerName, committerEmail = self.GetGitUserFromAccuRevUser(transaction.user)
-            committerDate, committerTimezone = self.GetGitDatetime(accurevUsername=transaction.user, accurevDatetime=transaction.time)
+            authorName, authorEmail = self.GetGitUserFromAccuRevUser(transaction.user)
+            authorDate, authorTimezone = self.GetGitDatetime(accurevUsername=transaction.user, accurevDatetime=transaction.time)
+
+        # If the author-is-committer flag is set to true make the committer the same as the author.
+        committerName, committerEmail, committerDate, committerTimezone = None, None, None, None
+        if self.config.git.authorIsCommitter:
+            committerName, committerEmail, committerDate, committerTimezone = authorName, authorEmail, authorDate, authorTimezone
+
         if not isFirstCommit:
             lastCommitHash = self.GetLastCommitHash(ref=ref) # If ref is None, it will get the last commit hash from the HEAD ref.
             if usePlumbing and parents is None:
@@ -2751,13 +2768,16 @@ def DumpExampleConfigFile(outputFilename):
             <stream>some_other_stream</stream>
         </stream-list>
     </accurev>
-    <git repo-path="/put/the/git/repo/here" message-style="notes" message-key="footer" >  <!-- The system path where you want the git repo to be populated. Note: this folder should already exist. 
+    <git repo-path="/put/the/git/repo/here" message-style="notes" message-key="footer" author-is-committer="true" >  <!-- The system path where you want the git repo to be populated. Note: this folder should already exist. 
                                                                              The message-style attribute can either be "normal", "clean" or "notes". When set to "normal" accurev transaction information is included
                                                                            at the end (in the footer) of each commit message. When set to "clean" the transaction comment is the commit message without any
                                                                            additional information. When set to "notes" a note is added to each commit in the "accurev" namespace (to show them use `git log -notes=accurev`),
                                                                            with the same accurev information that would have been shown in the commit message footer in the "normal" mode.
                                                                              The message-key attribute can be either "footer", "header" or omitted and adds a simple key with the destination-stream/transaction-number format either
                                                                            before (header) or after (footer) the commit message which can be used to quickly go back to accurev and figure out where this transaction came from.
+                                                                             The author-is-committer attribute controls if the configured git user or the transaction user is used as the committer for the conversion. Setting
+                                                                           it to "false" makes the conversion use the configured git user to perform the commits while the author information will be taken from the Accurev transaction.
+                                                                           Setting it to "true" will make the conversion set the Accurev transaction user as both the author and the committer.
                                                                       -->
         <remote name="origin" url="https://github.com/orao/ac2git.git" push-url="https://github.com/orao/ac2git.git" /> <!-- Optional: Specifies the remote to which the converted
                                                                                                                              branches will be pushed. The push-url attribute is optional. -->
@@ -2901,14 +2921,17 @@ def AutoConfigFile(filename, args, preserveConfig=False):
         file.write("""
         </stream-list>
     </accurev>
-    <git repo-path="{git_repo_path}" message-style="{message_style}" message-key="{message_key}" >  <!-- The system path where you want the git repo to be populated. Note: this folder should already exist.
+    <git repo-path="{git_repo_path}" message-style="{message_style}" message-key="{message_key}"  author-is-committer="{author_is_committer}" >  <!-- The system path where you want the git repo to be populated. Note: this folder should already exist.
                                                                              The message-style attribute can either be "normal", "clean" or "notes". When set to "normal" accurev transaction information is included
                                                                            at the end (in the footer) of each commit message. When set to "clean" the transaction comment is the commit message without any
                                                                            additional information. When set to "notes" a note is added to each commit in the "accurev" namespace (to show them use `git log --notes=accurev`),
                                                                            with the same accurev information that would have been shown in the commit message footer in the "normal" mode.
                                                                              The message-key attribute can be either "footer" or "header" and adds a simple key with the <destination-stream>/<transaction-number> format either
                                                                            before or after the commit message which can be used to quickly go back to accurev and figure out where this transaction came from.
-                                                                        -->""".format(git_repo_path=config.git.repoPath, message_style=config.git.messageStyle if config.git.messageStyle is not None else 'notes', message_key=config.git.messageKey if config.git.messageKey is not None else 'footer'))
+                                                                             The author-is-committer attribute controls if the configured git user or the transaction user is used as the committer for the conversion. Setting
+                                                                           it to "false" makes the conversion use the configured git user to perform the commits while the author information will be taken from the Accurev transaction.
+                                                                           Setting it to "true" will make the conversion set the Accurev transaction user as both the author and the committer.
+                                                                        -->""".format(git_repo_path=config.git.repoPath, message_style=config.git.messageStyle if config.git.messageStyle is not None else 'notes', message_key=config.git.messageKey if config.git.messageKey is not None else 'footer', author_is_committer="true" if self.config.git.authorIsCommitter else "false"))
         if config.git.remoteMap is not None:
             for remoteName in remoteMap:
                 remote = remoteMap[remoteName]
@@ -3064,6 +3087,7 @@ def PrintConfigSummary(config):
         config.logger.info('    repo path: {0}'.format(config.git.repoPath))
         config.logger.info('    message style: {0}'.format(config.git.messageStyle))
         config.logger.info('    message key: {0}'.format(config.git.messageKey))
+        config.logger.info('    author is committer: {0}'.format(config.git.authorIsCommitter))
         if config.git.remoteMap is not None:
             for remoteName in config.git.remoteMap:
                 remote = config.git.remoteMap[remoteName]
