@@ -2029,13 +2029,13 @@ class AccuRev2Git(object):
                         # Fast-forward the child branch to here.
                         if self.UpdateAndCheckoutRef(ref='refs/heads/{branch}'.format(branch=childBranchName), commitHash=lastCommitHash, checkout=False) != True:
                             raise Exception("Failed to fast-forward {branch} to {hash} (latest commit on {parentBranch}.".format(branch=childBranchName, hash=lastCommitHash[:8], parentBranch=branchName))
+                        self.config.logger.info("{trType} {trId}. Fast-forward {b} to {dst} {h} (affected child stream). Was at {ch}.".format(trType=tr.Type, trId=tr.id, b=childBranchName, dst=branchName, h=lastCommitHash[:8], ch=lastChildCommitHash[:8]))
                     else:
                         # Merge by specifying the parent commits.
                         parents = [ lastChildCommitHash , lastCommitHash ] # Make this commit a merge of the parent stream into the child stream.
                         if None in parents:
                             raise Exception("Invariant error! Either the source hash {sh} or the destination hash {dh} was none!".format(sh=parents[1], dh=parents[0]))
-                        
-                        self.config.logger.info("{trType} {trId}. Merge {dst} into {b} {h} (affected child stream).".format(trType=tr.Type, trId=tr.id, b=childBranchName, dst=branchName, h=lastCommitHash[:8]))
+                        self.config.logger.info("{trType} {trId}. Merge {dst} into {b} {h} (affected child stream). {ch} was not an ancestor of {h}.".format(trType=tr.Type, trId=tr.id, b=childBranchName, dst=branchName, h=lastCommitHash[:8], ch=lastChildCommitHash[:8]))
                 else:
                     parents = [ lastChildCommitHash ] # Make this commit a cherry-pick with no relationship to the parent stream.
                     self.config.logger.info("{trType} {trId}. Cherry-pick {dst} {dstHash} into {b} - diff between {h1} and {dstHash} was not empty! (affected child stream)".format(trType=tr.Type, trId=tr.id, b=childBranchName, dst=branchName, dstHash=lastCommitHash[:8], h1=childStreamData["data_hash"][:8]))
@@ -2161,7 +2161,7 @@ class AccuRev2Git(object):
                         # Fast-forward the timelocked stream branch to the correct commit.
                         if self.UpdateAndCheckoutRef(ref='refs/heads/{branch}'.format(branch=branchName), commitHash=lastBasisCommitHash, checkout=False) != True:
                             raise Exception("Failed to fast-forward {branch} to {hash} (latest commit on {parentBranch}).".format(branch=branchName, hash=lastBasisCommitHash[:8], parentBranch=basisBranchName))
-                        parents = [ lastBasisCommitHash ] # We will not base our commit on the last hash of our branch but from the basis commit that we took at the timelock.
+                        parents = None # Do not commit!
                         self.config.logger.info("{trType} {trId}. Fast-forward {dst} to {b} {h}.".format(trType=tr.Type, trId=tr.id, b=basisBranchName, h=lastBasisCommitHash[:8], dst=branchName))
                     else:
                         # Merge by specifying the parent commits.
@@ -2175,10 +2175,13 @@ class AccuRev2Git(object):
                 if treeHash is None:
                     raise Exception("Couldn't get tree for {trType} {trId} on stream {s}".format(trType=tr.Type, trId=tr.id, s=stream.name))
 
-                commitHash = self.CommitTransaction(tr=tr, stream=stream, treeHash=treeHash, parents=parents, branchName=branchName, title=title)
-                if commitHash is None:
-                    raise Exception("Failed to commit chstream {trId}".format(trId=tr.id))
-                self.config.logger.info("{Type} {tr}. committed to {branch} {h}. {title}".format(Type=tr.Type, tr=tr.id, branch=branchName, h=commitHash[:8], title=title))
+                if parents is not None:
+                    commitHash = self.CommitTransaction(tr=tr, stream=stream, treeHash=treeHash, parents=parents, branchName=branchName, title=title)
+                    if commitHash is None:
+                        raise Exception("Failed to commit chstream {trId}".format(trId=tr.id))
+                    self.config.logger.info("{Type} {tr}. committed to {branch} {h}. {title}".format(Type=tr.Type, tr=tr.id, branch=branchName, h=commitHash[:8], title=title))
+                else:
+                    self.config.logger.info("{Type} {tr}. skiping commit to {branch}. (fast-forward to {h}) {title}".format(Type=tr.Type, tr=tr.id, branch=branchName, h=lastBasisCommitHash[:8], title=title))
 
                 # Process all affected streams.
                 allStreamTree = self.BuildStreamTree(streams=streams.streams)
