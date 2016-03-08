@@ -2258,7 +2258,6 @@ class AccuRev2Git(object):
                             raise Exception("Invariant error! Either the source hash {sh} or the destination hash {dh} was none!".format(sh=parents[1], dh=parents[0]))
                         
                         commitHash = self.CommitTransaction(tr=tr, stream=stream, parents=parents, treeHash=treeHash, branchName=branchName, srcStream=srcStream, dstStream=stream)
-                        # TODO: Does the following make sense? Should we bring up the source stream to the latest commit?
                         # This is a manual merge and the srcBranchName should be fastforwarded to this commit since its contents now matches the parent stream.
                         if self.UpdateAndCheckoutRef(ref='refs/heads/{branch}'.format(branch=srcBranchName), commitHash=commitHash, checkout=False) != True:
                             raise Exception("Failed to update source {branch} to {hash} latest commit.".format(branch=srcBranchName, hash=commitHash[:8]))
@@ -2281,7 +2280,20 @@ class AccuRev2Git(object):
                 else:
                     self.config.logger.info("{trType} {tr}. Destination stream {dst} (id: {num}) is not tracked.".format(trType=tr.Type, tr=tr.id, dst=streamName, num=streamNumber))
 
-                # Process all affected streams.
+                # TODO: Fix issue '#51 - Make purges into merges' here
+                # ====================================================
+                # In the case that this transaction/commit makes the child stream have the same contents as the parent stream (i.e. after a `purge` transaction that deleted everything from the stream)
+                # We should either merge this stream into its parent or rebase it onto its parent (neither of which is ideal).
+                #   - If we make a merge commit on the parent we are effectively lying, since no transaction actually occurred on the parent stream. Additionally, we probably have to propagate it to all
+                #     of our sibling streams that are direct ancestors of our parent and don't have timelocks.
+                #   - If we rebase the branch onto the parent we will need to label the commit so that we don't lose that history and are at the same time making the life of anyone who is
+                #     trying to figure out what happened in the past more difficult. Accurev shows the purge as a transaction in the stream and so should we.
+                #
+                # Aside: The more I think about it the more Accurev seems to follow the cherry-picking workflow which might explain why it feels so broken. Trying to infer merges from it is also
+                #        quite tricky...
+                # ----------------------------------------------------
+
+                # Process all affected streams (which are generally the child streams of this stream).
                 allStreamTree = self.BuildStreamTree(streams=streams.streams)
                 affectedStreamTree = self.PruneStreamTree(streamTree=allStreamTree, keepList=[ sn for sn in affectedStreamMap ])
                 self.MergeIntoChildren(tr=tr, streamTree=affectedStreamTree, streamMap=streamMap, affectedStreamMap=affectedStreamMap, streams=streams, streamNumber=(None if commitHash is None else streamNumber))
