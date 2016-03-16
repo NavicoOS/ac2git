@@ -149,6 +149,8 @@ class Config(object):
                 messageStyle = xmlElement.attrib.get('message-style')
                 messageKey   = xmlElement.attrib.get('message-key')
                 authorIsCommitter = xmlElement.attrib.get('author-is-committer')
+                emptyChildStreamAction = xmlElement.attrib.get('empty-child-stream-action')
+
 
                 remoteMap = OrderedDict()
                 remoteElementList = xmlElement.findall('remote')
@@ -159,15 +161,15 @@ class Config(object):
                     
                     remoteMap[remoteName] = git.GitRemoteListItem(name=remoteName, url=remoteUrl, pushUrl=remotePushUrl)
 
-                return cls(repoPath=repoPath, messageStyle=messageStyle, messageKey=messageKey, authorIsCommitter=authorIsCommitter, remoteMap=remoteMap)
+                return cls(repoPath=repoPath, messageStyle=messageStyle, messageKey=messageKey, authorIsCommitter=authorIsCommitter, remoteMap=remoteMap, emptyChildStreamAction=emptyChildStreamAction)
             else:
                 return None
             
-        def __init__(self, repoPath, messageStyle=None, messageKey=None, authorIsCommitter=None, remoteMap=None):
-            self.repoPath     = repoPath
-            self.messageStyle = messageStyle
-            self.messageKey   = messageKey
-            self.remoteMap    = remoteMap
+        def __init__(self, repoPath, messageStyle=None, messageKey=None, authorIsCommitter=None, remoteMap=None, emptyChildStreamAction=None):
+            self.repoPath               = repoPath
+            self.messageStyle           = messageStyle
+            self.messageKey             = messageKey
+            self.remoteMap              = remoteMap
 
             if authorIsCommitter is not None:
                 authorIsCommitter = authorIsCommitter.lower()
@@ -177,6 +179,13 @@ class Config(object):
             else:
                 authroIsCommitter = True
             self.authorIsCommitter = authorIsCommitter
+
+            if emptyChildStreamAction is not None:
+                if emptyChildStreamAction not in [ "merge", "cherry-pick" ]:
+                    raise Exception("Error, the empty-child-stream-action attribute only accepts merge or cherry-pick options but got: {0}".format(emptyChildStreamAction))
+                self.emptyChildStreamAction = emptyChildStreamAction
+            else:
+                self.emptyChildStreamAction = "cherry-pick"
 
         def __repr__(self):
             str = "Config.Git(repoPath=" + repr(self.repoPath)
@@ -341,7 +350,6 @@ class Config(object):
                 usermaps = Config.GetUsermapsFromXmlElement(userMapsElem)
                 knownAccurevUsers = set([x.accurevUsername for x in usermaps])
                 # Check if we need to load extra usermaps from a file.
-                print(userMapsElem.attrib)
                 mapFilename = userMapsElem.attrib.get("filename")
                 if mapFilename is not None:
                     includedUsermaps = Config.GetUsermapsFromFile(mapFilename)
@@ -2124,16 +2132,24 @@ class AccuRev2Git(object):
                             raise Exception("Failed to fast-forward {branch} to {hash} (latest commit on {parentBranch}.".format(branch=childBranchName, hash=lastCommitHash[:8], parentBranch=branchName))
                         self.config.logger.info("{trType} {trId}. Fast-forward {b} to {dst} {h} (affected child stream). Was at {ch}.".format(trType=tr.Type, trId=tr.id, b=childBranchName, dst=branchName, h=lastCommitHash[:8], ch=lastChildCommitHash[:8]))
                     else:
-                        # Merge by specifying the parent commits.
-                        parents = [ lastChildCommitHash , lastCommitHash ] # Make this commit a merge of the parent stream into the child stream.
-                        if None in parents:
-                            raise Exception("Invariant error! Either the source hash {sh} or the destination hash {dh} was none!".format(sh=parents[1], dh=parents[0]))
-                        self.config.logger.info("{trType} {trId}. Merge {dst} into {b} {h} (affected child stream). {ch} was not an ancestor of {h}.".format(trType=tr.Type, trId=tr.id, b=childBranchName, dst=branchName, h=lastCommitHash[:8], ch=lastChildCommitHash[:8]))
+                        if self.config.git.emptyChildStreamAction == "merge":
+                            # Merge by specifying the parent commits.
+                            parents = [ lastChildCommitHash , lastCommitHash ] # Make this commit a merge of the parent stream into the child stream.
+                            self.config.logger.info("{trType} {trId}. Merge {dst} into {b} {h} (affected child stream). {ch} was not an ancestor of {h}.".format(trType=tr.Type, trId=tr.id, b=childBranchName, dst=branchName, h=lastCommitHash[:8], ch=lastChildCommitHash[:8]))
+                        elif self.config.git.emptyChildStreamAction == "cherry-pick":
+                            parents = [ lastChildCommitHash ] # Make this commit a cherry-pick of the parent stream into the child stream.
+                            self.config.logger.info("{trType} {trId}. Cherry-pick {dst} into {b} {h} (affected child stream). {ch} was not an ancestor of {h}.".format(trType=tr.Type, trId=tr.id, b=childBranchName, dst=branchName, h=lastCommitHash[:8], ch=lastChildCommitHash[:8]))
+                        else:
+                            raise Exception("Unhandled option for self.config.git.emptyChildStreamAction. Option was set to: {0}".format(self.config.git.emptyChildStreamAction))
+
+                        print("merge?", self.config.git.emptyChildStreamAction, "parents:", parents)
                 else:
                     parents = [ lastChildCommitHash ] # Make this commit a cherry-pick with no relationship to the parent stream.
                     self.config.logger.info("{trType} {trId}. Cherry-pick {dst} {dstHash} into {b} - diff between {h1} and {dstHash} was not empty! (affected child stream)".format(trType=tr.Type, trId=tr.id, b=childBranchName, dst=branchName, dstHash=lastCommitHash[:8], h1=childStreamData["data_hash"][:8]))
 
                 if parents is not None:
+                    if None in parents:
+                        raise Exception("Invariant error! Either the source hash {sh} or the destination hash {dh} was none!".format(sh=parents[1], dh=parents[0]))
                     commitHash = self.CommitTransaction(tr=tr, stream=childStream, treeHash=childTreeHash, parents=parents, branchName=childBranchName, srcStream=srcStream, dstStream=dstStream)
                     if commitHash is None:
                         raise Exception("Failed to commit transaction {trId} to branch {branchName}.".format(trId=tr.id, branchName=childBranchName))
@@ -2824,21 +2840,25 @@ def DumpExampleConfigFile(outputFilename):
 
     <!-- Git details:
             repo-path:     The system path where you want the git repo to be populated. Note: this folder should already exist. 
-            message-style: can either be "normal", "clean" or "notes". When set to "normal" accurev transaction information is included
+            message-style: [ "normal", "clean", "notes" ] - When set to "normal" accurev transaction information is included
                            at the end (in the footer) of each commit message. When set to "clean" the transaction comment is the commit message without any
                            additional information. When set to "notes" a note is added to each commit in the "accurev" namespace (to show them use `git log -notes=accurev`),
                            with the same accurev information that would have been shown in the commit message footer in the "normal" mode.
-            message-key:   can be either "footer", "header" or omitted and adds a simple key with the destination-stream/transaction-number format either
+            message-key:   [ "footer", "header" ] - can be either "footer", "header" or omitted and adds a simple key with the destination-stream/transaction-number format either
                            before (header) or after (footer) the commit message which can be used to quickly go back to accurev and figure out where this transaction came from.
-            author-is-committer: controls if the configured git user or the transaction user is used as the committer for the conversion. Setting
+            author-is-committer: [ "true", "false" ] - controls if the configured git user or the transaction user is used as the committer for the conversion. Setting
                                  it to "false" makes the conversion use the configured git user to perform the commits while the author information will be taken from the Accurev transaction.
                                  Setting it to "true" will make the conversion set the Accurev transaction user as both the author and the committer.
+            empty-child-stream-action: [ "merge", "cherry-pick" ] - controls whether the child streams that are affected by a transaction to its parent stream make a "merge" commit (merging the
+                                       parent branch into the child branch) or a "cherry-pick" commit that does not contain that linkage. The "merge" commit is only made if the child stream's
+                                       contents at this transaction matches the parent streams contents exactly (git diff between the two branches at this transaction would be the same).
     -->
     <git 
         repo-path="/put/the/git/repo/here" 
         message-style="notes" 
         message-key="footer" 
-        author-is-committer="true" > 
+        author-is-committer="true"
+        empty-child-stream-action="merge" > 
         <!-- Optional: You can add remote elements to specify the remotes to which the converted branches will be pushed. The push-url attribute is optional. -->
         <remote name="origin" url="https://github.com/orao/ac2git.git" push-url="https://github.com/orao/ac2git.git" /> 
         <remote name="backup" url="https://github.com/orao/ac2git.git" />
@@ -2985,17 +3005,28 @@ def AutoConfigFile(filename, args, preserveConfig=False):
         file.write("""
         </stream-list>
     </accurev>
-    <git repo-path="{git_repo_path}" message-style="{message_style}" message-key="{message_key}"  author-is-committer="{author_is_committer}" >  <!-- The system path where you want the git repo to be populated. Note: this folder should already exist.
-                                                                             The message-style attribute can either be "normal", "clean" or "notes". When set to "normal" accurev transaction information is included
-                                                                           at the end (in the footer) of each commit message. When set to "clean" the transaction comment is the commit message without any
-                                                                           additional information. When set to "notes" a note is added to each commit in the "accurev" namespace (to show them use `git log --notes=accurev`),
-                                                                           with the same accurev information that would have been shown in the commit message footer in the "normal" mode.
-                                                                             The message-key attribute can be either "footer" or "header" and adds a simple key with the <destination-stream>/<transaction-number> format either
-                                                                           before or after the commit message which can be used to quickly go back to accurev and figure out where this transaction came from.
-                                                                             The author-is-committer attribute controls if the configured git user or the transaction user is used as the committer for the conversion. Setting
-                                                                           it to "false" makes the conversion use the configured git user to perform the commits while the author information will be taken from the Accurev transaction.
-                                                                           Setting it to "true" will make the conversion set the Accurev transaction user as both the author and the committer.
-                                                                        -->""".format(git_repo_path=config.git.repoPath, message_style=config.git.messageStyle if config.git.messageStyle is not None else 'notes', message_key=config.git.messageKey if config.git.messageKey is not None else 'footer', author_is_committer="true" if self.config.git.authorIsCommitter else "false"))
+
+    <!-- Git details:
+            repo-path:     The system path where you want the git repo to be populated. Note: this folder should already exist. 
+            message-style: [ "normal", "clean", "notes" ] - When set to "normal" accurev transaction information is included
+                           at the end (in the footer) of each commit message. When set to "clean" the transaction comment is the commit message without any
+                           additional information. When set to "notes" a note is added to each commit in the "accurev" namespace (to show them use `git log -notes=accurev`),
+                           with the same accurev information that would have been shown in the commit message footer in the "normal" mode.
+            message-key:   [ "footer", "header" ] - can be either "footer", "header" or omitted and adds a simple key with the destination-stream/transaction-number format either
+                           before (header) or after (footer) the commit message which can be used to quickly go back to accurev and figure out where this transaction came from.
+            author-is-committer: [ "true", "false" ] - controls if the configured git user or the transaction user is used as the committer for the conversion. Setting
+                                 it to "false" makes the conversion use the configured git user to perform the commits while the author information will be taken from the Accurev transaction.
+                                 Setting it to "true" will make the conversion set the Accurev transaction user as both the author and the committer.
+            empty-child-stream-action: [ "merge", "cherry-pick" ] - controls whether the child streams that are affected by a transaction to its parent stream make a "merge" commit (merging the
+                                       parent branch into the child branch) or a "cherry-pick" commit that does not contain that linkage. The "merge" commit is only made if the child stream's
+                                       contents at this transaction matches the parent streams contents exactly (git diff between the two branches at this transaction would be the same).
+    -->
+    <git 
+        repo-path="{git_repo_path}" 
+        message-style="{message_style}" 
+        message-key="{message_key}"  
+        author-is-committer="{author_is_committer}"
+        empty-child-stream-action="{empty_child_stream_action}">""".format(git_repo_path=config.git.repoPath, message_style=config.git.messageStyle if config.git.messageStyle is not None else 'notes', message_key=config.git.messageKey if config.git.messageKey is not None else 'footer', author_is_committer="true" if self.config.git.authorIsCommitter else "false", empty_child_stream_action=config.git.emptyChildStreamAction))
         if config.git.remoteMap is not None:
             for remoteName in remoteMap:
                 remote = remoteMap[remoteName]
@@ -3128,6 +3159,8 @@ def SetConfigFromArgs(config, args):
         config.accurev.depot    = args.accurevDepot
     if args.gitRepoPath is not None:
         config.git.repoPath     = args.gitRepoPath
+    if args.emptyChildStreamAction is not None:
+        config.git.emptyChildStreamAction = args.emptyChildStreamAction
     if args.conversionMethod is not None:
         config.method = args.conversionMethod
     if args.mergeStrategy is not None:
@@ -3156,6 +3189,7 @@ def PrintConfigSummary(config):
         config.logger.info('    message style: {0}'.format(config.git.messageStyle))
         config.logger.info('    message key: {0}'.format(config.git.messageKey))
         config.logger.info('    author is committer: {0}'.format(config.git.authorIsCommitter))
+        config.logger.info('    empty child stream action: {0}'.format(config.git.emptyChildStreamAction))
         if config.git.remoteMap is not None:
             for remoteName in config.git.remoteMap:
                 remote = config.git.remoteMap[remoteName]
@@ -3197,6 +3231,7 @@ def AccuRev2GitMain(argv):
     parser.add_argument('-g', '--git-repo-path', dest='gitRepoPath',         metavar='<git-repo-path>',     help="The system path to an existing folder where the git repository will be created.")
     parser.add_argument('-M', '--method', dest='conversionMethod', choices=['skip', 'pop', 'diff', 'deep-hist'], metavar='<conversion-method>', help="Specifies the method which is used to perform the conversion. Can be either 'pop', 'diff' or 'deep-hist'. 'pop' specifies that every transaction is populated in full. 'diff' specifies that only the differences are populated but transactions are iterated one at a time. 'deep-hist' specifies that only the differences are populated and that only transactions that could have affected this stream are iterated.")
     parser.add_argument('-S', '--merge-strategy', dest='mergeStrategy', choices=['skip', 'normal', 'orphanage'], metavar='<merge-strategy>', help="Sets the merge strategy which dictates how the git repository branches are generated. Depending on the value chosen the branches can be orphan branches ('orphanage' strategy) or have merges where promotes have occurred with the 'normal' strategy. The 'skip' strategy forces the script to skip making the git branches and will cause it to only do the retrieving of information from accurev for use with some strategy at a later date.")
+    parser.add_argument('-E', '--empty-child-stream-action', dest='emptyChildStreamAction', choices=['merge', 'cherry-pick'], metavar='<empty-child-stream-action>', help="When a promote to a parent stream affects the child stream and the result of the two commits on the two branches in git results in a git diff operation returning empty then it could be said that this was in-fact a merge (of sorts). This option controlls whether such situations are treated as cherry-picks or merges in git.")
     parser.add_argument('-r', '--restart',    dest='restart', action='store_const', const=True, help="Discard any existing conversion and start over.")
     parser.add_argument('-v', '--verbose',    dest='debug',   action='store_const', const=True, help="Print the script debug information. Makes the script more verbose.")
     parser.add_argument('-L', '--log-file',   dest='logFile', metavar='<log-filename>',         help="Sets the filename to which all console output will be logged (console output is still printed).")
