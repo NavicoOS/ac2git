@@ -2865,7 +2865,11 @@ def DumpExampleConfigFile(outputFilename):
                                -->
     <logfile>accurev2git.log</logfile>
     <!-- The user maps are used to convert users from AccuRev into git. Please spend the time to fill them in properly. -->
-    <usermaps>
+    <usermaps filename="usermaps.config.xml">
+        <!-- The filename attribute is optional and if included the provided file is opened and the usermaps from that file are used to complement
+             the usermaps provided below (only accurev users that haven't been specified below are loaded from the file). The file can have one or
+             more usermaps elements like this one, each of which can point to another file of its own. -->
+
          <!-- The timezone attribute is optional. All times are retrieved in UTC from AccuRev and will converted to the local timezone by default.
              If you want to override this behavior then set the timezone to either an Olson timezone string (e.g. Europe/Belgrade) or a git style
              timezone string (e.g. +0100, sign and 4 digits required). -->
