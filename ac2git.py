@@ -228,21 +228,6 @@ class Config(object):
             str += ")"
             
             return str
-            
-    class Include(object):
-        @classmethod
-        def fromxmlelement(cls, xmlElement):
-            if xmlElement is not None and xmlElement.tag == 'include':
-                filename = xmlElement.attrib.get('filename')
-
-        def __init__(self, filename):
-            self.filename = filename
-
-        def __repr(self):
-            str = "Config.Include(filename=" + repr(self.filename)
-            str += ")"
-
-            return str
 
     @staticmethod
     def FilenameFromScriptName(scriptName):
@@ -264,6 +249,67 @@ class Config(object):
 
         return value
                 
+    @staticmethod
+    def GetUsermapsFromXmlElement(usermapsElem):
+        usermaps = []
+        if usermapsElem is not None and usermapsElem.tag == 'usermaps':
+            for usermapElem in usermapsElem.findall('map-user'):
+                usermaps.append(Config.UserMap.fromxmlelement(usermapElem))
+        return usermaps
+
+    @staticmethod
+    def GetUsermapsFromFile(filename, ignoreFiles=None):
+        usermaps = []
+        knownAccurevUsers = set()
+        directCount, indirectCount = 0, 0
+        if filename is not None:
+            if os.path.exists(filename):
+                with codecs.open(filename) as f:
+                    mapXmlString = f.read()
+                    mapXmlRoot = ElementTree.fromstring(mapXmlString)
+                    if mapXmlRoot is not None:
+                        userMapElements = []
+                        if mapXmlRoot.tag == "usermaps":
+                            userMapElements.append(mapXmlRoot)
+                        else:
+                            for userMapElem in mapXmlRoot.findall('usermaps'):
+                                userMapElements.append(userMapElem)
+
+                        fileList = [] # the linked files are processed after direct usermaps so that the direct usermaps override the same users in the linked files...
+                        for userMapElem in userMapElements:
+                            directUsermaps = Config.GetUsermapsFromXmlElement(userMapElem)
+                            directCount += len(directUsermaps)
+                            for user in directUsermaps:
+                                if user.accurevUsername not in knownAccurevUsers:
+                                    usermaps.append(user)
+                                    knownAccurevUsers.add(user.accurevUsername)
+                                else:
+                                    #print("Ignoring duplicated user:", user.accurevUsername)
+                                    pass
+
+                            mapFile = userMapElem.attrib.get('filename')
+                            if mapFile is not None:
+                                fileList.append(mapFile)
+                        for mapFile in fileList:
+                            if ignoreFiles is None:
+                                ignoreFiles = set()
+
+                            if mapFile not in ignoreFiles:
+                                ignoreFiles.add(os.path.abspath(mapFile)) # Prevent circular loads.
+                                includedUsermaps = Config.GetUsermapsFromFile(mapFile, ignoreFiles=ignoreFiles)
+                                indirectCount += len(includedUsermaps)
+                                for user in includedUsermaps:
+                                    if user.accurevUsername not in knownAccurevUsers:
+                                        usermaps.append(user)
+                                        knownAccurevUsers.add(user.accurevUsername)
+                                    else:
+                                        #print("Ignoring duplicated user:", user.accurevUsername)
+                                        pass
+                            else:
+                                print("Circular usermaps inclusion detected at file,", mapFile, "which was already processed.", file=sys.stderr)
+            print("usermaps: filename", filename, "direct", directCount, "included", indirectCount)
+        return usermaps
+
 
     @classmethod
     def fromxmlstring(cls, xmlString):
@@ -292,14 +338,21 @@ class Config(object):
             usermaps = []
             userMapsElem = xmlRoot.find('usermaps')
             if userMapsElem is not None:
-                for userMapElem in userMapsElem.findall('map-user'):
-                    usermaps.append(Config.UserMap.fromxmlelement(userMapElem))
+                usermaps = Config.GetUsermapsFromXmlElement(userMapsElem)
+                knownAccurevUsers = set([x.accurevUsername for x in usermaps])
+                # Check if we need to load extra usermaps from a file.
+                print(userMapsElem.attrib)
+                mapFilename = userMapsElem.attrib.get("filename")
+                if mapFilename is not None:
+                    includedUsermaps = Config.GetUsermapsFromFile(mapFilename)
+                    for user in includedUsermaps:
+                        if user.accurevUsername not in knownAccurevUsers:
+                            usermaps.append(user)
+                        else:
+                            #print("Known user:", user.accurevUsername)
+                            pass
             
-            includes = []
-            for includeElem in xmlRoot.findall('include'):
-                includes.append(Config.Include.fromxmlelement(includeElem))
-
-            return cls(accurev=accurev, git=git, usermaps=usermaps, method=method, mergeStrategy=mergeStrategy, logFilename=logFilename, includes=includes)
+            return cls(accurev=accurev, git=git, usermaps=usermaps, method=method, mergeStrategy=mergeStrategy, logFilename=logFilename)
         else:
             # Invalid XML for an accurev2git configuration file.
             return None
@@ -311,11 +364,9 @@ class Config(object):
             with codecs.open(filename) as f:
                 configXml = f.read()
                 config = Config.fromxmlstring(configXml)
-            if config is not None and len(config.includes) != 0:
-                print("WARNING: Ignoring includes. Not yet implemented!", file=sys.stderr)
         return config
 
-    def __init__(self, accurev = None, git = None, usermaps = None, method = None, mergeStrategy = None, logFilename = None, includes = []):
+    def __init__(self, accurev = None, git = None, usermaps = None, method = None, mergeStrategy = None, logFilename = None):
         self.accurev       = accurev
         self.git           = git
         self.usermaps      = usermaps
@@ -323,7 +374,6 @@ class Config(object):
         self.mergeStrategy = mergeStrategy
         self.logFilename   = logFilename
         self.logger        = Config.Logger()
-        self.includes      = includes
         
     def __repr__(self):
         str = "Config(accurev=" + repr(self.accurev)
@@ -2946,8 +2996,12 @@ def AutoConfigFile(filename, args, preserveConfig=False):
     <logfile>{log_filename}<logfile>
     <!-- The user maps are used to convert users from AccuRev into git. Please spend the time to fill them in properly. -->""".format(method=config.method, merge_strategy=config.mergeStrategy, log_filename=config.logFilename))
         file.write("""
-    <usermaps>
-         <!-- The timezone attribute is optional. All times are retrieved in UTC from AccuRev and will converted to the local timezone by default.
+    <usermaps filename="usermaps.config.xml">
+        <!-- The filename attribute is optional and if included the provided file is opened and the usermaps from that file are used to complement
+             the usermaps provided below (only accurev users that haven't been specified below are loaded from the file). The file can have one or
+             more usermaps elements like this one, each of which can point to another file of its own. -->
+
+        <!-- The timezone attribute is optional. All times are retrieved in UTC from AccuRev and will converted to the local timezone by default.
              If you want to override this behavior then set the timezone to either an Olson timezone string (e.g. Europe/Belgrade) or a git style
              timezone string (e.g. +0100, sign and 4 digits required). -->
         <!-- e.g.
