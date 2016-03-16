@@ -2141,8 +2141,6 @@ class AccuRev2Git(object):
                             self.config.logger.info("{trType} {trId}. Cherry-pick {dst} into {b} {h} (affected child stream). {ch} was not an ancestor of {h}.".format(trType=tr.Type, trId=tr.id, b=childBranchName, dst=branchName, h=lastCommitHash[:8], ch=lastChildCommitHash[:8]))
                         else:
                             raise Exception("Unhandled option for self.config.git.emptyChildStreamAction. Option was set to: {0}".format(self.config.git.emptyChildStreamAction))
-
-                        print("merge?", self.config.git.emptyChildStreamAction, "parents:", parents)
                 else:
                     parents = [ lastChildCommitHash ] # Make this commit a cherry-pick with no relationship to the parent stream.
                     self.config.logger.info("{trType} {trId}. Cherry-pick {dst} {dstHash} into {b} - diff between {h1} and {dstHash} was not empty! (affected child stream)".format(trType=tr.Type, trId=tr.id, b=childBranchName, dst=branchName, dstHash=lastCommitHash[:8], h1=childStreamData["data_hash"][:8]))
