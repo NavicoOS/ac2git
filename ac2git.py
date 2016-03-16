@@ -2821,19 +2821,26 @@ def DumpExampleConfigFile(outputFilename):
             <stream>some_other_stream</stream>
         </stream-list>
     </accurev>
-    <git repo-path="/put/the/git/repo/here" message-style="notes" message-key="footer" author-is-committer="true" >  <!-- The system path where you want the git repo to be populated. Note: this folder should already exist. 
-                                                                             The message-style attribute can either be "normal", "clean" or "notes". When set to "normal" accurev transaction information is included
-                                                                           at the end (in the footer) of each commit message. When set to "clean" the transaction comment is the commit message without any
-                                                                           additional information. When set to "notes" a note is added to each commit in the "accurev" namespace (to show them use `git log -notes=accurev`),
-                                                                           with the same accurev information that would have been shown in the commit message footer in the "normal" mode.
-                                                                             The message-key attribute can be either "footer", "header" or omitted and adds a simple key with the destination-stream/transaction-number format either
-                                                                           before (header) or after (footer) the commit message which can be used to quickly go back to accurev and figure out where this transaction came from.
-                                                                             The author-is-committer attribute controls if the configured git user or the transaction user is used as the committer for the conversion. Setting
-                                                                           it to "false" makes the conversion use the configured git user to perform the commits while the author information will be taken from the Accurev transaction.
-                                                                           Setting it to "true" will make the conversion set the Accurev transaction user as both the author and the committer.
-                                                                      -->
-        <remote name="origin" url="https://github.com/orao/ac2git.git" push-url="https://github.com/orao/ac2git.git" /> <!-- Optional: Specifies the remote to which the converted
-                                                                                                                             branches will be pushed. The push-url attribute is optional. -->
+
+    <!-- Git details:
+            repo-path:     The system path where you want the git repo to be populated. Note: this folder should already exist. 
+            message-style: can either be "normal", "clean" or "notes". When set to "normal" accurev transaction information is included
+                           at the end (in the footer) of each commit message. When set to "clean" the transaction comment is the commit message without any
+                           additional information. When set to "notes" a note is added to each commit in the "accurev" namespace (to show them use `git log -notes=accurev`),
+                           with the same accurev information that would have been shown in the commit message footer in the "normal" mode.
+            message-key:   can be either "footer", "header" or omitted and adds a simple key with the destination-stream/transaction-number format either
+                           before (header) or after (footer) the commit message which can be used to quickly go back to accurev and figure out where this transaction came from.
+            author-is-committer: controls if the configured git user or the transaction user is used as the committer for the conversion. Setting
+                                 it to "false" makes the conversion use the configured git user to perform the commits while the author information will be taken from the Accurev transaction.
+                                 Setting it to "true" will make the conversion set the Accurev transaction user as both the author and the committer.
+    -->
+    <git 
+        repo-path="/put/the/git/repo/here" 
+        message-style="notes" 
+        message-key="footer" 
+        author-is-committer="true" > 
+        <!-- Optional: You can add remote elements to specify the remotes to which the converted branches will be pushed. The push-url attribute is optional. -->
+        <remote name="origin" url="https://github.com/orao/ac2git.git" push-url="https://github.com/orao/ac2git.git" /> 
         <remote name="backup" url="https://github.com/orao/ac2git.git" />
     </git>
     <method>deep-hist</method> <!-- The method specifies what approach is taken to retrieve information from Accurev. Allowed values are 'deep-hist', 'diff', 'pop' and 'skip'.
