@@ -2225,11 +2225,12 @@ class AccuRev2Git(object):
                 if tr.stream is not None:
                     stream, branchName, streamData, treeHash = self.UnpackStreamDetails(streams=streams, streamMap=streamMap, affectedStreamMap=affectedStreamMap, streamNumber=tr.stream.streamNumber)
                     stream = tr.stream
-                title = 'Rebased {name}'.format(name=branchName)
-                lastCommitHash = self.GetLastCommitHash(branchName=branchName)
-                if lastCommitHash is None:
-                    raise Exception("Error! Failed to get the last commit hash for {trType} {trId}! Basis {b} at {t}".format(trType=tr.Type, trId=tr.id, b=basisBranchName, t=timelockISO8601Str))
-                parents = [ lastCommitHash ]
+                    if branchName is not None: # Only if this stream is being processed should we look it up.
+                        title = 'Rebased {name}'.format(name=branchName)
+                        lastCommitHash = self.GetLastCommitHash(branchName=branchName)
+                        if lastCommitHash is None:
+                            raise Exception("Error! Failed to get the last commit hash for branch {b} (stream: {s}), transaction {trType} {trId}!".format(trType=tr.Type, trId=tr.id, b=branchName, s=stream.name))
+                        parents = [ lastCommitHash ]
             else:
                 raise Exception("Not yet implemented! {trId} {trType}, unrecognized transaction type.".format(trId=tr.id, trType=tr.Type))
 
@@ -2290,15 +2291,17 @@ class AccuRev2Git(object):
                 else:
                     self.config.logger.dbg("{Type} {tr}. skiping commit to {branch}. (fast-forward to {h}) {title}".format(Type=tr.Type, tr=tr.id, branch=branchName, h=lastBasisCommitHash[:8], title=title))
 
-                # Process all affected streams.
-                allStreamTree = self.BuildStreamTree(streams=streams.streams)
-                keepList = [ sn for sn in affectedStreamMap ]
-                keepList.append(stream.streamNumber) # The stream on which the chstream transaction occurred will never be affected so we have to keep it in there explicitly for the MergeIntoChildren() algorithm.
-                keepList = list(set(keepList)) # Keep only unique values
-                affectedStreamTree = self.PruneStreamTree(streamTree=allStreamTree, keepList=keepList)
-                self.MergeIntoChildren(tr=tr, streamTree=affectedStreamTree, streamMap=streamMap, affectedStreamMap=affectedStreamMap, streams=streams, streamNumber=stream.streamNumber)
             else:
                 self.config.logger.info("{Type} {tr}. No known branch for stream {s} (id: {sn}).".format(Type=tr.Type, tr=tr.id, s=stream.name, sn=stream.streamNumber))
+
+            # Process all affected streams.
+            allStreamTree = self.BuildStreamTree(streams=streams.streams)
+            keepList = [ sn for sn in affectedStreamMap ]
+            if branchName is not None:
+                keepList.append(stream.streamNumber) # The stream on which the chstream transaction occurred will never be affected so we have to keep it in there explicitly for the MergeIntoChildren() algorithm (provided it is being processed).
+            keepList = list(set(keepList)) # Keep only unique values
+            affectedStreamTree = self.PruneStreamTree(streamTree=allStreamTree, keepList=keepList)
+            self.MergeIntoChildren(tr=tr, streamTree=affectedStreamTree, streamMap=streamMap, affectedStreamMap=affectedStreamMap, streams=streams, streamNumber=stream.streamNumber if branchName is not None else None)
 
         else:
             if branchName is not None and treeHash is None:
