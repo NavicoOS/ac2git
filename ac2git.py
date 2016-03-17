@@ -606,6 +606,26 @@ class AccuRev2Git(object):
 
         return commitHash
 
+    def GetTreeFromRef(self, ref):
+        treeHash = None
+        cmd = [u'git', u'log', u'-1', u'--format=format:%T']
+        if ref is not None:
+            cmd.append(ref)
+        for i in range(0, AccuRev2Git.commandFailureRetryCount):
+            treeHash = self.gitRepo.raw_cmd(cmd)
+            if treeHash is not None:
+                treeHash = treeHash.strip()
+                if len(treeHash) == 0:
+                    treeHash = None
+                else:
+                    break
+            time.sleep(AccuRev2Git.commandFailureSleepSeconds)
+
+        if treeHash is None:
+            self.config.logger.error("Failed to retrieve tree hash. Command `{0}` failed.".format(' '.join(cmd)))
+
+        return treeHash
+
     def UpdateAndCheckoutRef(self, ref, commitHash, checkout=True):
         if ref is not None and commitHash is not None and len(ref) > 0 and len(commitHash) > 0:
             # refs/heads are branches which are updated automatically when you commit to them (provided we have them checked out).
@@ -730,11 +750,11 @@ class AccuRev2Git(object):
                 treeHash = treeHash.strip()
                 commitHash = self.gitRepo.commit_tree(tree=treeHash, parents=parents, message_file=messageFilePath, committer_name=committerName, committer_email=committerEmail, committer_date=committerDate, committer_tz=committerTimezone, author_name=committerName, author_email=committerEmail, author_date=committerDate, author_tz=committerTimezone, allow_empty=allowEmptyCommit, git_opts=[u'-c', u'core.autocrlf=false'])
                 if commitHash is None:
-                    self.config.logger.error( "Failed to commit tree {0}{1}".format(treeHash, forTrMessage) )
+                    self.config.logger.error( "Failed to commit tree {0}{1}. Error:\n{2}".format(treeHash, forTrMessage, self.gitRepo.lastStderr) )
                 else:
                     commitHash = commitHash.strip()
             else:
-                self.config.logger.error( "Failed to write tree{0}".format(forTrMessage) )
+                self.config.logger.error( "Failed to write tree{0}. Error:\n{1}".format(forTrMessage, self.gitRepo.lastStderr) )
         else:
             commitResult = self.gitRepo.commit(message_file=messageFilePath, committer_name=committerName, committer_email=committerEmail, committer_date=committerDate, committer_tz=committerTimezone, author_name=committerName, author_email=committerEmail, author_date=committerDate, author_tz=committerTimezone, allow_empty_message=True, allow_empty=allowEmptyCommit, cleanup='whitespace', git_opts=[u'-c', u'core.autocrlf=false'])
             if commitResult is not None:
@@ -2280,10 +2300,15 @@ class AccuRev2Git(object):
                 else: # No basis stream is tracked!
                     self.config.logger.info("{trType} {trId}. Cherry-picked into {dst}. No tracked basis found. Basis {b}.".format(trType=tr.Type, trId=tr.id, dst=branchName, b=stream.basis))
 
-                if treeHash is None:
-                    raise Exception("Couldn't get tree for {trType} {trId} on stream {s}".format(trType=tr.Type, trId=tr.id, s=stream.name))
-
                 if parents is not None:
+                    if treeHash is None:
+                        if branchName is None:
+                            raise Exception("Couldn't get tree for {trType} {trId} on untracked stream {s}. Message: {m}".format(trType=tr.Type, trId=tr.id, s=stream.name, m=title))
+                        self.config.logger.info("Warning: No associated data commit found! Assumption: The {trType} {trId} didn't actually change the stream. An empty commit will be generated on branch {b}. Continuing...".format(trType=tr.Type, trId=tr.id, b=branchName))
+                        treeHash = self.GetTreeFromRef(ref=branchName)
+                        if treeHash is None:
+                            raise Exception("Couldn't get last tree for {trType} {trId} on untracked stream {s}. Message: {m}".format(trType=tr.Type, trId=tr.id, s=stream.name, m=title))
+
                     commitHash = self.CommitTransaction(tr=tr, stream=stream, treeHash=treeHash, parents=parents, branchName=branchName, title=title)
                     if commitHash is None:
                         raise Exception("Failed to commit chstream {trId}".format(trId=tr.id))
