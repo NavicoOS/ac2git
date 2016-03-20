@@ -2517,7 +2517,7 @@ class AccuRev2Git(object):
                     else:
                         currentBranch = br
                 if currentBranch is not None:
-                    self.config.logger.dbg( "Checkout last processed transaction #{tr} on branch {branchName} at commit {commit}".format(tr=state["next_transaction"], branchName=currentBranch["name"], commit=currentBranch["commit"]) )
+                    self.config.logger.dbg( "Checkout last processed transaction #{tr} on branch {branchName} at commit {commit}".format(tr=state["last_transaction"], branchName=currentBranch["name"], commit=currentBranch["commit"]) )
                     result = self.gitRepo.raw_cmd([u'git', u'checkout', u'-B', currentBranch["name"], currentBranch["commit"]])
                     if result is None:
                         raise Exception("Failed to restore last state. git checkout -B {br} {c}; failed.".format(br=currentBranch["name"], c=currentBranch["commit"]))
@@ -2557,7 +2557,7 @@ class AccuRev2Git(object):
             # Default state
             state = { "depot_number": depot.number,
                       "stream_map": streamMap,
-                      "next_transaction": int(self.config.accurev.startTransaction),
+                      "last_transaction": (int(self.config.accurev.startTransaction) - 1),
                       "branch_list": None }
 
         # Get the list of transactions that we are processing, and build a list of known branch names for maintaining their states between processing stages.
@@ -2620,11 +2620,14 @@ class AccuRev2Git(object):
         self.config.logger.info("Processing transactions for {depot} depot.".format(depot=self.config.accurev.depot))
         knownBranchSet = set([ state["stream_map"][x]["branch"] for x in state["stream_map"] ]) # Get the list of all branches that we will create.
         for tr in sorted(transactionsMap):
-            if tr < state["next_transaction"]:
+            if tr <= state["last_transaction"]:
                 del transactionsMap[tr] # ok since sorted returns a sorted list by copy.
                 continue
             elif tr > endTransaction:
                 break
+
+            # Process the transaction!
+            self.ProcessTransaction(streamMap=state["stream_map"], trId=tr, affectedStreamMap=transactionsMap[tr])
 
             # Store the state of the branches in the repo at this point in time so that we can restore it on next restart.
             state["branch_list"] = []
@@ -2640,12 +2643,9 @@ class AccuRev2Git(object):
                     brHash["is_current"] = br.isCurrent
                     state["branch_list"].append(brHash)
 
-            state["next_transaction"] = tr
+            state["last_transaction"] = tr
             if self.WriteFileRef(ref=stateRefspec, text=json.dumps(state)) != True:
                 raise Exception("Failed to write state to {ref}.".format(ref=stateRefspec))
-
-            # Process the transaction!
-            self.ProcessTransaction(streamMap=state["stream_map"], trId=tr, affectedStreamMap=transactionsMap[tr])
 
         return True
 
