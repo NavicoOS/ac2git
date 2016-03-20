@@ -1137,7 +1137,7 @@ class AccuRev2Git(object):
         diffXml = self.gitRepo.raw_cmd(['git', 'show', '{hash}:diff.xml'.format(hash=ref)]) # Doesn't exist for the mkstream transaction (first commit)
         if diffXml is not None:
             diff = accurev.obj.Diff.fromxmlstring(diffXml)
-        elif diffXml is None or len(diffXml) == 0:
+        elif len(diffXml) == 0:
             raise Exception("Command failed! git show {hash}:diff.xml".format(hash=ref))
         return (diffXml, diff)
 
@@ -1146,7 +1146,7 @@ class AccuRev2Git(object):
         # Get the hist information.
         hist = None
         histXml = self.gitRepo.raw_cmd(['git', 'show', '{hash}:hist.xml'.format(hash=ref)])
-        if histXml is not None or len(histXml) != 0:
+        if histXml is not None and len(histXml) != 0:
             hist = accurev.obj.History.fromxmlstring(histXml)
         else:
             raise Exception("Command failed! git show {hash}:hist.xml".format(hash=ref))
@@ -1157,7 +1157,7 @@ class AccuRev2Git(object):
         # Get the stream information.
         streams = None
         streamsXml = self.gitRepo.raw_cmd(['git', 'show', '{hash}:streams.xml'.format(hash=ref)])
-        if streamsXml is not None or len(streamsXml) != 0:
+        if streamsXml is not None and len(streamsXml) != 0:
             streams = accurev.obj.Show.Streams.fromxmlstring(streamsXml)
         else:
             raise Exception("Command failed! git show {hash}:streams.xml".format(hash=ref))
@@ -1168,7 +1168,7 @@ class AccuRev2Git(object):
         # Get the stream information.
         depots = None
         depotsXml = self.gitRepo.raw_cmd(['git', 'show', '{hash}:depots.xml'.format(hash=ref)])
-        if depotsXml is not None or len(depotsXml) != 0:
+        if depotsXml is not None and len(depotsXml) != 0:
             depots = accurev.obj.Show.Depots.fromxmlstring(depotsXml)
         else:
             raise Exception("Command failed! git show {hash}:depots.xml".format(hash=ref))
