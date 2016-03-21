@@ -257,7 +257,21 @@ class Config(object):
                 Exception("Error, could not parse {attr} attribute of tag {tag}. Expected 'true' or 'false', but got '{value}'.".format(attr=attribute, tag=xmlElement.tag, value=value))
 
         return value
-                
+
+    @staticmethod
+    def GetAbsoluteUsermapsFilename(filename, includedFilename):
+        if includedFilename is None:
+            return None
+        if os.path.isabs(includedFilename):
+            return includedFilename
+        if filename is None:
+            return None
+        drive, path = os.path.splitdrive(filename)
+        head, tail = os.path.split(path)
+        if len(head) > 0 and head != '/' and head != '\\': # For an absolute path the starting slash isn't removed from head.
+            return os.path.abspath(os.path.join(head, includedFilename))
+        return os.path.abspath(includedFilename)
+
     @staticmethod
     def GetUsermapsFromXmlElement(usermapsElem):
         usermaps = []
@@ -302,9 +316,12 @@ class Config(object):
                         for mapFile in fileList:
                             if ignoreFiles is None:
                                 ignoreFiles = set()
+                            print("reference:", mapFile)
+                            mapFile = Config.GetAbsoluteUsermapsFilename(filename, mapFile) # Prevent circular loads.
+                            print("adjusted:", mapFile)
 
                             if mapFile not in ignoreFiles:
-                                ignoreFiles.add(os.path.abspath(mapFile)) # Prevent circular loads.
+                                ignoreFiles.add(mapFile)
                                 includedUsermaps = Config.GetUsermapsFromFile(mapFile, ignoreFiles=ignoreFiles)
                                 indirectCount += len(includedUsermaps)
                                 for user in includedUsermaps:
@@ -321,7 +338,7 @@ class Config(object):
 
 
     @classmethod
-    def fromxmlstring(cls, xmlString):
+    def fromxmlstring(cls, xmlString, filename=None):
         # Load the XML
         xmlRoot = ElementTree.fromstring(xmlString)
         
@@ -352,6 +369,8 @@ class Config(object):
                 # Check if we need to load extra usermaps from a file.
                 mapFilename = userMapsElem.attrib.get("filename")
                 if mapFilename is not None:
+                    if filename is not None:
+                        mapFilename = Config.GetAbsoluteUsermapsFilename(filename, mapFilename) # Prevent circular loads.
                     includedUsermaps = Config.GetUsermapsFromFile(mapFilename)
                     for user in includedUsermaps:
                         if user.accurevUsername not in knownAccurevUsers:
@@ -371,7 +390,7 @@ class Config(object):
         if os.path.exists(filename):
             with codecs.open(filename) as f:
                 configXml = f.read()
-                config = Config.fromxmlstring(configXml)
+                config = Config.fromxmlstring(configXml, filename=filename)
         return config
 
     def __init__(self, accurev = None, git = None, usermaps = None, method = None, mergeStrategy = None, logFilename = None):
