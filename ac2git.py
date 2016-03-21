@@ -316,9 +316,7 @@ class Config(object):
                         for mapFile in fileList:
                             if ignoreFiles is None:
                                 ignoreFiles = set()
-                            print("reference:", mapFile)
                             mapFile = Config.GetAbsoluteUsermapsFilename(filename, mapFile) # Prevent circular loads.
-                            print("adjusted:", mapFile)
 
                             if mapFile not in ignoreFiles:
                                 ignoreFiles.add(mapFile)
