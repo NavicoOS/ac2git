@@ -3310,44 +3310,49 @@ def AccuRev2GitMain(argv):
     
     loggerConfig = None
     while True:
-        # Load the config file
-        config = Config.fromfile(filename=args.configFilename)
-        if config is None:
-            sys.stderr.write("Config file '{0}' not found.\n".format(args.configFilename))
-            return 1
-        elif config.git is not None:
-            if not os.path.isabs(config.git.repoPath):
-                config.git.repoPath = os.path.abspath(config.git.repoPath)
+        try:
+            # Load the config file
+            config = Config.fromfile(filename=args.configFilename)
+            if config is None:
+                sys.stderr.write("Config file '{0}' not found.\n".format(args.configFilename))
+                return 1
+            elif config.git is not None:
+                if not os.path.isabs(config.git.repoPath):
+                    config.git.repoPath = os.path.abspath(config.git.repoPath)
 
-        # Set the overrides for in the configuration from the arguments
-        SetConfigFromArgs(config=config, args=args)
-        
-        if not ValidateConfig(config):
-            return 1
-
-        # Configure logging, but do it only once.
-        if logger is None:
-            loggingLevel = logging.DEBUG if args.debug else logging.INFO
-            if not InitializeLogging(config.logFilename, loggingLevel):
-                sys.stderr.write("Failed to initialize logging. Exiting.\n")
+            # Set the overrides for in the configuration from the arguments
+            SetConfigFromArgs(config=config, args=args)
+            
+            if not ValidateConfig(config):
                 return 1
 
-        # Start the script
-        state = AccuRev2Git(config)
+            # Configure logging, but do it only once.
+            if logger is None:
+                loggingLevel = logging.DEBUG if args.debug else logging.INFO
+                if not InitializeLogging(config.logFilename, loggingLevel):
+                    sys.stderr.write("Failed to initialize logging. Exiting.\n")
+                    return 1
 
-        PrintConfigSummary(state.config)
-        if args.checkMissingUsers in [ "warn", "strict" ]:
-            if PrintMissingUsers(state.config) and args.checkMissingUsers == "strict":
-                sys.stderr.write("Found missing users. Exiting.\n")
-                return 1
-        logger.info("Restart:" if args.restart else "Start:")
-        rv = state.Start(isRestart=args.restart)
-        if not args.track:
-            break
-        elif args.intermission is not None:
-            print("Tracking mode enabled: sleep for {0} seconds.".format(args.intermission))
-            time.sleep(args.intermission)
-        print("Tracking mode enabled: Continuing conversion.")
+            # Start the script
+            state = AccuRev2Git(config)
+
+            PrintConfigSummary(state.config)
+            if args.checkMissingUsers in [ "warn", "strict" ]:
+                if PrintMissingUsers(state.config) and args.checkMissingUsers == "strict":
+                    sys.stderr.write("Found missing users. Exiting.\n")
+                    return 1
+            logger.info("Restart:" if args.restart else "Start:")
+            rv = state.Start(isRestart=args.restart)
+            if not args.track:
+                break
+            elif args.intermission is not None:
+                print("Tracking mode enabled: sleep for {0} seconds.".format(args.intermission))
+                time.sleep(args.intermission)
+            print("Tracking mode enabled: Continuing conversion.")
+        except:
+            if logger is not None:
+                logger.exception("The script has encountered an exception, aborting!")
+            raise
 
     return rv
         
