@@ -2380,7 +2380,7 @@ class AccuRev2Git(object):
                     else:
                         commitHash = self.CommitTransaction(tr=tr, stream=stream, treeHash=treeHash, branchName=branchName, srcStream=None, dstStream=stream)
                         msg = "{trType} {tr}. Cherry-picked {src} into {dst} {h}.".format(tr=tr.id, trType=tr.Type, src=srcBranchName, dst=branchName, h=commitHash[:8])
-                        if len(diff.strip()) == 0:
+                        if diff is not None and len(diff.strip()) == 0:
                             msg = "{0} Diff was not empty.".format(msg)
                         logger.info(msg)
                 elif branchName is not None:
