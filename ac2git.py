@@ -2355,13 +2355,11 @@ class AccuRev2Git(object):
                 commitHash = None
                 if srcBranchName is not None and branchName is not None:
                     # Do a git diff between the two data commits that we will be merging.
-                    diff = None
-                    if self.config.git.sourceStreamFastForward:
-                        diff = self.GitDiff(streamData["data_hash"], lastSrcBranchHash)
-                        if diff is None:
-                            raise Exception("Failed to diff new branch {nBr} to old branch {oBr}! Cmd: {cmd}, Err: {err}".format(nBr=branchName, oBr=srcBranchName, cmd=' '.join(cmd), err=self.gitRepo.lastStderr))
-                    
-                    if diff is not None and len(diff.strip()) == 0:
+                    diff = self.GitDiff(streamData["data_hash"], lastSrcBranchHash)
+
+                    if diff is None:
+                        raise Exception("Failed to diff new branch {nBr} to old branch {oBr}! Cmd: {cmd}, Err: {err}".format(nBr=branchName, oBr=srcBranchName, cmd=' '.join(cmd), err=self.gitRepo.lastStderr))
+                    elif len(diff.strip()) == 0:
                         parents = [ self.GetLastCommitHash(branchName=branchName) ]
                         isAncestor = self.GitMergeBase(refs=[ lastSrcBranchHash, parents[0] ], isAncestor=True)
                         if isAncestor is None:
@@ -2373,14 +2371,18 @@ class AccuRev2Git(object):
                             raise Exception("Invariant error! Either the source hash {sh} or the destination hash {dh} was none!".format(sh=parents[1], dh=parents[0]))
                         
                         commitHash = self.CommitTransaction(tr=tr, stream=stream, parents=parents, treeHash=treeHash, branchName=branchName, srcStream=srcStream, dstStream=stream)
-                        # This is a manual merge and the srcBranchName should be fastforwarded to this commit since its contents now matches the parent stream.
-                        if self.UpdateAndCheckoutRef(ref='refs/heads/{branch}'.format(branch=srcBranchName), commitHash=commitHash, checkout=False) != True:
-                            raise Exception("Failed to update source {branch} to {hash} latest commit.".format(branch=srcBranchName, hash=commitHash[:8]))
-                        logger.info("{trType} {tr}. Merged {src} into {dst} {h}. Fast-forward {src} to {dst} {h}.".format(tr=tr.id, trType=tr.Type, src=srcBranchName, dst=branchName, h=commitHash[:8]))
+
+                        infoMessage = "{trType} {tr}. Merged {src} into {dst} {h}.".format(tr=tr.id, trType=tr.Type, src=srcBranchName, dst=branchName, h=commitHash[:8])
+                        if self.config.git.sourceStreamFastForward:
+                            # This is a manual merge and the srcBranchName should be fastforwarded to this commit since its contents now matches the parent stream.
+                            if self.UpdateAndCheckoutRef(ref='refs/heads/{branch}'.format(branch=srcBranchName), commitHash=commitHash, checkout=False) != True:
+                                raise Exception("Failed to update source {branch} to {hash} latest commit.".format(branch=srcBranchName, hash=commitHash[:8]))
+                            infoMessage = "{msg} Fast-forward {src} to {dst} {h}. (source stream fast-forwarded)".format(msg=infoMessage, src=srcBranchName, dst=branchName)
+                        logger.info(infoMessage)
                     else:
                         commitHash = self.CommitTransaction(tr=tr, stream=stream, treeHash=treeHash, branchName=branchName, srcStream=None, dstStream=stream)
                         msg = "{trType} {tr}. Cherry-picked {src} into {dst} {h}.".format(tr=tr.id, trType=tr.Type, src=srcBranchName, dst=branchName, h=commitHash[:8])
-                        if diff is not None and len(diff.strip()) == 0:
+                        if len(diff.strip()) == 0:
                             msg = "{0} Diff was not empty.".format(msg)
                         logger.info(msg)
                 elif branchName is not None:
