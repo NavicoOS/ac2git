@@ -99,8 +99,8 @@ class Config(object):
                 messageStyle = xmlElement.attrib.get('message-style')
                 messageKey   = xmlElement.attrib.get('message-key')
                 authorIsCommitter = xmlElement.attrib.get('author-is-committer')
-                emptyChildStreamAction = xmlElement.attrib.get('empty-child-stream-action')
-
+                emptyChildStreamAction  = xmlElement.attrib.get('empty-child-stream-action')
+                sourceStreamFastForward = xmlElement.attrib.get('source-stream-fast-forward')
 
                 remoteMap = OrderedDict()
                 remoteElementList = xmlElement.findall('remote')
@@ -111,11 +111,11 @@ class Config(object):
                     
                     remoteMap[remoteName] = git.GitRemoteListItem(name=remoteName, url=remoteUrl, pushUrl=remotePushUrl)
 
-                return cls(repoPath=repoPath, messageStyle=messageStyle, messageKey=messageKey, authorIsCommitter=authorIsCommitter, remoteMap=remoteMap, emptyChildStreamAction=emptyChildStreamAction)
+                return cls(repoPath=repoPath, messageStyle=messageStyle, messageKey=messageKey, authorIsCommitter=authorIsCommitter, remoteMap=remoteMap, emptyChildStreamAction=emptyChildStreamAction, sourceStreamFastForward=sourceStreamFastForward)
             else:
                 return None
             
-        def __init__(self, repoPath, messageStyle=None, messageKey=None, authorIsCommitter=None, remoteMap=None, emptyChildStreamAction=None):
+        def __init__(self, repoPath, messageStyle=None, messageKey=None, authorIsCommitter=None, remoteMap=None, emptyChildStreamAction=None, sourceStreamFastForward=None):
             self.repoPath               = repoPath
             self.messageStyle           = messageStyle
             self.messageKey             = messageKey
@@ -136,6 +136,14 @@ class Config(object):
                 self.emptyChildStreamAction = emptyChildStreamAction
             else:
                 self.emptyChildStreamAction = "cherry-pick"
+
+            if sourceStreamFastForward is not None:
+                sourceStreamFastForward = sourceStreamFastForward.lower()
+                if sourceStreamFastForward not in [ "true", "false" ]:
+                    raise Exception("Error, the source-stream-fast-forward attribute only accepts true or false options but got: {0}".format(sourceStreamFastForward))
+                self.sourceStreamFastForward = (sourceStreamFastForward == "true")
+            else:
+                self.sourceStreamFastForward = False
 
         def __repr__(self):
             str = "Config.Git(repoPath=" + repr(self.repoPath)
@@ -2347,10 +2355,13 @@ class AccuRev2Git(object):
                 commitHash = None
                 if srcBranchName is not None and branchName is not None:
                     # Do a git diff between the two data commits that we will be merging.
-                    diff = self.GitDiff(streamData["data_hash"], lastSrcBranchHash)
-                    if diff is None:
-                        raise Exception("Failed to diff new branch {nBr} to old branch {oBr}! Cmd: {cmd}, Err: {err}".format(nBr=branchName, oBr=srcBranchName, cmd=' '.join(cmd), err=self.gitRepo.lastStderr))
-                    elif len(diff.strip()) == 0:
+                    diff = None
+                    if self.config.git.sourceStreamFastForward:
+                        diff = self.GitDiff(streamData["data_hash"], lastSrcBranchHash)
+                        if diff is None:
+                            raise Exception("Failed to diff new branch {nBr} to old branch {oBr}! Cmd: {cmd}, Err: {err}".format(nBr=branchName, oBr=srcBranchName, cmd=' '.join(cmd), err=self.gitRepo.lastStderr))
+                    
+                    if diff is not None and len(diff.strip()) == 0:
                         parents = [ self.GetLastCommitHash(branchName=branchName) ]
                         isAncestor = self.GitMergeBase(refs=[ lastSrcBranchHash, parents[0] ], isAncestor=True)
                         if isAncestor is None:
@@ -2847,13 +2858,17 @@ def DumpExampleConfigFile(outputFilename):
             empty-child-stream-action: [ "merge", "cherry-pick" ] - controls whether the child streams that are affected by a transaction to its parent stream make a "merge" commit (merging the
                                        parent branch into the child branch) or a "cherry-pick" commit that does not contain that linkage. The "merge" commit is only made if the child stream's
                                        contents at this transaction matches the parent streams contents exactly (git diff between the two branches at this transaction would be the same).
+            source-stream-fast-forward: [ "true", "false" ] - when a promote is made and both the source and destination streams are known a merge commit is made on the destination stream. If
+                                        this option is set to "true" then the source stream's branch is moved up to the destination branch after the commit is made, otherwise it is left where
+                                        it was before.
     -->
     <git 
         repo-path="/put/the/git/repo/here" 
         message-style="notes" 
         message-key="footer" 
-        author-is-committer="true"
-        empty-child-stream-action="merge" > 
+        author-is-committer="true" 
+        empty-child-stream-action="merge" 
+        source-stream-fast-forward="false" > 
         <!-- Optional: You can add remote elements to specify the remotes to which the converted branches will be pushed. The push-url attribute is optional. -->
         <remote name="origin" url="https://github.com/orao/ac2git.git" push-url="https://github.com/orao/ac2git.git" /> 
         <remote name="backup" url="https://github.com/orao/ac2git.git" />
@@ -3015,13 +3030,17 @@ def AutoConfigFile(filename, args, preserveConfig=False):
             empty-child-stream-action: [ "merge", "cherry-pick" ] - controls whether the child streams that are affected by a transaction to its parent stream make a "merge" commit (merging the
                                        parent branch into the child branch) or a "cherry-pick" commit that does not contain that linkage. The "merge" commit is only made if the child stream's
                                        contents at this transaction matches the parent streams contents exactly (git diff between the two branches at this transaction would be the same).
+            source-stream-fast-forward: [ "true", "false" ] - when a promote is made and both the source and destination streams are known a merge commit is made on the destination stream. If
+                                        this option is set to "true" then the source stream's branch is moved up to the destination branch after the commit is made, otherwise it is left where
+                                        it was before.
     -->
     <git 
         repo-path="{git_repo_path}" 
         message-style="{message_style}" 
         message-key="{message_key}"  
         author-is-committer="{author_is_committer}"
-        empty-child-stream-action="{empty_child_stream_action}">""".format(git_repo_path=config.git.repoPath, message_style=config.git.messageStyle if config.git.messageStyle is not None else 'notes', message_key=config.git.messageKey if config.git.messageKey is not None else 'footer', author_is_committer="true" if self.config.git.authorIsCommitter else "false", empty_child_stream_action=config.git.emptyChildStreamAction))
+        empty-child-stream-action="{empty_child_stream_action}" 
+        source-stream-fast-forward="{source_stream_fast_forward}" >""".format(git_repo_path=config.git.repoPath, message_style=config.git.messageStyle if config.git.messageStyle is not None else 'notes', message_key=config.git.messageKey if config.git.messageKey is not None else 'footer', author_is_committer="true" if self.config.git.authorIsCommitter else "false", empty_child_stream_action=config.git.emptyChildStreamAction, source_stream_fast_forward="true" if self.config.git.sourceStreamFastForward else "false"))
         if config.git.remoteMap is not None:
             for remoteName in remoteMap:
                 remote = remoteMap[remoteName]
@@ -3156,6 +3175,8 @@ def SetConfigFromArgs(config, args):
         config.git.repoPath     = args.gitRepoPath
     if args.emptyChildStreamAction is not None:
         config.git.emptyChildStreamAction = args.emptyChildStreamAction
+    if args.sourceStreamFastForward is not None:
+        config.git.sourceStreamFastForward = (args.sourceStreamFastForward == "true")
     if args.conversionMethod is not None:
         config.method = args.conversionMethod
     if args.mergeStrategy is not None:
@@ -3211,6 +3232,7 @@ def PrintConfigSummary(config):
         logger.info('    message key: {0}'.format(config.git.messageKey))
         logger.info('    author is committer: {0}'.format(config.git.authorIsCommitter))
         logger.info('    empty child stream action: {0}'.format(config.git.emptyChildStreamAction))
+        logger.info('    source stream fast forward: {0}'.format(config.git.sourceStreamFastForward))
         if config.git.remoteMap is not None:
             for remoteName in config.git.remoteMap:
                 remote = config.git.remoteMap[remoteName]
@@ -3253,6 +3275,7 @@ def AccuRev2GitMain(argv):
     parser.add_argument('-M', '--method', dest='conversionMethod', choices=['skip', 'pop', 'diff', 'deep-hist'], metavar='<conversion-method>', help="Specifies the method which is used to perform the conversion. Can be either 'pop', 'diff' or 'deep-hist'. 'pop' specifies that every transaction is populated in full. 'diff' specifies that only the differences are populated but transactions are iterated one at a time. 'deep-hist' specifies that only the differences are populated and that only transactions that could have affected this stream are iterated.")
     parser.add_argument('-S', '--merge-strategy', dest='mergeStrategy', choices=['skip', 'normal', 'orphanage'], metavar='<merge-strategy>', help="Sets the merge strategy which dictates how the git repository branches are generated. Depending on the value chosen the branches can be orphan branches ('orphanage' strategy) or have merges where promotes have occurred with the 'normal' strategy. The 'skip' strategy forces the script to skip making the git branches and will cause it to only do the retrieving of information from accurev for use with some strategy at a later date.")
     parser.add_argument('-E', '--empty-child-stream-action', dest='emptyChildStreamAction', choices=['merge', 'cherry-pick'], metavar='<empty-child-stream-action>', help="When a promote to a parent stream affects the child stream and the result of the two commits on the two branches in git results in a git diff operation returning empty then it could be said that this was in-fact a merge (of sorts). This option controlls whether such situations are treated as cherry-picks or merges in git.")
+    parser.add_argument('-K', '--source-stream-fast-forward', dest='sourceStreamFastForward', choices=['true', 'false'], metavar='<source-stream-fast-forward>', help="When both the source and destination streams are known this flag controlls whether the source branch is moved to the resulting merge commit (the destination branch is always updated/moved to this commit). This has an effect of making the history look like the letter K where the promotes come in and then branch from the merge commit instead of the previous commit which occured on the branch.")
     parser.add_argument('-r', '--restart',    dest='restart', action='store_const', const=True, help="Discard any existing conversion and start over.")
     parser.add_argument('-v', '--verbose',    dest='debug',   action='store_const', const=True, help="Print the script debug information. Makes the script more verbose.")
     parser.add_argument('-L', '--log-file',   dest='logFile', metavar='<log-filename>',         help="Sets the filename to which all console output will be logged (console output is still printed).")
