@@ -2395,7 +2395,7 @@ class AccuRev2Git(object):
                         msgSuffix = "Source stream {name} (id: {number}) is not tracked.".format(name=srcStreamName, number=srcStreamNumber)
                     logger.info("{trType} {tr}. Cherry-picked into {dst} {h}. {suffix}".format(trType=tr.Type, tr=tr.id, dst=branchName, h=commitHash[:8], suffix=msgSuffix))
                 else:
-                    logger.info("{trType} {tr}. Destination stream {dst} (id: {num}) is not tracked.".format(trType=tr.Type, tr=tr.id, dst=streamName, num=streamNumber))
+                    logger.info("{trType} {tr}. destination stream {dst} (id: {num}) is not tracked.".format(trType=tr.Type, tr=tr.id, dst=streamName, num=streamNumber))
 
                 # TODO: Fix issue '#51 - Make purges into merges' here
                 # ====================================================
@@ -2412,7 +2412,11 @@ class AccuRev2Git(object):
 
                 # Process all affected streams (which are generally the child streams of this stream).
                 allStreamTree = self.BuildStreamTree(streams=streams.streams)
-                affectedStreamTree = self.PruneStreamTree(streamTree=allStreamTree, keepList=[ sn for sn in affectedStreamMap ])
+                keepList = list(set([ sn for sn in affectedStreamMap ]))
+                if srcStreamNumber is not None and srcStreamNumber in keepList:
+                    keepList.remove(srcStreamNumber) # The source stream should never be in the affected streams list.
+                    logger.warning("{trType} {tr}. dst stream {dst}, src stream {src}. The src stream was found in the affected child streams list which shouldn't be possible. Removing from affected child streams.".format(trType=tr.Type, tr=tr.id, dst=streamName, src=srcStreamName))
+                affectedStreamTree = self.PruneStreamTree(streamTree=allStreamTree, keepList=keepList)
                 self.MergeIntoChildren(tr=tr, streamTree=affectedStreamTree, streamMap=streamMap, affectedStreamMap=affectedStreamMap, streams=streams, streamNumber=(None if commitHash is None else streamNumber))
 
             else:
