@@ -101,7 +101,7 @@ Add the following to your `.git/config` file:
     command = /bin/true
 ```
 
-Add the following to the `.git/info/attributes` file of the conversion repository:
+Add something like the following to the `.git/info/attributes` file of the conversion repository:
 ```
 folder/bad_file.c diff=nodiff
 ```
