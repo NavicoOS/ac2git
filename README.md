@@ -93,6 +93,22 @@ Ignoring the whole file should be easy but ignoring only a small part of it will
 
 _Note: I recommend using the `.git/info/attributes` file and not making a `.gitattributes` file in the main repo since it may be deleted by the script or overwritten if it was ever promoted in Accurev._
 
+Example for Linux (from [this stackoverflow answer](http://stackoverflow.com/a/10421385)):
+
+Add the following to your `.git/config` file:
+```
+[diff "nodiff"]
+    command = /bin/true
+```
+
+Add the following to the `.git/info/attributes` file of the conversion repository:
+```
+folder/bad_file.c diff=nodiff
+```
+
+On Windows you might need to find where the command `true` lives but it should be included with Git.
+
+
 ----
 
 ### Dear contributors ###
