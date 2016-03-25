@@ -28,13 +28,25 @@ To view the output of any individual file you can use `git show <commit_hash>:<f
 
 Since the contents of the two refs are so different it would be inefficient to do a `git checkout` of one and then the other for each transaction so the script first processes all the transactions for the `ref/ac2git/depots/<depot_number>/streams/<stream_number>/info` and then checks out the `ref/ac2git/depots/<depot_number>/streams/<stream_number>/data` ref and processes the same transactions it just added to the `..._info` ref. Even if there are no changes the `..._data` ref is always committed to (`--allow-empty` is set for the `git commit`) so that each transaction on the `..._info` ref has a corresponding transaction on the `..._data` ref.
 
+Once we have completed processing both refs successfully for a single stream we record the transaction up to which we have processed it in the high water mark ref `refs/ac2git/depots/<depot_number>/streams/<stream_number>/hwm`, which is used by the next stage of the process.
+
 #### Second stage: processing ####
 
 The second stage begins by converting stream names into their corresponding unique IDs. This process is done without contacting accurev and is currently reasonably expensive so once completed its results are cached in the ref `refs/ac2git/cache/depots/<depot_number>/stream_names`. It would be better to maintain this as the streams are downloaded instead of doing it here but for now that's the way it works.
 
 After this step the streams that are being converted and all the current branches are stored in the `refs/ac2git/state/<depot_number>/transactions` ref. This ref will from now on maintain the list of streams that we are processing (which will never again change) and the last valid commit hash for each of their branches in git. This is because the script can be interrupted at any time and since a transaction can now cause multiple commits the script can be left in an invalid state. So after each transaction is processed the heads of all the tracked branches are stored in this ref. Each time the script begins it will restore the heads to their last known state.
 
+Since each stream only contains transactions that have affected it we need to take all of them and sort them so that we can process them in order. A map of transactions to lists of affected streams is created along with all the hashes to the relevant data in git for each stream.
+
 Then we iterate over all of the streams and look for the lowest high water mark (which is kept in the `refs/ac2git/depots/<depot_number>/streams/<stream_number>/hwm` ref) which is the highest processed transaction for that stream. The lowest high water mark becomes our end transaction.
+
+At this stage everything is ready and we begin to iterate over each transaction in turn in order to generate the merged hisotry.
+
+The transactions are split into two groups, the first group being the `mkstream` & `chstream` transactions and all other transactions (`promote`, `keep`, `defunct`, etc) making up the second group.
+
+The `mkstream` transaction is processed in the same way as a `chstream` transaction except that since there is no potential previous state of the stream we can just create it instead of having to figure out what to do with the history or any currently pending transactions.
+
+A `chstream` transaction is processed by first checking if the basis stream has changed...
 
 Work in progress...
 
