@@ -48,7 +48,39 @@ The `mkstream` transaction is processed in the same way as a `chstream` transact
 
 A `chstream` transaction is processed by first checking if the basis stream has changed...
 
-Work in progress...
+_Work in progress. TODO: finish describing chstreams..._
+
+For all other transactions we then check if they occurred on a stream or in a workspace. For workspaces we simply make a cherry-pick and continue processing but for streams we have to do some more work w.r.t. its children streams which may have also been affected by this transaction (usually a `promote` but can be a `keep`, `purge` or a `defunct` in case of a revert).
+
+For depots that have lived through one or more Accurev upgrades you will find that as you go deeper into the history less and less information is available to you via accurev commands. For example, the `accurev hist -fex` XML output for newer transactions includes the `fromStreamName` and `fromStreamNumber` attributes for the transaction but if you go back far enough these attributes dissappear. Hence, newer history will always look better than the older one because Accurev is providing us with more information about what has actually happened. _Note: it may be possible to infer from which stream a promote occurred in a number of different ways but I won't go into that right now_.
+
+If we know the source and destination stream and both are being converted by the script (they are both specified in the stream list in the configuration file) then we can record that a merge occurred. This merge can take two forms depending on how you've configured the `source-stream-fast-forward="false"` option in the config file or the `--source-stream-fast-forward=false` command line argument.
+
+For a promote (transaction 83) from the stream `Development` to the stream `Test` this is what it would look like for each of the two options:
+
+```
+--source-stream-fast-forward=false
+
+* (Test) Transaction 83 by Test Lead
+|\
+| * (Development) Transaction 78 by Joanna Blobs
+* | Transaction 67 by Joe Bloggs
+| | 
+```
+
+```
+--source-stream-fast-forward=true
+
+* (Test) (Development) Transaction 83 by Test Lead
+|\
+| * Transaction 78 by Joanna Blobs
+* | Transaction 67 by Joe Bloggs
+| | 
+```
+
+Note that the branch `Development` has been moved to the merge commit when the `--source-stream-fast-forward` option was set to `true`. This is not normally desired so the default and recommended setting is `false`.
+
+_Work in progress. TODO: complete the explanation of how children are processed here..._
 
 ### Converting the contents of a single stream ###
 
