@@ -68,6 +68,22 @@ For a promote (transaction 83) from the stream `Development` to the stream `Test
 | | 
 ```
 
+So if subsequently two more promotes were made into each stream the git conversion would look like this:
+
+```
+--source-stream-fast-forward=false
+
+*   (Test) Transaction 85 by Joe Bloggs
+| * (Development) Transaction 84 by Joanna Blobs
+* | Transaction 83 by Test Lead
+|\|
+| * Transaction 78 by Joanna Blobs
+* | Transaction 67 by Joe Bloggs
+| | 
+```
+
+Where if we were to change the `--source-stream-fast-forward` flag to true we would get this for the same transactions:
+
 ```
 --source-stream-fast-forward=true
 
@@ -78,7 +94,24 @@ For a promote (transaction 83) from the stream `Development` to the stream `Test
 | | 
 ```
 
-Note that the branch `Development` has been moved to the merge commit when the `--source-stream-fast-forward` option was set to `true`. This is not normally desired so the default and recommended setting is `false`.
+And again, with an additional promote into each stream we would get this graph in Git.
+
+```
+--source-stream-fast-forward=true
+
+*   (Test) Transaction 85 by Joe Bloggs
+| * (Development) Transaction 84 by Joanna Blobs
+|/
+* Transaction 83 by Test Lead
+|\
+| * Transaction 78 by Joanna Blobs
+* | Transaction 67 by Joe Bloggs
+| | 
+```
+
+Notice that the graph looks a little like a letter K hence the single letter option for this same flag is `-K`.
+
+The branch `Development` has been moved to the merge commit when the `--source-stream-fast-forward` option was set to `true`. This is not normally desired so the default and recommended setting is `false`.
 
 _Work in progress. TODO: complete the explanation of how children are processed here..._
 
