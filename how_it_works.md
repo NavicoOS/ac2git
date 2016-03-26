@@ -48,13 +48,13 @@ The `mkstream` transaction is processed in the same way as a `chstream` transact
 
 A `chstream` transaction is processed by first checking if the basis stream has changed...
 
-_Work in progress. TODO: finish describing chstreams..._
+_Work in progress. TODO: finish describing chstreams and be wary of issue #57..._
 
 For all other transactions we then check if they occurred on a stream or in a workspace. For workspaces we simply make a cherry-pick and continue processing but for streams we have to do some more work w.r.t. its children streams which may have also been affected by this transaction (usually a `promote` but can be a `keep`, `purge` or a `defunct` in case of a revert).
 
 For depots that have lived through one or more Accurev upgrades you will find that as you go deeper into the history less and less information is available to you via accurev commands. For example, the `accurev hist -fex` XML output for newer transactions includes the `fromStreamName` and `fromStreamNumber` attributes for the transaction but if you go back far enough these attributes dissappear. Hence, newer history will always look better than the older one because Accurev is providing us with more information about what has actually happened. _Note: it may be possible to infer from which stream a promote occurred in a number of different ways but I won't go into that right now_.
 
-If we know the source and destination stream and both are being converted by the script (they are both specified in the stream list in the configuration file) then we can record that a merge occurred. This merge can take two forms depending on how you've configured the `source-stream-fast-forward="false"` option in the config file or the `--source-stream-fast-forward=false` command line argument.
+If we know the source stream and the destination stream and both are being converted by the script (they are both specified in the stream list in the configuration file) then we can record that a merge occurred. This merge can take two forms depending on how you've configured the `source-stream-fast-forward="false"` option in the config file or the `--source-stream-fast-forward=false` command line argument.
 
 For a promote (transaction 83) from the stream `Development` to the stream `Test` this is what it would look like for each of the two options:
 
@@ -113,7 +113,35 @@ Notice that the graph looks a little like a letter K hence the single letter opt
 
 The branch `Development` has been moved to the merge commit when the `--source-stream-fast-forward` option was set to `true`. This is not normally desired so the default and recommended setting is `false`.
 
-_Work in progress. TODO: complete the explanation of how children are processed here..._
+But if we either don't know the source stream or if we are not tracking it the commit is turned itno a cherry-pick onto the destination stream _(which must be tracked otherwise why are we processing it?)_.
+
+Once this is done we will then figure out which of our child streams (that we are converting/tracking) are affected and recursively process them ([depth-first in-order](https://en.wikipedia.org/wiki/Tree_traversal#In-order)).
+
+If the child stream is empty, which is determined by doing a `git diff` between the commit we just made and the commit that we are about to make on the child stream being empty, then we will try and do a fast-forward of the child stream to this commit provided that it is a direct ancestor of us (meaning it has already been merged). If the fast-forward failse (because the child stream's git branch is not an ancestor of the basis streams git branch), depending on the setting of the `empty-child-stream-action` in the config file or `--empty-child-stream-action` command line argument the script will do one of the following two things:
+
+For `--empty-child-stream-action=merge`:
+
+The script will record a merge from the parent/basis stream's git branch into the child stream's git branch like this:
+
+```
+| * (Child stream) Transaction 97 by Maria Teresa
+|/|
+* | (Basis stream) Transaction 97 by Maria Teresa
+| |
+```
+
+For `--empty-child-stream-action=cherry-pick`:
+
+The script will record a cherry-pick from the basis stream's git branch into the child strea'ms git branch like this:
+
+```
+| * (Child stream) Transaction 97 by Maria Teresa
+| |
+* | (Basis stream) Transaction 97 by Maria Teresa
+| |
+```
+
+However, if the child stream is deteremened to be non-empty (the `git diff` was non-empty) then a cherry-pick is performed on the child stream like in the example above but without the attempted fast-forward.
 
 ### Converting the contents of a single stream ###
 
