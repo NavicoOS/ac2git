@@ -1316,9 +1316,6 @@ class AccuRev2Git(object):
         lastTrId = None
         stateHashList = None
         if dataRefObj is not None:
-            # This means that the ref already exists so we should switch to it.
-            self.SafeCheckout(ref=dataRef, doReset=True, doClean=True)
-
             # Find the last transaction number that we processed on the dataRef.
             lastTrId = self.GetTransactionForRef(ref=dataRef)
 
@@ -1343,6 +1340,10 @@ class AccuRev2Git(object):
                 commitHash = self.GetHashForTransaction(ref=dataRef, trNum=tr.id)
 
                 return (tr, commitHash)
+
+            # This means that the ref already exists so we should switch to it.
+            # We shouldn't do this earlier since if there's nothing to do we can skip this expensive operation.
+            self.SafeCheckout(ref=dataRef, doReset=True, doClean=True)
 
         else:
             # Get all the hashes from the stateRef since we need to process them all.
