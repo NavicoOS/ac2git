@@ -1629,7 +1629,7 @@ class AccuRev2Git(object):
         infoRefList.sort()
 
         if len(infoRefList) == 0:
-            logger.info("Warning: the refs from which we search for stream information seem to be missing...")
+            logger.warning("The refs from which we search for stream information seem to be missing...")
 
         for streamNumber, ref in infoRefList:
             # Execute a `git log -S` command with the pickaxe option to find the stream name in the streams.xml
@@ -2289,7 +2289,7 @@ class AccuRev2Git(object):
                     if treeHash is None:
                         if branchName is None:
                             raise Exception("Couldn't get tree for {trType} {trId} on untracked stream {s}. Message: {m}".format(trType=tr.Type, trId=tr.id, s=stream.name, m=title))
-                        logger.info("Warning: No associated data commit found! Assumption: The {trType} {trId} didn't actually change the stream. An empty commit will be generated on branch {b}. Continuing...".format(trType=tr.Type, trId=tr.id, b=branchName))
+                        logger.warning("No associated data commit found! Assumption: The {trType} {trId} didn't actually change the stream. An empty commit will be generated on branch {b}. Continuing...".format(trType=tr.Type, trId=tr.id, b=branchName))
                         treeHash = self.GetTreeFromRef(ref=branchName)
                         if treeHash is None:
                             raise Exception("Couldn't get last tree for {trType} {trId} on untracked stream {s}. Message: {m}".format(trType=tr.Type, trId=tr.id, s=stream.name, m=title))
@@ -2321,7 +2321,7 @@ class AccuRev2Git(object):
             if stream.Type in [ "workspace" ]:
                 # Workspaces don't have child streams 
                 if tr.Type not in [ "add", "keep", "co", "move" ]:
-                    logger.info("Warning: unexpected transaction {Type} {tr}. occurred in workspace {w}.".format(Type=tr.Type, tr=tr.id, w=stream.name))
+                    logger.warning("Unexpected transaction {Type} {tr}. occurred in workspace {w}.".format(Type=tr.Type, tr=tr.id, w=stream.name))
 
                 if branchName is not None:
                     commitHash = self.CommitTransaction(tr=tr, stream=stream, treeHash=treeHash, branchName=branchName)
@@ -2329,7 +2329,7 @@ class AccuRev2Git(object):
 
             elif stream.Type in [ "normal" ]:
                 if tr.Type not in [ "promote", "defunct", "purge" ]:
-                    logger.info("Warning: unexpected transaction {Type} {tr}. occurred in stream {s} of type {sType}.".format(Type=tr.Type, tr=tr.id, s=stream.name, sType=stream.Type))
+                    logger.warning("Unexpected transaction {Type} {tr}. occurred in stream {s} of type {sType}.".format(Type=tr.Type, tr=tr.id, s=stream.name, sType=stream.Type))
 
                 # Promotes can be thought of as merges or cherry-picks in git and deciding which one we are dealing with
                 # is the key to having a good conversion.
@@ -2493,8 +2493,21 @@ class AccuRev2Git(object):
         # Git refspec for the state ref in which we will store a blob.
         stateRefspec = u'{refsNS}state/depots/{depotNumber}/transactions'.format(refsNS=AccuRev2Git.gitRefsNamespace, depotNumber=depot.number)
 
-        streamMap = None
+        # Load the streamMap from the current configuration file.
+        streamMap = OrderedDict()
+        configStreamMap = self.GetStreamMap()
+        for configStream in configStreamMap:
+            branchName = configStreamMap[configStream]
 
+            logger.info("Getting stream information for stream '{name}' which will be committed to branch '{branch}'.".format(name=configStream, branch=branchName))
+            stream = self.GetStreamByName(depot.number, configStream)
+            if stream is None:
+                raise Exception("Failed to get stream information for {s}".format(s=configStream))
+            # Since we will be storing this state in JSON we need to make sure that we don't have
+            # numeric indices for dictionaries...
+            streamMap[str(stream.streamNumber)] = { "stream": configStream, "branch": branchName }
+
+        # Load the last known state of the conversion repository.
         stateText = self.ReadFileRef(ref=stateRefspec)
         if stateText is not None:
             state = json.loads(stateText)
@@ -2522,31 +2535,41 @@ class AccuRev2Git(object):
             branchList = self.gitRepo.branch_list()
             for b in branchList:
                 if b.name in streamBranchList and (state["branch_list"] is None or b.name not in loadedBranchList): # state["branch_list"] is a list of the branches that we have already created.
-                    logger.info("Warning: branch {branch} exists in the repo but will need to be created later.".format(branch=b.name))
+                    logger.warning("Branch {branch} exists in the repo but will need to be created later.".format(branch=b.name))
                     backupNumber = 1
                     while self.gitRepo.raw_cmd(['git', 'checkout', '-b', 'backup/{branch}_{number}'.format(branch=b.name, number=backupNumber)]) is None:
                         # Make a backup of the branch.
                         backupNumber += 1
                     if self.gitRepo.raw_cmd(['git', 'branch', '-D', b.name]) is None: # Delete the branch even if not merged.
                         raise Exception("Failed to delete branch {branch}!".format(branch=b.name))
-                    logger.info("Warning: branch {branch} has been renamed to backup/{branch}_{number}.".format(branch=b.name, number=backupNumber))
+                    logger.warning("Branch {branch} has been renamed to backup/{branch}_{number}.".format(branch=b.name, number=backupNumber))
             for missingBranch in (set(loadedBranchList) - set([ b.name for b in branchList ])):
-                logger.info("Warning: branch {branch} is missing from the repo!".format(branch=missingBranch))
+                logger.warning("Branch {branch} is missing from the repo!".format(branch=missingBranch))
 
+            # Check for added/deleted/renamed streams w.r.t. the new config file and last known conversion reporitory state.
+            newSet = set([x for x in streamMap])
+            oldSet = set([x for x in state["stream_map"]])
+            removedSet = oldSet - newSet
+            addedSet = newSet - oldSet
+            changedSet = newSet & oldSet # intersect
+
+            errorMessageLines = []
+            for streamNumberStr in removedSet:
+                errorMessageLines.append("removed: {streamName} (id: {streamNumber}) -> {branchName}".format(streamNumber=streamNumberStr, streamName=state["stream_map"][streamNumberStr]["stream"], branchName=state["stream_map"][streamNumberStr]["branch"]))
+            for streamNumberStr in addedSet:
+                errorMessageLines.append("added: {streamName} (id: {streamNumber}) -> {branchName}".format(streamNumber=streamNumberStr, streamName=streamMap[streamNumberStr]["stream"], branchName=streamMap[streamNumberStr]["branch"]))
+            for streamNumberStr in changedSet:
+                if streamMap[streamNumberStr]["branch"] != state["stream_map"][streamNumberStr]["branch"]:
+                    errorMessageLines.append("renamed: {streamName} (id: {streamNumber}) -> {branchName} (from {oldBranchName})".format(streamNumber=streamNumberStr, streamName=streamMap[streamNumberStr]["stream"], branchName=streamMap[streamNumberStr]["branch"], oldBranchName=state["stream_map"][streamNumberStr]["branch"]))
+
+            if len(errorMessageLines) > 0:
+                logger.error("Configured stream list has changed.")
+                for errorLine in errorMessageLines:
+                    logger.error("  - {0}".format(errorLine))
+                logger.error("The script currently cannot handle changing the stream list under the merging strategy.")
+                raise Exception("The script currently cannot handle changing the stream list under the merging strategy.")
         else:
             logger.info("No last state in {ref}, starting new conversion.".format(ref=stateRefspec))
-            streamMap = OrderedDict()
-            configStreamMap = self.GetStreamMap()
-            for configStream in configStreamMap:
-                branchName = configStreamMap[configStream]
-
-                logger.info("Getting stream information for stream '{name}' which will be committed to branch '{branch}'.".format(name=configStream, branch=branchName))
-                stream = self.GetStreamByName(depot.number, configStream)
-                if stream is None:
-                    raise Exception("Failed to get stream information for {s}".format(s=configStream))
-                # Since we will be storing this state in JSON we need to make sure that we don't have
-                # numeric indices for dictionaries...
-                streamMap[str(stream.streamNumber)] = { "stream": configStream, "branch": branchName }
 
             # Default state
             state = { "depot_number": depot.number,
