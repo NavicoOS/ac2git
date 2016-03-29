@@ -1162,9 +1162,10 @@ class AccuRev2Git(object):
         # Either checkout last state or make the initial commit for a new stateRef.
         tr = None
         commitHash = None
+        doInitialCheckout = False
         if stateRefObj is not None:
             # This means that the ref already exists so we should switch to it.
-            self.SafeCheckout(ref=stateRef, doReset=True, doClean=True)
+            doInitialCheckout = True
             histXml, hist = self.GetHistInfo(ref=stateRef)
             tr = hist.transactions[0]
         else:
@@ -1222,6 +1223,12 @@ class AccuRev2Git(object):
 
             logger.debug( "{0}: next transaction {1} (end tr. {2})".format(stream.name, nextTr, endTr.id) )
             if nextTr <= endTr.id:
+                if doInitialCheckout:
+                    # A postponed initialization of state. If there's nothing to do we should skip this checkout because
+                    # it can be expensive. So only do it once and only when we will need to use it.
+                    self.SafeCheckout(ref=stateRef, doReset=True, doClean=True)
+                    doInitialCheckout = False
+
                 # Right now nextTr is an integer representation of our next transaction.
                 # Delete all of the files which are even mentioned in the diff so that we can do a quick populate (wouth the overwrite option)
                 if self.config.method == "pop":
