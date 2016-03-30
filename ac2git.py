@@ -35,6 +35,14 @@ import git
 
 logger = None
 
+# Taken from this StackOverflow answer: http://stackoverflow.com/a/19238551
+# Compulsary quote: https://twitter.com/codinghorror/status/712467615780708352
+def utc2local(utc):
+    epoch = time.mktime(utc.timetuple())
+    offset = datetime.fromtimestamp (epoch) - datetime.utcfromtimestamp (epoch)
+    return utc + offset
+
+
 # ################################################################################################ #
 # Script Classes                                                                                   #
 # ################################################################################################ #
@@ -1881,9 +1889,14 @@ class AccuRev2Git(object):
             processingList.sort()
 
         for streamNumber, stream, branchName in processingList:
+            oldCommitHash = self.GetLastCommitHash(branchName=branchName)
+
             self.ProcessStream(stream=stream, branchName=branchName)
 
-            if self.config.git.remoteMap is not None:
+            newCommitHash = self.GetLastCommitHash(branchName=branchName)
+
+            # If a remote is configured and we have made a commit on this branch then do a push.
+            if self.config.git.remoteMap is not None and oldCommitHash != newCommitHash:
                 formatOptions = { "accurevNotes": AccuRev2Git.gitNotesRef_accurevInfo, "ac2gitNotes": AccuRev2Git.gitNotesRef_state, "branchName": branchName }
                 refspec = "{branchName}".format(**formatOptions)
                 if self.gitRepo.raw_cmd(['git', 'show-ref', '--hash', 'refs/notes/{accurevNotes}'.format(**formatOptions)]) is not None:
@@ -2202,7 +2215,7 @@ class AccuRev2Git(object):
         # Get the name and number of the stream on which this transaction had occurred.
         streamName, streamNumber = tr.affectedStream()
 
-        logger.debug( "Transaction #{tr} - {Type} by {user} to {stream} at {time}".format(tr=tr.id, Type=tr.Type, time=tr.time, user=tr.user, stream=streamName) )
+        logger.debug( "Transaction #{tr} - {Type} by {user} to {stream} at {localTime} local time ({utcTime} UTC)".format(tr=tr.id, Type=tr.Type, utcTime=tr.time, localTime=utc2local(tr.time), user=tr.user, stream=streamName) )
 
         # Get the information for the stream on which this transaction had occurred.
         stream, branchName, streamData, treeHash = self.UnpackStreamDetails(streams=streams, streamMap=streamMap, affectedStreamMap=affectedStreamMap, streamNumber=streamNumber)
