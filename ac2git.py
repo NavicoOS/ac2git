@@ -1764,6 +1764,8 @@ class AccuRev2Git(object):
             else:
                 branchName = self.SanitizeBranchName(branchName)
 
+            branchRef = 'refs/heads/{branchName}'.format(branchName=branchName)
+
             branchList = self.gitRepo.branch_list()
             if branchList is None:
                 return None
@@ -1771,7 +1773,6 @@ class AccuRev2Git(object):
             commitHash = None
             lastDataCommitHash = None
             if branchName in [ br.name if br is not None else None for br in branchList ]:
-                self.SafeCheckout(ref=branchName, doReset=True, doClean=True)
                 commitHash = self.GetLastCommitHash(branchName=branchName)
                 commitState = self.GetStateForCommit(commitHash=commitHash, notesRef=AccuRev2Git.gitNotesRef_state)
 
@@ -1796,7 +1797,7 @@ class AccuRev2Git(object):
                     logger.info("The last commit for which state information was found was {gh}, which means that {count} commits are bad.".format(gh=lastGoodCommitHash, count=badCount))
                     linesToDelete = self.gitRepo.raw_cmd(['git', 'log', '--format=%h %s', commitHash, '^{h}'.format(h=lastGoodCommitHash)])
                     logger.info("The following commits are being discarded:\n{lines}".format(lines=linesToDelete))
-                    if self.gitRepo.raw_cmd(['git', 'reset', '--hard', lastGoodCommitHash]) is None:
+                    if self.UpdateAndCheckoutRef(ref=branchRef, commitHash=lastGoodCommitHash, checkout=False) != True:
                         logger.error("Failed to restore last known good state, aborting!")
                         return None
 
@@ -1806,10 +1807,6 @@ class AccuRev2Git(object):
                 lastDataCommitHash = self.GetHashForTransaction(ref=dataRef, trNum=lastTrId)
                 if lastDataCommitHash is None:
                     return None
-            else:
-                # TODO: Implement the fractal method option here! i.e. Create the branch and root it to its parent.
-                logger.info( "Creating orphan branch {0}".format(branchName) )
-                self.gitRepo.checkout(branchName=branchName, isOrphan=True)
 
             # Get the list of new hashes that have been committed to the dataRef but we haven't processed on the dataRef just yet.
             dataHashList = self.GetGitLogList(ref=dataRef, afterCommitHash=lastDataCommitHash, gitLogFormat='%H %s %T')
@@ -1846,7 +1843,10 @@ class AccuRev2Git(object):
                 parents = []
                 if commitHash is not None:
                     parents = [ commitHash ]
-                commitHash = self.Commit(transaction=tr, allowEmptyCommit=True, messageOverride=commitMessage, treeHash=treeHash, parents=parents)
+                else:
+                    logger.info( "Creating orphan branch {branchName}".format(branchName=branchName) )
+
+                commitHash = self.Commit(transaction=tr, allowEmptyCommit=True, messageOverride=commitMessage, parents=parents, treeHash=treeHash, ref=branchRef, checkout=False)
                 if commitHash is None:
                     logger.error("Failed to commit transaction {trId} to {br}.".format(trId=tr.id, br=branchName))
                     return None
