@@ -2066,6 +2066,33 @@ class AccuRev2Git(object):
         if notes is not None and self.AddNote(transaction=tr, commitHash=commitHash, ref=AccuRev2Git.gitNotesRef_accurevInfo, note=notes) is None:
             raise Exception("Failed to add note for commit {h} (transaction {trId}) to {br}.".format(trId=tr.id, br=branchName, h=commitHash))
 
+        if stream is not None:
+            # Log this commit at this transaction in the state refs that keep track of this stream's history over time.
+            depot = self.GetDepot(stream.depotName)
+            if depot is None:
+                raise Exception("Failed to get depot {depot}!".format(depot=stream.depotName))
+            streamStateRefspec = u'{refsNS}state/depots/{depotNumber}/streams/{streamNumber}/commit_history'.format(refsNS=AccuRev2Git.gitRefsNamespace, depotNumber=depot.number, streamNumber=stream.streamNumber)
+
+            # Write the empty tree to the git repository to ensure there is one.
+            emptyTree = self.gitRepo.empty_tree(write=True)
+            if emptyTree is None or len(emptyTree) == 0:
+                raise Exception("Failed to write empty tree to git repository!")
+
+            # Get the last known state
+            lastStateCommitHash = self.GetLastCommitHash(ref=streamStateRefspec)
+            if lastStateCommitHash is None:
+                # Since we will use git log --first-parent a lot we need to make sure we have a parentless commit to start off with.
+                lastStateCommitHash = self.Commit(transaction=tr, allowEmptyCommit=True, messageOverride='transaction {trId}'.format(trId=tr.id), parents=[], treeHash=emptyTree, ref=streamStateRefspec, checkout=False)
+                if lastStateCommitHash is None:
+                    raise Exception("Failed to add empty state commit for stream {streamName} (id: {streamNumber})".format(streamName=stream.name, streamNumber=stream.streamNumber))
+                logger.debug("Created state branch for stream {streamName} as {ref} at commit {h}".format(streamName=stream.name, ref=streamStateRefspec, h=lastStateCommitHash))
+            stateCommitHash = self.Commit(transaction=tr, allowEmptyCommit=True, messageOverride='transaction {trId}'.format(trId=tr.id), parents=[ lastStateCommitHash, commitHash ], treeHash=emptyTree, ref=streamStateRefspec, checkout=False)
+            if stateCommitHash is None:
+                raise Exception("Failed to commit {Type} {tr} to hidden state ref {ref} with commit {h}".format(Type=tr.Type, tr=tr.id, ref=streamStateRefspec, h=commitHash))
+            logger.debug("Committed stream state to {ref} - commit {h}".format(streamName=stream.name, ref=streamStateRefspec, h=lastStateCommitHash))
+        else:
+            raise Exception("Error: CommitTransaction() is a helper for ProcessTransaction() and doesn't accept stream as None.")
+
         return commitHash
 
     def GitRevParse(self, ref):
@@ -2504,7 +2531,7 @@ class AccuRev2Git(object):
             raise Exception("Failed to get depot {depot}!".format(depot=self.config.accurev.depot))
 
         # Git refspec for the state ref in which we will store a blob.
-        stateRefspec = u'{refsNS}state/depots/{depotNumber}/transactions'.format(refsNS=AccuRev2Git.gitRefsNamespace, depotNumber=depot.number)
+        stateRefspec = u'{refsNS}state/depots/{depotNumber}/last'.format(refsNS=AccuRev2Git.gitRefsNamespace, depotNumber=depot.number)
 
         # Load the streamMap from the current configuration file.
         streamMap = OrderedDict()

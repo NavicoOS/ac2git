@@ -20,6 +20,13 @@ from math import floor
 
 gitCmd = u'git'
 
+# See StackOverflow: http://stackoverflow.com/questions/9765453/gits-semi-secret-empty-tree
+# But in summary this hash can be computed by running any of the following commands:
+#  - `git hash-object -t tree /dev/null`
+#  - `git mktree < /dev/null`
+#  - `git commit --allow-empty -m "Initial commit"` on an empty repository and inspecting that commit's tree hash.
+emptyTreeHash = u'4b825dc642cb6eb9a060e54bf8d69288fbee4904'
+
 class GitStatus(object):
     # Regular expressions used in fromgitoutput classmethod for parsing the different git lines.
     branchRe        = re.compile(pattern=r'^(HEAD detached at |HEAD detached from |On branch )(\S+)$')
@@ -406,6 +413,17 @@ class repo(object):
 
     def raw_cmd(self, cmd):
         return self._docmd(cmd)
+
+    def empty_tree(self, write=False):
+        cmd = [ gitCmd, u'hash-object', '-t', 'tree' ]
+        if write:
+            cmd.append(u'-w')
+        cmd.append(u'/dev/null')
+
+        rv = self._docmd(cmd)
+        if isinstance(rv, str):
+            return rv.strip()
+        return rv
         
     def checkout(self, branchName=None, isNewBranch=False, isOrphan=False):
         cmd = [ gitCmd, u'checkout' ]
