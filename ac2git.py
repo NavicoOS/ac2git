@@ -2228,12 +2228,59 @@ class AccuRev2Git(object):
             stream = streams.getStream(streamNumber)
 
         return stream, branchName, streamData, treeHash
-            
+
+    def GetBasisCommitHash(self, streamNumber, streamBasisNumber, streamTime, streams, streamMap, affectedStreamMap):
+        # Get the current/new basis stream
+        basisStream, basisBranchName, basisStreamData, basisTreeHash = self.UnpackStreamDetails(streams=streams, streamMap=streamMap, affectedStreamMap=affectedStreamMap, streamNumber=streamBasisNumber)
+        minTimestamp = None if streamTime is None or accurev.GetTimestamp(streamTime) == 0 else accurev.GetTimestamp(streamTime)
+        while basisStream is not None and basisBranchName is None: # Find the first tracked basis stream.
+            # Since this is an untracked basis take the earlier timestamp between ours and its timestamp.
+            if basisStream.time is not None:
+                basisTimestamp = accurev.GetTimestamp(basisStream.time)
+                if basisTimestamp != 0:
+                    minTimestamp = basisTimestamp if minTimestamp is None else min(minTimestamp, basisTimestamp)
+            # Make the basis streams basis our basis and try again...
+            basisStream, basisBranchName, basisStreamData, basisTreeHash = self.UnpackStreamDetails(streams=streams, streamMap=streamMap, affectedStreamMap=affectedStreamMap, streamNumber=basisStream.basisStreamNumber)
+        
+        if minTimestamp is not None:
+            logger.debug("Timestamp note: given {0} ({1}) computed {2} ({3})...".format(accurev.GetTimestamp(streamTime), streamTime, minTimestamp, accurevUTCDateTimeOrNone(minTimestamp)))
+            streamTime = accurev.UTCDateTimeOrNone(minTimestamp)
+
+        if basisBranchName is not None:
+            basisBranchHistoryRef = self.GetStreamCommitHistoryRef(basisStream.depotName, basisStream.streamNumber)
+
+            timelockISO8601Str = None
+            if streamTime is not None and accurev.GetTimestamp(streamTime) != 0: # A timestamp of 0 indicates that a timelock was removed.
+                timelockISO8601Str = "{datetime}Z".format(datetime=streamTime.isoformat('T')) # The time is in UTC and ISO8601 requires us to specify Z for UTC.
+
+            cmd = [u'git', u'log', u'-1', u'--format=format:%P', u'--first-parent']
+            if timelockISO8601Str is not None:
+                cmd.append(u'--before={before}'.format(before=timelockISO8601Str))
+            cmd.append(basisBranchHistoryRef)
+
+            for i in range(0, AccuRev2Git.commandFailureRetryCount):
+                parentHashes = self.gitRepo.raw_cmd(cmd)
+                if parentHashes is not None:
+                    parentHashes = parentHashes.strip()
+                    if len(parentHashes) == 0:
+                        parentHashes = None
+                    else:
+                        break
+                time.sleep(AccuRev2Git.commandFailureSleepSeconds)
+
+            if parentHashes is None:
+                logger.error("Failed to retrieve last git commit hash. Command `{0}` failed.".format(' '.join(cmd)))
+                return None, None, None, None
+
+            parents = parentHashes.split()
+            return basisStream, basisBranchName, parents[1], streamTime
+
+        return None, None, None, None
 
     # Processes a single transaction whose id is the trId (int) and which has been recorded against the streams outlined in the affectedStreamMap.
     # affectedStreamMap is a dictionary with the following format { <key:stream_num_str>: { "state_hash": <val:state_ref_commit_hash>, "data_hash": <val:data_ref_commit_hash> } }
     # The streamMap is used so that we can translate streams and their basis into branch names { <key:stream_num_str>: { "stream": <val:config_strem_name>, "branch": <val:config_branch_name> } }
-    def ProcessTransaction(self, streamMap, trId, affectedStreamMap):
+    def ProcessTransaction(self, streamMap, trId, affectedStreamMap, prevAffectedStreamMap):
         # For all affected streams the streams.xml and hist.xml contents should be the same for the same transaction id so get it from any one of them.
         arbitraryStreamNumberStr = next(iter(affectedStreamMap))
         arbitraryStreamData = affectedStreamMap[arbitraryStreamNumberStr]
@@ -2263,6 +2310,8 @@ class AccuRev2Git(object):
             parents = None
             lastCommitHash = None
             title = None
+            targetStreams = []
+            prevBasisCommitHash = None
             if tr.Type == "mkstream":
                 # Old versions of accurev don't tell you the name of the stream that was created in the mkstream transaction.
                 # The only way to find out what stream was created is to diff the output of the `accurev show streams` command
@@ -2274,6 +2323,7 @@ class AccuRev2Git(object):
                 stream, branchName, streamData, treeHash = self.UnpackStreamDetails(streams=streams, streamMap=streamMap, affectedStreamMap=affectedStreamMap, streamNumber=int(arbitraryStreamNumberStr))
                 parents = [] # First, orphaned, commit is denoted with an empty parents list.
                 title = 'Created {name}'.format(name=branchName)
+                targetStreams.append( (stream, branchName, streamData, treeHash, parents) )
             elif tr.Type == "chstream":
                 if tr.stream is not None:
                     stream, branchName, streamData, treeHash = self.UnpackStreamDetails(streams=streams, streamMap=streamMap, affectedStreamMap=affectedStreamMap, streamNumber=tr.stream.streamNumber)
@@ -2284,55 +2334,69 @@ class AccuRev2Git(object):
                         if lastCommitHash is None:
                             raise Exception("Error! Failed to get the last commit hash for branch {b} (stream: {s}), transaction {trType} {trId}!".format(trType=tr.Type, trId=tr.id, b=branchName, s=stream.name))
                         parents = [ lastCommitHash ]
+                        targetStreams.append( (stream, branchName, streamData, treeHash, parents) )
+                    else:
+                        # Here we need to find all the children streams that are tracked and replay this chstream transaction as if it occurred on each child stream...
+                        # Until then, abort!
+                        raise Exception("{Type} {tr}. {s} (id: {sn}) is not tracked. Logic for applying this change to affected children is missing. Aborting!".format(Type=tr.Type, tr=tr.id, s=stream.name, sn=stream.streamNumber))
+
+                    # Get the previous commit hash off which we would have been based at the time of the previous processed transaction.
+                    prevArbitraryStreamNumberStr = next(iter(prevAffectedStreamMap))
+                    prevArbitraryStreamData = prevAffectedStreamMap[prevArbitraryStreamNumberStr]
+                    prevStreamsXml, prevStreams = self.GetStreamsInfo(ref=prevArbitraryStreamData["state_hash"])
+                    if prevStreams is None:
+                        raise Exception("Couldn't get streams for previous transaction (current transaction {tr}). Aborting!".format(tr=trId))
+
+                    prevBasisStreamNumber = tr.stream.prevBasisStreamNumber
+                    if prevBasisStreamNumber is None:
+                        prevBasisStreamNumber = tr.stream.streamNumber
+                    prevTime = tr.stream.prevTime
+                    if prevTime is None:
+                        prevTime = tr.stream.time
+
+                    prevBasisStream, prevBasisBranchName, prevBasisCommitHash, prevStreamTime = self.GetBasisCommitHash(tr.stream.streamNumber, prevBasisStreamNumber, prevTime, prevStreams, streamMap, affectedStreamMap)
+                    if prevBasisCommitHash is None:
+                        raise Exception("Couldn't determine the last basis commit hash.")
+
+                    # Stream renames can be looked up in the stream.prevName value here.
+                    if tr.stream.prevName is not None and len(tr.stream.prevName.strip()) > 0:
+                        # if the stream has been renamed, use its new name from now on.
+                        logger.info("Stream renamed from {oldName} to {newName}. Branch name is {branch}, ignoring.".format(oldName=tr.stream.prevName, newName=tr.stream.name, branch=branchName))
+                else:
+                    raise Exception("Invariant error! Can't handle not having a stream in the accurev hist XML output for a chstream transaction...")
             else:
                 raise Exception("Not yet implemented! {trId} {trType}, unrecognized transaction type.".format(trId=tr.id, trType=tr.Type))
 
-            if branchName is not None:
-                # Stream renames can be looked up in the stream.prevName value here.
-                if stream.prevName is not None and len(stream.prevName.strip()) > 0:
-                    # if the stream has been renamed, use its new name from now on.
-                    logger.info("Stream renamed from {oldName} to {newName}. Branch name is {branch}, ignoring.".format(oldName=stream.prevName, newName=stream.name, branch=branchName))
+            # Get the commit hash off which we should be based off from this chstream transaction forward.
+            basisStream, basisBranchName, basisCommitHash, streamTime = self.GetBasisCommitHash(stream.streamNumber, stream.basisStreamNumber, stream.time, streams, streamMap, affectedStreamMap)
+            if basisCommitHash is None:
+                title = "{title} orphaned branch.".format(title=title)
+            else:
+                title = "{title} based on {basisBranchName} at {h}".format(title=title, basisBranchName=basisBranchName, h=basisCommitHash[:8])
 
-                basisStream, basisBranchName, basisStreamData, basisTreeHash = self.UnpackStreamDetails(streams=streams, streamMap=streamMap, affectedStreamMap=affectedStreamMap, streamNumber=stream.basisStreamNumber)
-                while basisStream is not None and basisBranchName is None: # Find the first tracked basis stream.
-                    basisStream, basisBranchName, basisStreamData, basisTreeHash = self.UnpackStreamDetails(streams=streams, streamMap=streamMap, affectedStreamMap=affectedStreamMap, streamNumber=basisStream.basisStreamNumber)
+            if len(targetStreams) == 0:
+                raise Exception("Invariant error! There should be at least one targetStreams item in the list!")
 
-                timelockISO8601Str = None
-                if stream.time is not None and accurev.GetTimestamp(stream.time) != 0: # A timestamp of 0 indicates that a timelock was removed.
-                    timelockISO8601Str = "{datetime}Z".format(datetime=stream.time.isoformat('T')) # The time is in UTC and ISO8601 requires us to specify Z for UTC.
-                lastBasisCommitHash = None
-                if basisBranchName is not None:
-                    # Get the commit just before the time on the basis branch.
-                    lastBasisCommitHash = self.GetLastCommitHash(branchName=basisBranchName, before=timelockISO8601Str)
-                    if lastBasisCommitHash is None:
-                        raise Exception("Error! Failed to get the last basis commit hash for {trType} {trId}! Basis {b} at {t}".format(trType=tr.Type, trId=tr.id, b=basisBranchName, t=timelockISO8601Str))
-
-                    title = '{title}, based on {basis}'.format(title=title, basis=basisBranchName)
-                    if timelockISO8601Str is not None:
-                        title = '{title} at {time}'.format(title=title, time=timelockISO8601Str)
-
-                    isAncestor1, isAncestor2 = True, True # If we don't have the last commit hash then we should just move the ref as we would if we were a direct ancestor.
-                    if lastCommitHash is not None:
-                        isAncestor1 = self.GitMergeBase(refs=[ lastBasisCommitHash, lastCommitHash ], isAncestor=True)
-                        isAncestor2 = self.GitMergeBase(refs=[ lastCommitHash, lastBasisCommitHash ], isAncestor=True)
-
-                    if None in [ isAncestor1, isAncestor2 ]:
+            for stream, branchName, streamData, treeHash, parents in targetStreams:
+                if branchName is None:
+                    raise Exception("Invariant error! branchName cannot be None here!")
+                if prevBasisCommitHash != basisCommitHash:
+                    amMergedIntoPrevBasis = ( len(parents) > 0 and self.GitMergeBase(refs=[ parents[0], prevBasisCommitHash ], isAncestor=True) )
+                    if None in [ amMergedIntoPrevBasis ]:
                         raise Exception("Error! The git merge-base command failed!")
-                    elif isAncestor1 or isAncestor2:
+                    elif amMergedIntoPrevBasis:
                         # Fast-forward the timelocked stream branch to the correct commit.
-                        if self.UpdateAndCheckoutRef(ref='refs/heads/{branch}'.format(branch=branchName), commitHash=lastBasisCommitHash, checkout=False) != True:
-                            raise Exception("Failed to fast-forward {branch} to {hash} (latest commit on {parentBranch}).".format(branch=branchName, hash=lastBasisCommitHash[:8], parentBranch=basisBranchName))
+                        if self.UpdateAndCheckoutRef(ref='refs/heads/{branch}'.format(branch=branchName), commitHash=prevBasisCommitHash, checkout=False) != True:
+                            raise Exception("Failed to fast-forward {branch} to {hash} (latest commit on {parentBranch}).".format(branch=branchName, hash=basisCommitHash[:8], parentBranch=basisBranchName))
                         parents = None # Do not commit!
-                        logger.info("{trType} {trId}. Fast-forward {dst} to {b} {h}.".format(trType=tr.Type, trId=tr.id, b=basisBranchName, h=lastBasisCommitHash[:8], dst=branchName))
+                        logger.info("{trType} {trId}. Fast-forward {dst} to {b} {h}.".format(trType=tr.Type, trId=tr.id, b=basisBranchName, h=basisCommitHash[:8], dst=branchName))
                     else:
                         # Merge by specifying the parent commits.
-                        parents.insert(0, lastBasisCommitHash) # Make this commit a merge of the parent stream into the child stream.
+                        parents.insert(0, basisCommitHash) # Make this commit a merge of the parent stream into the child stream.
                         if None in parents:
-                            raise Exception("Invariant error! Either the source hash {sh} or the destination hash {dh} was none!".format(sh=parents[1], dh=parents[0]))
-                        logger.info("{trType} {trId}. Merging {b} {h} as first parent into {dst}.".format(trType=tr.Type, trId=tr.id, b=basisBranchName, h=lastBasisCommitHash[:8], dst=branchName))
-                else: # No basis stream is tracked!
-                    logger.info("{trType} {trId}. Cherry-picked into {dst}. No tracked basis found. Basis {b}.".format(trType=tr.Type, trId=tr.id, dst=branchName, b=stream.basis))
-
+                            raise Exception("Invariant error! Either the source hash or the destination hash in {p} was none!".format(p=parents))
+                        logger.info("{trType} {trId}. Merging {b} {h} as first parent into {dst}.".format(trType=tr.Type, trId=tr.id, b=basisBranchName, h=basisCommitHash[:8], dst=branchName))
+            
                 if parents is not None:
                     if treeHash is None:
                         if branchName is None:
@@ -2347,19 +2411,17 @@ class AccuRev2Git(object):
                         raise Exception("Failed to commit chstream {trId}".format(trId=tr.id))
                     logger.info("{Type} {tr}. committed to {branch} {h}. {title}".format(Type=tr.Type, tr=tr.id, branch=branchName, h=commitHash[:8], title=title))
                 else:
-                    logger.debug("{Type} {tr}. skiping commit to {branch}. (fast-forward to {h}) {title}".format(Type=tr.Type, tr=tr.id, branch=branchName, h=lastBasisCommitHash[:8], title=title))
+                    logger.debug("{Type} {tr}. skiping commit to {branch}. (fast-forward to {h}) {title}".format(Type=tr.Type, tr=tr.id, branch=branchName, h=basisCommitHash[:8], title=title))
 
-            else:
-                logger.info("{Type} {tr}. No known branch for stream {s} (id: {sn}).".format(Type=tr.Type, tr=tr.id, s=stream.name, sn=stream.streamNumber))
 
-            # Process all affected streams.
-            allStreamTree = self.BuildStreamTree(streams=streams.streams)
-            keepList = [ sn for sn in affectedStreamMap ]
-            if branchName is not None:
-                keepList.append(stream.streamNumber) # The stream on which the chstream transaction occurred will never be affected so we have to keep it in there explicitly for the MergeIntoChildren() algorithm (provided it is being processed).
-            keepList = list(set(keepList)) # Keep only unique values
-            affectedStreamTree = self.PruneStreamTree(streamTree=allStreamTree, keepList=keepList)
-            self.MergeIntoChildren(tr=tr, streamTree=affectedStreamTree, streamMap=streamMap, affectedStreamMap=affectedStreamMap, streams=streams, streamNumber=stream.streamNumber if branchName is not None else None)
+                # Process all affected streams.
+                allStreamTree = self.BuildStreamTree(streams=streams.streams)
+                keepList = [ sn for sn in affectedStreamMap ]
+                if branchName is not None:
+                    keepList.append(stream.streamNumber) # The stream on which the chstream transaction occurred will never be affected so we have to keep it in there explicitly for the MergeIntoChildren() algorithm (provided it is being processed).
+                keepList = list(set(keepList)) # Keep only unique values
+                affectedStreamTree = self.PruneStreamTree(streamTree=allStreamTree, keepList=keepList)
+                self.MergeIntoChildren(tr=tr, streamTree=affectedStreamTree, streamMap=streamMap, affectedStreamMap=affectedStreamMap, streams=streams, streamNumber=stream.streamNumber if branchName is not None else None)
 
         else:
             if branchName is not None and treeHash is None:
@@ -2684,15 +2746,17 @@ class AccuRev2Git(object):
 
         logger.info("Processing transactions for {depot} depot.".format(depot=self.config.accurev.depot))
         knownBranchSet = set([ state["stream_map"][x]["branch"] for x in state["stream_map"] ]) # Get the list of all branches that we will create.
+        prevAffectedStreamMap = None
         for tr in sorted(transactionsMap):
             if tr <= state["last_transaction"]:
+                prevAffectedStreamMap = transactionsMap[tr]
                 del transactionsMap[tr] # ok since sorted returns a sorted list by copy.
                 continue
             elif tr > endTransaction:
                 break
 
             # Process the transaction!
-            self.ProcessTransaction(streamMap=state["stream_map"], trId=tr, affectedStreamMap=transactionsMap[tr])
+            self.ProcessTransaction(streamMap=state["stream_map"], trId=tr, affectedStreamMap=transactionsMap[tr], prevAffectedStreamMap=prevAffectedStreamMap)
 
             # Store the state of the branches in the repo at this point in time so that we can restore it on next restart.
             state["branch_list"] = []
@@ -2712,6 +2776,7 @@ class AccuRev2Git(object):
             if self.WriteFileRef(ref=stateRefspec, text=json.dumps(state)) != True:
                 raise Exception("Failed to write state to {ref}.".format(ref=stateRefspec))
 
+            prevAffectedStreamMap = transactionsMap[tr]
         return True
 
             
