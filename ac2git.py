@@ -2051,6 +2051,15 @@ class AccuRev2Git(object):
 
         return rv
 
+    def GetStreamCommitHistoryRef(self, depot, streamNumber):
+        depotObj = self.GetDepot(depot)
+        if depotObj is None:
+            raise Exception("Failed to get depot {depot}!".format(depot=depot))
+        depot = depotObj
+        if isinstance(streamNumber, int):
+            return u'{refsNS}state/depots/{depotNumber}/streams/{streamNumber}/commit_history'.format(refsNS=AccuRev2Git.gitRefsNamespace, depotNumber=depot.number, streamNumber=streamNumber)
+        return None
+
     def CommitTransaction(self, tr, stream, parents=None, treeHash=None, branchName=None, title=None, srcStream=None, dstStream=None, friendlyMessage=None):
         branchRef = None
         if branchName is not None:
@@ -2068,10 +2077,9 @@ class AccuRev2Git(object):
 
         if stream is not None:
             # Log this commit at this transaction in the state refs that keep track of this stream's history over time.
-            depot = self.GetDepot(stream.depotName)
-            if depot is None:
-                raise Exception("Failed to get depot {depot}!".format(depot=stream.depotName))
-            streamStateRefspec = u'{refsNS}state/depots/{depotNumber}/streams/{streamNumber}/commit_history'.format(refsNS=AccuRev2Git.gitRefsNamespace, depotNumber=depot.number, streamNumber=stream.streamNumber)
+            streamStateRefspec = self.GetStreamCommitHistoryRef(stream.depotName, stream.streamNumber)
+            if streamStateRefspec is None:
+                raise Exception("Failed to get hidden ref for stream {streamName} (id: {streamNumber}) depot {depotName}".format(streamName=stream.name, streamNumber=stream.streamNumber, depotName=stream.depotName))
 
             # Write the empty tree to the git repository to ensure there is one.
             emptyTree = self.gitRepo.empty_tree(write=True)
