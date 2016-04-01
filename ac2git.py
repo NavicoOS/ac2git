@@ -2243,7 +2243,7 @@ class AccuRev2Git(object):
             basisStream, basisBranchName, basisStreamData, basisTreeHash = self.UnpackStreamDetails(streams=streams, streamMap=streamMap, affectedStreamMap=affectedStreamMap, streamNumber=basisStream.basisStreamNumber)
         
         if minTimestamp is not None:
-            logger.debug("Timestamp note: given {0} ({1}) computed {2} ({3})...".format(accurev.GetTimestamp(streamTime), streamTime, minTimestamp, accurevUTCDateTimeOrNone(minTimestamp)))
+            logger.debug("Timestamp note: given {0} ({1}) computed {2} ({3})...".format(accurev.GetTimestamp(streamTime), streamTime, minTimestamp, accurev.UTCDateTimeOrNone(minTimestamp)))
             streamTime = accurev.UTCDateTimeOrNone(minTimestamp)
 
         if basisBranchName is not None:
