@@ -2895,37 +2895,38 @@ class AccuRev2Git(object):
                 self.gitRepo.reset(isHard=True)
                 self.gitRepo.clean(force=True)
             
-            acInfo = accurev.info()
-            isLoggedIn = False
-            if self.config.accurev.username is None:
-                # When a username isn't specified we will use any logged in user for the conversion.
-                isLoggedIn = accurev.ext.is_loggedin(infoObj=acInfo)
-            else:
-                # When a username is specified that specific user must be logged in.
-                isLoggedIn = (acInfo.principal == self.config.accurev.username)
-            
-            doLogout = False
-            if not isLoggedIn:
-                # Login the requested user
-                if accurev.ext.is_loggedin(infoObj=acInfo):
-                    # Different username, logout the other user first.
-                    logoutSuccess = accurev.logout()
-                    logger.info("Accurev logout for '{0}' {1}".format(acInfo.principal, 'succeeded' if logoutSuccess else 'failed'))
-    
-                loginResult = accurev.login(self.config.accurev.username, self.config.accurev.password)
-                if loginResult:
-                    logger.info("Accurev login for '{0}' succeeded.".format(self.config.accurev.username))
+            if self.config.method != 'skip':
+                acInfo = accurev.info()
+                isLoggedIn = False
+                if self.config.accurev.username is None:
+                    # When a username isn't specified we will use any logged in user for the conversion.
+                    isLoggedIn = accurev.ext.is_loggedin(infoObj=acInfo)
                 else:
-                    logger.error("AccuRev login for '{0}' failed.\n".format(self.config.accurev.username))
-                    logger.error("AccuRev message:\n{0}".format(loginResult.errorMessage))
-                    return 1
+                    # When a username is specified that specific user must be logged in.
+                    isLoggedIn = (acInfo.principal == self.config.accurev.username)
+
+                doLogout = False
+                if not isLoggedIn:
+                    # Login the requested user
+                    if accurev.ext.is_loggedin(infoObj=acInfo):
+                        # Different username, logout the other user first.
+                        logoutSuccess = accurev.logout()
+                        logger.info("Accurev logout for '{0}' {1}".format(acInfo.principal, 'succeeded' if logoutSuccess else 'failed'))
+
+                    loginResult = accurev.login(self.config.accurev.username, self.config.accurev.password)
+                    if loginResult:
+                        logger.info("Accurev login for '{0}' succeeded.".format(self.config.accurev.username))
+                    else:
+                        logger.error("AccuRev login for '{0}' failed.\n".format(self.config.accurev.username))
+                        logger.error("AccuRev message:\n{0}".format(loginResult.errorMessage))
+                        return 1
+
+                    doLogout = True
+                else:
+                    logger.info("Accurev user '{0}', already logged in.".format(acInfo.principal))
                 
-                doLogout = True
-            else:
-                logger.info("Accurev user '{0}', already logged in.".format(acInfo.principal))
-            
-            # If this script is being run on a replica then ensure that it is up-to-date before processing the streams.
-            accurev.replica.sync()
+                # If this script is being run on a replica then ensure that it is up-to-date before processing the streams.
+                accurev.replica.sync()
 
             self.gitRepo.raw_cmd([u'git', u'config', u'--local', u'gc.auto', u'0'])
 
@@ -3265,24 +3266,27 @@ def SplitPath(path):
     return rv
 
 def TryGetAccurevUserlist(username, password):
-    info = accurev.info()
-    
-    isLoggedIn = False
-    if username is not None and info.principal != username:
-        if password is not None:
-            isLoggedIn = accurev.login(username, password)
-    else:
-        isLoggedIn = accurev.ext.is_loggedin()
+    try:
+        info = accurev.info()
 
-    userList = None
-    if isLoggedIn:
-        users = accurev.show.users()
-        if users is not None:
-            userList = []
-            for user in users.users:
-                userList.append(user.name)
-    
-    return userList
+        isLoggedIn = False
+        if username is not None and info.principal != username:
+            if password is not None:
+                isLoggedIn = accurev.login(username, password)
+        else:
+            isLoggedIn = accurev.ext.is_loggedin()
+
+        userList = None
+        if isLoggedIn:
+            users = accurev.show.users()
+            if users is not None:
+                userList = []
+                for user in users.users:
+                    userList.append(user.name)
+
+        return userList
+    except:
+        return None
 
 def GetMissingUsers(config):
     # Try and validate accurev usernames
