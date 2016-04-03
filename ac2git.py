@@ -2349,9 +2349,15 @@ class AccuRev2Git(object):
                         parents = [ lastCommitHash ]
                         targetStreams.append( (stream, branchName, streamData, treeHash, parents) )
                     else:
-                        # Here we need to find all the children streams that are tracked and replay this chstream transaction as if it occurred on each child stream...
-                        # Until then, abort!
-                        raise Exception("{Type} {tr}. {s} (id: {sn}) is not tracked. Logic for applying this change to affected children is missing. Aborting!".format(Type=tr.Type, tr=tr.id, s=stream.name, sn=stream.streamNumber))
+                        allStreamTree = self.BuildStreamTree(streams=streams.streams)
+                        keepList = list(set([ sn for sn in affectedStreamMap ]))
+                        assert tr.stream.streamNumber not in keepList, "The stream must be tracked otherwise we would be in the if clause."
+                        keepList.append(tr.stream.streamNumber)
+                        affectedStreamTree = self.PruneStreamTree(streamTree=allStreamTree, keepList=keepList)
+                        streamNode = affectedStreamTree[stream.streamNumber]
+                        for sn in streamNode["children"]:
+                            stream, branchName, streamData, treeHash = self.UnpackStreamDetails(streams=streams, streamMap=streamMap, affectedStreamMap=affectedStreamMap, streamNumber=sn)
+                            targetStreams.append( (stream, branchName, streamData, treeHash, parents) )
 
                     # Get the previous commit hash off which we would have been based at the time of the previous processed transaction.
                     prevArbitraryStreamNumberStr = next(iter(prevAffectedStreamMap))
