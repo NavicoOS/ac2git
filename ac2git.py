@@ -1158,8 +1158,7 @@ class AccuRev2Git(object):
 
         # Check if the ref exists!
         stateRefObj = self.gitRepo.raw_cmd(['git', 'show-ref', stateRef])
-        if stateRefObj is not None and len(stateRefObj) == 0:
-            raise Exception("Invariant error! Expected non-empty string returned by git show-ref, but got '{s}'".format(s=stateRefObj))
+        assert stateRefObj is None or len(stateRefObj) != 0, "Invariant error! Expected non-empty string returned by git show-ref, but got '{s}'".format(s=stateRefObj)
 
         # Either checkout last state or make the initial commit for a new stateRef.
         tr = None
@@ -1318,8 +1317,7 @@ class AccuRev2Git(object):
     def RetrieveStreamData(self, stream, dataRef, stateRef):
         # Check if the ref exists!
         dataRefObj = self.gitRepo.raw_cmd(['git', 'show-ref', dataRef])
-        if dataRefObj is not None and len(dataRefObj) == 0:
-            raise Exception("Invariant error! Expected non-empty string returned by git show-ref, but got '{str}'".format(s=dataRefObj))
+        assert dataRefObj is None or len(dataRefObj) != 0, "Invariant error! Expected non-empty string returned by git show-ref, but got '{str}'".format(s=dataRefObj)
 
         # Either checkout last state or make the initial commit for a new dataRef.
         lastTrId = None
@@ -1366,8 +1364,8 @@ class AccuRev2Git(object):
 
             # Remove the first hash (last item) from the processing list and process it immediately.
             stateHash = stateHashList.pop()
-            if stateHash is None or len(stateHash) == 0:
-                raise Exception("Invariant error! We shouldn't have empty strings in the stateHashList")
+            assert stateHash is not None and len(stateHash) != 0, "Invariant error! We shouldn't have empty strings in the stateHashList"
+
             logger.info( "No {dr} found. Processing {h} on {sr} first.".format(dr=dataRef, h=stateHash[:8], sr=stateRef) )
 
             # Get the first transaction that we are about to process.
@@ -1409,10 +1407,8 @@ class AccuRev2Git(object):
 
         # Process all the hashes in the list
         for stateHash in reversed(stateHashList):
-            if stateHash is None:
-                raise Exception("Invariant error! Hashes in the stateHashList cannot be none here!")
-            elif len(stateHash) == 0:
-                raise Exception("Invariant error! Excess new lines returned by `git log`? Probably safe to skip but shouldn't happen.")
+            assert stateHash is not None, "Invariant error! Hashes in the stateHashList cannot be none here!"
+            assert len(stateHash) != 0, "Invariant error! Excess new lines returned by `git log`? Probably safe to skip but shouldn't happen."
 
             # Get the diff information. (if any)
             diffXml, diff = self.GetDiffInfo(ref=stateHash)
@@ -1550,8 +1546,7 @@ class AccuRev2Git(object):
                 depot = streamInfo.depotName
 
             stateRef, dataRef, hwmRef  = self.GetStreamRefs(depot=depot, streamNumber=streamInfo.streamNumber)
-            if stateRef is None or dataRef is None or len(stateRef) == 0 or len(dataRef) == 0:
-                raise Exception("Invariant error! The state ({sr}) and data ({dr}) refs must not be None!".format(sr=stateRef, dr=dataRef))
+            assert stateRef is not None and dataRef is not None and len(stateRef) != 0 and len(dataRef) != 0, "Invariant error! The state ({sr}) and data ({dr}) refs must not be None!".format(sr=stateRef, dr=dataRef)
             tr, commitHash = self.RetrieveStream(depot=depot, stream=streamInfo, dataRef=dataRef, stateRef=stateRef, hwmRef=hwmRef, startTransaction=self.config.accurev.startTransaction, endTransaction=endTr.id)
 
             if self.config.git.remoteMap is not None:
@@ -1650,7 +1645,7 @@ class AccuRev2Git(object):
                             streamNames[streamName] = commitHash # Write the commit hash where we found the stream name in the cache.
                             self.WriteFileRef(ref=streamNamesRefspec, text=json.dumps(streamNames)) # Do it for each stream since this is cheaper than searching.
                             return s
-                    raise Exception("Invariant error! We successfully found that the hash {h} on ref {r} mentions the stream {sn} but couldn't match it?!".format(h=commitHash, r=ref, sn=streamName))
+                    assert False, "Invariant error! We successfully found that the hash {h} on ref {r} mentions the stream {sn} but couldn't match it?!".format(h=commitHash, r=ref, sn=streamName)
         return None
 
     def GetRefMap(self, ref, mapType, afterCommitHash=None):
@@ -1758,8 +1753,7 @@ class AccuRev2Git(object):
     def ProcessStream(self, stream, branchName):
         if stream is not None:
             stateRef, dataRef, hwmRef = self.GetStreamRefs(depot=stream.depotName, streamNumber=stream.streamNumber)
-            if stateRef is None or dataRef is None or len(stateRef) == 0 or len(dataRef) == 0:
-                raise Exception("Invariant error! The state ({sr}) and data ({dr}) refs must not be None!".format(sr=stateRef, dr=dataRef))
+            assert stateRef is not None and dataRef is not None and len(stateRef) != 0 and len(dataRef) != 0, "Invariant error! The state ({sr}) and data ({dr}) refs must not be None!".format(sr=stateRef, dr=dataRef)
 
             if branchName is None:
                 branchName = self.SanitizeBranchName(stream.name)
@@ -1821,8 +1815,7 @@ class AccuRev2Git(object):
 
             # Get the stateRef map of transaction numbers to commit hashes.
             stateMap = self.GetRefMap(ref=stateRef, mapType="tr2commit")
-            if stateMap is None:
-                raise Exception("Invariant error! If the dataMap is not None then neither should the stateMap be!")
+            assert stateMap is not None, "Invariant error! If the dataMap is not None then neither should the stateMap be!"
 
             # Commit the new data with the correct commit messages.
             for line in reversed(dataHashList):
@@ -2152,8 +2145,7 @@ class AccuRev2Git(object):
             lastCommitHash = self.GetLastCommitHash(branchName=branchName)
             s = streamTree[streamNumber]
             for c in s["children"]:
-                if c is None:
-                    raise Exception("Invariant error! Invalid dictionary structure. Data: {d1}, from: {d2}".format(d1=s, d2=streamTree))
+                assert c is not None, "Invariant error! Invalid dictionary structure. Data: {d1}, from: {d2}".format(d1=s, d2=streamTree)
 
                 childStream, childBranchName, childStreamData, childTreeHash = self.UnpackStreamDetails(streams=streams, streamMap=streamMap, affectedStreamMap=affectedStreamMap, streamNumber=c)
                 if childStream is None:
@@ -2193,8 +2185,7 @@ class AccuRev2Git(object):
                     logger.info("{trType} {trId}. Cherry-pick {dst} {dstHash} into {b} - diff between {h1} and {dstHash} was not empty! (affected child stream)".format(trType=tr.Type, trId=tr.id, b=childBranchName, dst=branchName, dstHash=lastCommitHash[:8], h1=childStreamData["data_hash"][:8]))
 
                 if parents is not None:
-                    if None in parents:
-                        raise Exception("Invariant error! Either the source hash {sh} or the destination hash {dh} was none!".format(sh=parents[1], dh=parents[0]))
+                    assert None not in parents, "Invariant error! Either the source hash {sh} or the destination hash {dh} was none!".format(sh=parents[1], dh=parents[0])
                     commitHash = self.CommitTransaction(tr=tr, stream=childStream, treeHash=childTreeHash, parents=parents, branchName=childBranchName, srcStream=srcStream, dstStream=dstStream)
                     if commitHash is None:
                         raise Exception("Failed to commit transaction {trId} to branch {branchName}.".format(trId=tr.id, branchName=childBranchName))
@@ -2331,58 +2322,61 @@ class AccuRev2Git(object):
                 # between the mkstream transaction and the one that preceedes it. However, the mkstream transaction will only
                 # affect one stream so by the virtue of our datastructure the arbitraryStreamData should be the onlyone in our list
                 # and we already have its "streamNumber".
-                if len(affectedStreamMap) != 1:
-                    raise Exception("Invariant error! There is no way to know for what stream this mkstream transaction was made!")
+                assert len(affectedStreamMap) == 1, "Invariant error! There is no way to know for what stream this mkstream transaction was made!"
+
                 stream, branchName, streamData, treeHash = self.UnpackStreamDetails(streams=streams, streamMap=streamMap, affectedStreamMap=affectedStreamMap, streamNumber=int(arbitraryStreamNumberStr))
                 parents = [] # First, orphaned, commit is denoted with an empty parents list.
                 title = 'Created {name}'.format(name=branchName)
                 targetStreams.append( (stream, branchName, streamData, treeHash, parents) )
             elif tr.Type == "chstream":
-                if tr.stream is not None:
-                    stream, branchName, streamData, treeHash = self.UnpackStreamDetails(streams=streams, streamMap=streamMap, affectedStreamMap=affectedStreamMap, streamNumber=tr.stream.streamNumber)
-                    stream = tr.stream
-                    if branchName is not None: # Only if this stream is being processed should we look it up.
-                        title = 'Rebased {name}'.format(name=branchName)
+                assert tr.stream is not None, "Invariant error! Can't handle not having a stream in the accurev hist XML output for a chstream transaction..."
+
+                stream, branchName, streamData, treeHash = self.UnpackStreamDetails(streams=streams, streamMap=streamMap, affectedStreamMap=affectedStreamMap, streamNumber=tr.stream.streamNumber)
+                stream = tr.stream
+                if branchName is not None: # Only if this stream is being processed should we look it up.
+                    title = 'Rebased {name}'.format(name=branchName)
+                    lastCommitHash = self.GetLastCommitHash(branchName=branchName)
+                    if lastCommitHash is None:
+                        raise Exception("Error! Failed to get the last commit hash for branch {b} (stream: {s}), transaction {trType} {trId}!".format(trType=tr.Type, trId=tr.id, b=branchName, s=stream.name))
+                    parents = [ lastCommitHash ]
+                    targetStreams.append( (stream, branchName, streamData, treeHash, parents) )
+                else:
+                    allStreamTree = self.BuildStreamTree(streams=streams.streams)
+                    keepList = list(set([ sn for sn in affectedStreamMap ]))
+                    assert tr.stream.streamNumber not in keepList, "The stream must be tracked otherwise we would be in the if clause."
+                    keepList.append(tr.stream.streamNumber)
+                    affectedStreamTree = self.PruneStreamTree(streamTree=allStreamTree, keepList=keepList)
+                    streamNode = affectedStreamTree[stream.streamNumber]
+                    for sn in streamNode["children"]:
+                        stream, branchName, streamData, treeHash = self.UnpackStreamDetails(streams=streams, streamMap=streamMap, affectedStreamMap=affectedStreamMap, streamNumber=sn)
                         lastCommitHash = self.GetLastCommitHash(branchName=branchName)
                         if lastCommitHash is None:
                             raise Exception("Error! Failed to get the last commit hash for branch {b} (stream: {s}), transaction {trType} {trId}!".format(trType=tr.Type, trId=tr.id, b=branchName, s=stream.name))
                         parents = [ lastCommitHash ]
                         targetStreams.append( (stream, branchName, streamData, treeHash, parents) )
-                    else:
-                        allStreamTree = self.BuildStreamTree(streams=streams.streams)
-                        keepList = list(set([ sn for sn in affectedStreamMap ]))
-                        assert tr.stream.streamNumber not in keepList, "The stream must be tracked otherwise we would be in the if clause."
-                        keepList.append(tr.stream.streamNumber)
-                        affectedStreamTree = self.PruneStreamTree(streamTree=allStreamTree, keepList=keepList)
-                        streamNode = affectedStreamTree[stream.streamNumber]
-                        for sn in streamNode["children"]:
-                            stream, branchName, streamData, treeHash = self.UnpackStreamDetails(streams=streams, streamMap=streamMap, affectedStreamMap=affectedStreamMap, streamNumber=sn)
-                            targetStreams.append( (stream, branchName, streamData, treeHash, parents) )
 
-                    # Get the previous commit hash off which we would have been based at the time of the previous processed transaction.
-                    prevArbitraryStreamNumberStr = next(iter(prevAffectedStreamMap))
-                    prevArbitraryStreamData = prevAffectedStreamMap[prevArbitraryStreamNumberStr]
-                    prevStreamsXml, prevStreams = self.GetStreamsInfo(ref=prevArbitraryStreamData["state_hash"])
-                    if prevStreams is None:
-                        raise Exception("Couldn't get streams for previous transaction (current transaction {tr}). Aborting!".format(tr=trId))
+                # Get the previous commit hash off which we would have been based at the time of the previous processed transaction.
+                prevArbitraryStreamNumberStr = next(iter(prevAffectedStreamMap))
+                prevArbitraryStreamData = prevAffectedStreamMap[prevArbitraryStreamNumberStr]
+                prevStreamsXml, prevStreams = self.GetStreamsInfo(ref=prevArbitraryStreamData["state_hash"])
+                if prevStreams is None:
+                    raise Exception("Couldn't get streams for previous transaction (current transaction {tr}). Aborting!".format(tr=trId))
 
-                    prevBasisStreamNumber = tr.stream.prevBasisStreamNumber
-                    if prevBasisStreamNumber is None:
-                        prevBasisStreamNumber = tr.stream.streamNumber
-                    prevTime = tr.stream.prevTime
-                    if prevTime is None:
-                        prevTime = tr.stream.time
+                prevBasisStreamNumber = tr.stream.prevBasisStreamNumber
+                if prevBasisStreamNumber is None:
+                    prevBasisStreamNumber = tr.stream.streamNumber
+                prevTime = tr.stream.prevTime
+                if prevTime is None:
+                    prevTime = tr.stream.time
 
-                    prevBasisStream, prevBasisBranchName, prevBasisCommitHash, prevStreamTime = self.GetBasisCommitHash(tr.stream.streamNumber, prevBasisStreamNumber, prevTime, prevStreams, streamMap, affectedStreamMap)
-                    if prevBasisCommitHash is None:
-                        raise Exception("Couldn't determine the last basis commit hash.")
+                prevBasisStream, prevBasisBranchName, prevBasisCommitHash, prevStreamTime = self.GetBasisCommitHash(tr.stream.streamNumber, prevBasisStreamNumber, prevTime, prevStreams, streamMap, affectedStreamMap)
+                if prevBasisCommitHash is None:
+                    raise Exception("Couldn't determine the last basis commit hash.")
 
-                    # Stream renames can be looked up in the stream.prevName value here.
-                    if tr.stream.prevName is not None and len(tr.stream.prevName.strip()) > 0:
-                        # if the stream has been renamed, use its new name from now on.
-                        logger.info("Stream renamed from {oldName} to {newName}. Branch name is {branch}, ignoring.".format(oldName=tr.stream.prevName, newName=tr.stream.name, branch=branchName))
-                else:
-                    raise Exception("Invariant error! Can't handle not having a stream in the accurev hist XML output for a chstream transaction...")
+                # Stream renames can be looked up in the stream.prevName value here.
+                if tr.stream.prevName is not None and len(tr.stream.prevName.strip()) > 0:
+                    # if the stream has been renamed, use its new name from now on.
+                    logger.info("Stream renamed from {oldName} to {newName}. Branch name is {branch}, ignoring.".format(oldName=tr.stream.prevName, newName=tr.stream.name, branch=branchName))
             else:
                 raise Exception("Not yet implemented! {trId} {trType}, unrecognized transaction type.".format(trId=tr.id, trType=tr.Type))
 
@@ -2393,12 +2387,11 @@ class AccuRev2Git(object):
             else:
                 title = "{title} based on {basisBranchName} at {h}".format(title=title, basisBranchName=basisBranchName, h=basisCommitHash[:8])
 
-            if len(targetStreams) == 0:
-                raise Exception("Invariant error! There should be at least one targetStreams item in the list!")
+            assert len(targetStreams) != 0, "Invariant error! There should be at least one targetStreams item in the list!"
 
             for stream, branchName, streamData, treeHash, parents in targetStreams:
-                if branchName is None:
-                    raise Exception("Invariant error! branchName cannot be None here!")
+                assert branchName is not None, "Invariant error! branchName cannot be None here!"
+
                 if prevBasisCommitHash != basisCommitHash:
                     amMergedIntoPrevBasis = ( len(parents) > 0 and self.GitMergeBase(refs=[ parents[0], prevBasisCommitHash ], isAncestor=True) )
                     if None in [ amMergedIntoPrevBasis ]:
@@ -2412,8 +2405,7 @@ class AccuRev2Git(object):
                     else:
                         # Merge by specifying the parent commits.
                         parents.insert(0, basisCommitHash) # Make this commit a merge of the parent stream into the child stream.
-                        if None in parents:
-                            raise Exception("Invariant error! Either the source hash or the destination hash in {p} was none!".format(p=parents))
+                        assert None not in parents, "Invariant error! Either the source hash or the destination hash in {p} was none!".format(p=parents)
 
                         message="{trType} {trId}.".format(trType=tr.Type, trId=tr.id)
                         if len(parents) == 1:
@@ -2487,8 +2479,7 @@ class AccuRev2Git(object):
                 #      This case is most obviously a cherry-pick.
 
                 if streamNumber is not None:
-                    if stream is None:
-                        raise Exception("Invariant error! How is it possible that at a promote transaction we don't have the destination stream? streams.xml must be invalid or incomplete!")
+                    assert stream is not None, "Invariant error! How is it possible that at a promote transaction we don't have the destination stream? streams.xml must be invalid or incomplete!"
                 else:
                     raise Exception("Error! Could not determine the destination stream for promote {tr}.".format(tr=tr.id))
 
@@ -2510,13 +2501,12 @@ class AccuRev2Git(object):
                     elif len(diff.strip()) == 0:
                         parents = [ self.GetLastCommitHash(branchName=branchName) ]
                         isAncestor = self.GitMergeBase(refs=[ lastSrcBranchHash, parents[0] ], isAncestor=True)
-                        if isAncestor is None:
-                            raise Exception("Invariant error! Failed to determine merge base between {c1} and {c2}!".format(c1=lastSrcBranchHash, c2=parents[0]))
-                        elif not isAncestor:
+                        assert isAncestor is not None, "Invariant error! Failed to determine merge base between {c1} and {c2}!".format(c1=lastSrcBranchHash, c2=parents[0])
+
+                        if not isAncestor:
                             parents.append(lastSrcBranchHash) # Make this commit a merge of the last commit on the srcStreamBranch into the branchName.
 
-                        if None in parents:
-                            raise Exception("Invariant error! Either the source hash {sh} or the destination hash {dh} was none!".format(sh=parents[1], dh=parents[0]))
+                        assert None not in parents, "Invariant error! Either the source hash {sh} or the destination hash {dh} was none!".format(sh=parents[1], dh=parents[0])
                         
                         commitHash = self.CommitTransaction(tr=tr, stream=stream, parents=parents, treeHash=treeHash, branchName=branchName, srcStream=srcStream, dstStream=stream)
 
@@ -2735,8 +2725,7 @@ class AccuRev2Git(object):
             for tr in reversed(stateMap):
                 if tr not in transactionsMap:
                     transactionsMap[tr] = {}
-                if streamNumber in transactionsMap[tr]:
-                    raise Exception("Invariant error! This should be the first time we are adding the stream {s} (id: {id})!".format(s=state["stream_map"][streamNumberStr]["stream"], id=streamNumber))
+                assert streamNumber not in transactionsMap[tr], "Invariant error! This should be the first time we are adding the stream {s} (id: {id})!".format(s=state["stream_map"][streamNumberStr]["stream"], id=streamNumber)
                 transactionsMap[tr][streamNumber] = { "state_hash": stateMap[tr] }
             del stateMap # Make sure we free this, it could get big...
 
@@ -2758,8 +2747,7 @@ class AccuRev2Git(object):
 
             logger.info("Merging transaction to data commit mapping for stream number {s} with previous mappings. Ref: {ref}".format(s=streamNumber, ref=stateRef))
             for tr in reversed(dataMap):
-                if tr not in transactionsMap or streamNumber not in transactionsMap[tr]:
-                    raise Exception("Invariant error! The data ref should contain a subset of the state ref information, not a superset!")
+                assert tr in transactionsMap and streamNumber in transactionsMap[tr], "Invariant error! The data ref should contain a subset of the state ref information, not a superset!"
                 transactionsMap[tr][streamNumber]["data_hash"] = dataMap[tr]["data_hash"]
                 transactionsMap[tr][streamNumber]["data_tree_hash"] = dataMap[tr]["data_tree_hash"]
             del dataMap # Make sure we free this, it could get big...
