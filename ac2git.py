@@ -659,7 +659,6 @@ class AccuRev2Git(object):
 
     def Commit(self, transaction=None, allowEmptyCommit=False, messageOverride=None, parents=None, treeHash=None, ref=None, checkout=True):
         usePlumbing = (parents is not None or treeHash is not None)
-        isFirstCommit = (parents is not None and len(parents) == 0)
 
         # Custom messages for when we have a transaction.
         trMessage, forTrMessage = '', ''
@@ -713,18 +712,16 @@ class AccuRev2Git(object):
         if self.config.git.authorIsCommitter:
             committerName, committerEmail, committerDate, committerTimezone = authorName, authorEmail, authorDate, authorTimezone
 
-        if not isFirstCommit:
+        lastCommitHash = None
+        if parents is None:
             lastCommitHash = self.GetLastCommitHash(ref=ref) # If ref is None, it will get the last commit hash from the HEAD ref.
-            if usePlumbing and parents is None:
-                if lastCommitHash is None:
-                    logger.info("No last commit hash available. Fatal error, aborting!")
-                    os.remove(messageFilePath)
-                    return None
-                parents = [ lastCommitHash ]
-            elif lastCommitHash is None:
-                logger.info("No last commit hash available. Non-fatal error, continuing.")
-        else:
-            lastCommitHash = None
+            if lastCommitHash is None:
+                logger.error("No last commit hash available. Fatal error, aborting!")
+                os.remove(messageFilePath)
+                return None
+            parents = [ lastCommitHash ]
+        elif len(parents) != 0:
+            lastCommitHash = parents[0]
 
         # Make the commit.
         commitHash = None
