@@ -561,6 +561,19 @@ class AccuRev2Git(object):
 
         return hist, histXml
 
+    def TryGitCommand(self, cmd):
+        rv = None
+        for i in range(0, AccuRev2Git.commandFailureRetryCount):
+            rv = self.gitRepo.raw_cmd(cmd)
+            if rv is not None:
+                rv = rv.strip()
+                if len(rv) == 0:
+                    rv = None
+                else:
+                    break
+            time.sleep(AccuRev2Git.commandFailureSleepSeconds)
+        return rv
+
     def GetLastCommitHash(self, branchName=None, ref=None, before=None):
         cmd = []
         commitHash = None
@@ -576,15 +589,7 @@ class AccuRev2Git(object):
             # See http://stackoverflow.com/questions/13987273/git-log-filter-by-commits-author-date
             raise Exception("Not yet implemented! The search for a commit by date when the author time is not the same as the commiter time can't use the --before flag for git log.")
 
-        for i in range(0, AccuRev2Git.commandFailureRetryCount):
-            commitHash = self.gitRepo.raw_cmd(cmd)
-            if commitHash is not None:
-                commitHash = commitHash.strip()
-                if len(commitHash) == 0:
-                    commitHash = None
-                else:
-                    break
-            time.sleep(AccuRev2Git.commandFailureSleepSeconds)
+        commitHash = self.TryGitCommand(cmd=cmd)
 
         if commitHash is None:
             logger.error("Failed to retrieve last git commit hash. Command `{0}` failed.".format(' '.join(cmd)))
@@ -596,15 +601,7 @@ class AccuRev2Git(object):
         cmd = [u'git', u'log', u'-1', u'--format=format:%T']
         if ref is not None:
             cmd.append(ref)
-        for i in range(0, AccuRev2Git.commandFailureRetryCount):
-            treeHash = self.gitRepo.raw_cmd(cmd)
-            if treeHash is not None:
-                treeHash = treeHash.strip()
-                if len(treeHash) == 0:
-                    treeHash = None
-                else:
-                    break
-            time.sleep(AccuRev2Git.commandFailureSleepSeconds)
+        treeHash = self.TryGitCommand(cmd=cmd)
 
         if treeHash is None:
             logger.error("Failed to retrieve tree hash. Command `{0}` failed.".format(' '.join(cmd)))
@@ -2226,6 +2223,17 @@ class AccuRev2Git(object):
 
         return stream, branchName, streamData, treeHash
 
+    def GetTimestampForCommit(self, commitHash):
+        cmd = [u'git', u'log', u'-1', u'--format=format:%at', commitHash]
+        timestamp = self.TryGitCommand(cmd=cmd)
+        if timestamp is not None:
+            return int(timestamp)
+        return None
+
+    def GetOrphanCommit(self, ref, customFormat='%H'):
+        cmd = [u'git', u'log', u'-1', u'--format=format:{format}'.format(format=customFormat), u'--first-parent', u'--max-parents=0', ref]
+        return self.TryGitCommand(cmd=cmd)
+
     def GetBasisCommitHash(self, streamNumber, streamBasisNumber, streamTime, streams, streamMap, affectedStreamMap):
         # Get the current/new basis stream
         basisStream, basisBranchName, basisStreamData, basisTreeHash = self.UnpackStreamDetails(streams=streams, streamMap=streamMap, affectedStreamMap=affectedStreamMap, streamNumber=streamBasisNumber)
@@ -2245,25 +2253,33 @@ class AccuRev2Git(object):
 
         if basisBranchName is not None:
             basisBranchHistoryRef = self.GetStreamCommitHistoryRef(basisStream.depotName, basisStream.streamNumber)
+            logger.debug("GetBasisCommitHash: inspecting history on {ref}".format(ref=basisBranchHistoryRef))
 
             timelockISO8601Str = None
             if streamTime is not None and accurev.GetTimestamp(streamTime) != 0: # A timestamp of 0 indicates that a timelock was removed.
                 timelockISO8601Str = "{datetime}Z".format(datetime=streamTime.isoformat('T')) # The time is in UTC and ISO8601 requires us to specify Z for UTC.
+                logger.debug("GetBasisCommitHash: timelock string {s}".format(s=timelockISO8601Str))
 
-            cmd = [u'git', u'log', u'-1', u'--format=format:%P', u'--first-parent']
-            if timelockISO8601Str is not None:
-                cmd.append(u'--before={before}'.format(before=timelockISO8601Str))
-            cmd.append(basisBranchHistoryRef)
-
-            for i in range(0, AccuRev2Git.commandFailureRetryCount):
-                parentHashes = self.gitRepo.raw_cmd(cmd)
-                if parentHashes is not None:
-                    parentHashes = parentHashes.strip()
-                    if len(parentHashes) == 0:
-                        parentHashes = None
-                    else:
-                        break
-                time.sleep(AccuRev2Git.commandFailureSleepSeconds)
+            parentHashes = None
+            earliestAllowedTimestamp = self.GetOrphanCommit(ref=basisBranchHistoryRef, customFormat='%at')
+            if earliestAllowedTimestamp is None:
+                logger.error("Failed to retrieve first commit hash for {ref}".format(ref=basisBranchHistoryRef))
+                return None, None, None, None
+            if streamTime is not None and (accurev.GetTimestamp(streamTime) < int(earliestAllowedTimestamp)):
+                # The timelock has been created before the creation date of the stream. We cannot return its
+                # state before this time so we must return its first known/possible state.
+                cmd = [u'git', u'log', u'-1', u'--format=format:%P', u'--reverse', u'--min-parents=1', u'--first-parent', basisBranchHistoryRef]
+                parentHashes = self.TryGitCommand(cmd=cmd)
+                logger.warning("Currently processed transaction requested its basis commit hash before its basis existed.")
+                logger.warning("  - Earliest time available: {t}.".format(t=accurev.UTCDateTimeOrNone(earliestAllowedTimestamp)))
+                logger.warning("  - Time requested:          {t}.".format(t=streamTime))
+                logger.warning(" Returning the earliest time available instead. TODO: What does Accurev actually do here? Should we look at the next basis in the chain?")
+            else:
+                cmd = [u'git', u'log', u'-1', u'--format=format:%P', u'--first-parent']
+                if timelockISO8601Str is not None:
+                    cmd.append(u'--before={before}'.format(before=timelockISO8601Str))
+                cmd.append(basisBranchHistoryRef)
+                parentHashes = self.TryGitCommand(cmd=cmd)
 
             if parentHashes is None:
                 logger.error("Failed to retrieve last git commit hash. Command `{0}` failed.".format(' '.join(cmd)))
@@ -2392,7 +2408,13 @@ class AccuRev2Git(object):
                         parents.insert(0, basisCommitHash) # Make this commit a merge of the parent stream into the child stream.
                         if None in parents:
                             raise Exception("Invariant error! Either the source hash or the destination hash in {p} was none!".format(p=parents))
-                        logger.info("{trType} {trId}. Merging {b} {h} as first parent into {dst}.".format(trType=tr.Type, trId=tr.id, b=basisBranchName, h=basisCommitHash[:8], dst=branchName))
+
+                        message="{trType} {trId}.".format(trType=tr.Type, trId=tr.id)
+                        if len(parents) == 1:
+                            message="{msg} Created {dst} based on {b} at {h}".format(msg=message, b=basisBranchName, h=basisCommitHash[:8], dst=branchName)
+                        else:
+                            message="{msg} Merging {b} {h} as first parent into {dst}.".format(msg=message, b=basisBranchName, h=basisCommitHash[:8], dst=branchName)
+                        logger.info(message)
             
                 if parents is not None:
                     if treeHash is None:
