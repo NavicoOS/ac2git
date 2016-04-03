@@ -2417,7 +2417,12 @@ class AccuRev2Git(object):
 
                         message="{trType} {trId}.".format(trType=tr.Type, trId=tr.id)
                         if len(parents) == 1:
-                            message="{msg} Created {dst} based on {b} at {h}".format(msg=message, b=basisBranchName, h=basisCommitHash[:8], dst=branchName)
+                            basisTreeHash = self.GetTreeFromRef(ref=basisCommitHash)
+                            if basisTreeHash == treeHash:
+                                message="{msg} Created {dst} on {b} at {h}".format(msg=message, b=basisBranchName, h=basisCommitHash[:8], dst=branchName)
+                                parents = None # Don't commit this mkstream since it doesn't introduce anything new.
+                            else:
+                                message="{msg} Created {dst} based on {b} at {h} (tree was not the same)".format(msg=message, b=basisBranchName, h=basisCommitHash[:8], dst=branchName)
                         else:
                             message="{msg} Merging {b} {h} as first parent into {dst}.".format(msg=message, b=basisBranchName, h=basisCommitHash[:8], dst=branchName)
                         logger.info(message)
