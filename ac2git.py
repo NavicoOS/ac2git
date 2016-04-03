@@ -2105,7 +2105,7 @@ class AccuRev2Git(object):
         return diff.strip()
     
     def GitMergeBase(self, refs=[], isAncestor=False):
-        assert None not in refs, "None is not an accepted value for a ref."
+        assert None not in refs, "None is not an accepted value for a ref. Given refs are {refs}".format(refs=refs)
         hashes = []
         for ref in refs:
             hashes.append(self.GitRevParse(ref))
