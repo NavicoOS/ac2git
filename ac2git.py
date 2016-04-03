@@ -2159,6 +2159,7 @@ class AccuRev2Git(object):
                     continue
 
                 lastChildCommitHash = self.GetLastCommitHash(branchName=childBranchName)
+                assert lastChildCommitHash is not None, "No last commit hash for branch {br}".format(br=childBranchName)
 
                 # Do a diff
                 parents = None # Used to decide if we need to perform the commit. If None, don't commit, otherwise we manually set the parent chain.
@@ -2399,7 +2400,7 @@ class AccuRev2Git(object):
                         raise Exception("Error! The git merge-base command failed!")
                     elif amMergedIntoPrevBasis:
                         # Fast-forward the timelocked stream branch to the correct commit.
-                        if self.UpdateAndCheckoutRef(ref='refs/heads/{branch}'.format(branch=branchName), commitHash=prevBasisCommitHash, checkout=False) != True:
+                        if self.UpdateAndCheckoutRef(ref='refs/heads/{branch}'.format(branch=branchName), commitHash=basisCommitHash, checkout=False) != True:
                             raise Exception("Failed to fast-forward {branch} to {hash} (latest commit on {parentBranch}).".format(branch=branchName, hash=basisCommitHash[:8], parentBranch=basisBranchName))
                         parents = None # Do not commit!
                         logger.info("{trType} {trId}. Fast-forward {dst} to {b} {h}.".format(trType=tr.Type, trId=tr.id, b=basisBranchName, h=basisCommitHash[:8], dst=branchName))
@@ -2413,6 +2414,9 @@ class AccuRev2Git(object):
                             basisTreeHash = self.GetTreeFromRef(ref=basisCommitHash)
                             if basisTreeHash == treeHash:
                                 message="{msg} Created {dst} on {b} at {h}".format(msg=message, b=basisBranchName, h=basisCommitHash[:8], dst=branchName)
+                                # Fast-forward the created stream branch to the correct commit.
+                                if self.UpdateAndCheckoutRef(ref='refs/heads/{branch}'.format(branch=branchName), commitHash=basisCommitHash, checkout=False) != True:
+                                    raise Exception("Failed to fast-forward {branch} to {hash} (latest commit on {parentBranch}).".format(branch=branchName, hash=basisCommitHash[:8], parentBranch=basisBranchName))
                                 parents = None # Don't commit this mkstream since it doesn't introduce anything new.
                             else:
                                 message="{msg} Created {dst} based on {b} at {h} (tree was not the same)".format(msg=message, b=basisBranchName, h=basisCommitHash[:8], dst=branchName)
