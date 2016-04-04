@@ -3444,7 +3444,21 @@ def PrintConfigSummary(config):
         logger.info('  usermaps: {0}'.format(len(config.usermaps)))
         logger.info('  log file: {0}'.format(config.logFilename))
         logger.info('  verbose:  {0}'.format( (logger.getEffectiveLevel() == logging.DEBUG) ))
+
+def PrintRunningTime(referenceTime):
+    outMessage = ''
+    # Custom formatting of the timestamp
+    m, s = divmod((datetime.now() - referenceTime).total_seconds(), 60)
+    h, m = divmod(m, 60)
+    d, h = divmod(h, 24)
     
+    if d > 0:
+        outMessage += "{d: >2d}d, ".format(d=int(d))
+    
+    outMessage += "{h: >2d}:{m:0>2d}:{s:0>5.2f}".format(h=int(h), m=int(m), s=s)
+
+    logger.info("Running time was {timeStr}".format(timeStr=outMessage))
+
 # ################################################################################################ #
 # Script Main                                                                                      #
 # ################################################################################################ #
@@ -3500,6 +3514,8 @@ def AccuRev2GitMain(argv):
     loggerConfig = None
     while True:
         try:
+            startTime = datetime.now() # used to compute the running time of the script.
+
             # Load the config file
             config = Config.fromfile(filename=args.configFilename)
             if config is None:
@@ -3538,8 +3554,10 @@ def AccuRev2GitMain(argv):
                 print("Tracking mode enabled: sleep for {0} seconds.".format(args.intermission))
                 time.sleep(args.intermission)
             print("Tracking mode enabled: Continuing conversion.")
+            PrintRunningTime(referenceTime=startTime)
         except:
             if logger is not None:
+                PrintRunningTime(referenceTime=startTime)
                 logger.exception("The script has encountered an exception, aborting!")
             raise
 
