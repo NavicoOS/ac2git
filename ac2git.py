@@ -2073,11 +2073,11 @@ class AccuRev2Git(object):
             lastStateCommitHash = self.Commit(transaction=tr, allowEmptyCommit=True, messageOverride='transaction {trId}'.format(trId=tr.id), parents=[], treeHash=emptyTree, ref=streamStateRefspec, checkout=False)
             if lastStateCommitHash is None:
                 raise Exception("Failed to add empty state commit for stream {streamName} (id: {streamNumber})".format(streamName=stream.name, streamNumber=stream.streamNumber))
-            logger.debug("Created state branch for stream {streamName} as {ref} at commit {h}".format(streamName=stream.name, ref=streamStateRefspec, h=self.ShortHash(lastStateCommitHash)))
+            logger.debug("Created state branch for stream {streamName} as {ref} - tr. {trType} {trId} - commit {h}".format(trType=tr.Type, trId=tr.id, streamName=stream.name, ref=streamStateRefspec, h=self.ShortHash(lastStateCommitHash)))
         stateCommitHash = self.Commit(transaction=tr, allowEmptyCommit=True, messageOverride='transaction {trId}'.format(trId=tr.id), parents=[ lastStateCommitHash, commitHash ], treeHash=emptyTree, ref=streamStateRefspec, checkout=False)
         if stateCommitHash is None:
             raise Exception("Failed to commit {Type} {tr} to hidden state ref {ref} with commit {h}".format(Type=tr.Type, tr=tr.id, ref=streamStateRefspec, h=self.ShortHash(commitHash)))
-        logger.debug("Committed stream state for {streamName} to {ref} - commit {h}".format(streamName=stream.name, ref=streamStateRefspec, h=self.ShortHash(lastStateCommitHash)))
+        logger.debug("Committed stream state for {streamName} to {ref} - tr. {trType} {trId} - commit {h}".format(trType=tr.Type, trId=tr.id, streamName=stream.name, ref=streamStateRefspec, h=self.ShortHash(lastStateCommitHash)))
 
     def CommitTransaction(self, tr, stream, parents=None, treeHash=None, branchName=None, title=None, srcStream=None, dstStream=None, friendlyMessage=None):
         assert branchName is not None, "Error: CommitTransaction() is a helper for ProcessTransaction() and doesn't accept branchName as None."
@@ -2420,21 +2420,20 @@ class AccuRev2Git(object):
                         parents.insert(0, basisCommitHash) # Make this commit a merge of the parent stream into the child stream.
                         assert None not in parents, "Invariant error! Either the source hash or the destination hash in {p} was none!".format(p=parents)
 
-                        message="{trType} {trId}.".format(trType=tr.Type, trId=tr.id)
+                        trInfoMsg="{trType} {trId}.".format(trType=tr.Type, trId=tr.id)
                         if len(parents) == 1:
                             basisTreeHash = self.GetTreeFromRef(ref=basisCommitHash)
                             if basisTreeHash == treeHash:
-                                message="{msg} Created {dst} on {b} at {h}".format(msg=message, b=basisBranchName, h=self.ShortHash(basisCommitHash), dst=branchName)
                                 # Fast-forward the created stream branch to the correct commit.
                                 if self.UpdateAndCheckoutRef(ref='refs/heads/{branch}'.format(branch=branchName), commitHash=basisCommitHash, checkout=False) != True:
                                     raise Exception("Failed to fast-forward {branch} to {hash} (latest commit on {parentBranch}).".format(branch=branchName, hash=self.ShortHash(basisCommitHash), parentBranch=basisBranchName))
                                 parents = None # Don't commit this mkstream since it doesn't introduce anything new.
+                                logger.info("{trInfo} Created {dst} on {b} at {h}".format(trInfo=trInfoMsg, b=basisBranchName, h=self.ShortHash(basisCommitHash), dst=branchName))
                                 self.LogBranchState(stream=stream, tr=tr, commitHash=basisCommitHash) # Since we are not committing we need to manually store the ref state at this time.
                             else:
-                                message="{msg} Created {dst} based on {b} at {h} (tree was not the same)".format(msg=message, b=basisBranchName, h=self.ShortHash(basisCommitHash), dst=branchName)
+                                logger.info("{trInfo} Created {dst} based on {b} at {h} (tree was not the same)".format(trInfo=trInfoMsg, b=basisBranchName, h=self.ShortHash(basisCommitHash), dst=branchName))
                         else:
-                            message="{msg} Merging {b} {h} as first parent into {dst}.".format(msg=message, b=basisBranchName, h=self.ShortHash(basisCommitHash), dst=branchName)
-                        logger.info(message)
+                            logger.info("{trInfo} Merging {b} {h} as first parent into {dst}.".format(trInfo=trInfoMsg, b=basisBranchName, h=self.ShortHash(basisCommitHash), dst=branchName))
             
                 if parents is not None:
                     if treeHash is None:
