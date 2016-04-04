@@ -877,7 +877,7 @@ def GetGitDirPrefix(path):
     global gitDirRegex
     if not isinstance(path, str):
         path = path.decode("utf-8")
-    gitDirMatch = gitDirRegex.match(path)
+    gitDirMatch = gitDirRegex.match(str(path))
     if gitDirMatch is not None:
         return gitDirMatch.group(1)
     return None
