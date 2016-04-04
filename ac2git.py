@@ -2077,7 +2077,7 @@ class AccuRev2Git(object):
         stateCommitHash = self.Commit(transaction=tr, allowEmptyCommit=True, messageOverride='transaction {trId}'.format(trId=tr.id), parents=[ lastStateCommitHash, commitHash ], treeHash=emptyTree, ref=streamStateRefspec, checkout=False)
         if stateCommitHash is None:
             raise Exception("Failed to commit {Type} {tr} to hidden state ref {ref} with commit {h}".format(Type=tr.Type, tr=tr.id, ref=streamStateRefspec, h=self.ShortHash(commitHash)))
-        logger.debug("Committed stream state for {streamName} to {ref} - tr. {trType} {trId} - commit {h}".format(trType=tr.Type, trId=tr.id, streamName=stream.name, ref=streamStateRefspec, h=self.ShortHash(lastStateCommitHash)))
+        logger.debug("Committed stream state for {streamName} to {ref} - tr. {trType} {trId} - commit {h}".format(trType=tr.Type, trId=tr.id, streamName=stream.name, ref=streamStateRefspec, h=self.ShortHash(stateCommitHash)))
 
     def CommitTransaction(self, tr, stream, parents=None, treeHash=None, branchName=None, title=None, srcStream=None, dstStream=None, friendlyMessage=None):
         assert branchName is not None, "Error: CommitTransaction() is a helper for ProcessTransaction() and doesn't accept branchName as None."
