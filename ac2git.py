@@ -2175,6 +2175,7 @@ class AccuRev2Git(object):
                         if self.UpdateAndCheckoutRef(ref='refs/heads/{branch}'.format(branch=childBranchName), commitHash=lastCommitHash, checkout=False) != True:
                             raise Exception("Failed to fast-forward {branch} to {hash} (latest commit on {parentBranch}.".format(branch=childBranchName, hash=lastCommitHash[:8], parentBranch=branchName))
                         logger.info("{trType} {trId}. Fast-forward {b} to {dst} {h} (affected child stream). Was at {ch}.".format(trType=tr.Type, trId=tr.id, b=childBranchName, dst=branchName, h=lastCommitHash[:8], ch=lastChildCommitHash[:8]))
+                        self.LogBranchState(stream=childStream, tr=tr, commitHash=lastCommitHash) # Since we are not committing we need to manually store the ref state at this time.
                     else:
                         if self.config.git.emptyChildStreamAction == "merge":
                             # Merge by specifying the parent commits.
@@ -2407,6 +2408,7 @@ class AccuRev2Git(object):
                             raise Exception("Failed to fast-forward {branch} to {hash} (latest commit on {parentBranch}).".format(branch=branchName, hash=basisCommitHash[:8], parentBranch=basisBranchName))
                         parents = None # Do not commit!
                         logger.info("{trType} {trId}. Fast-forward {dst} to {b} {h}.".format(trType=tr.Type, trId=tr.id, b=basisBranchName, h=basisCommitHash[:8], dst=branchName))
+                        self.LogBranchState(stream=stream, tr=tr, commitHash=basisCommitHash) # Since we are not committing we need to manually store the ref state at this time.
                     else:
                         # Merge by specifying the parent commits.
                         parents.insert(0, basisCommitHash) # Make this commit a merge of the parent stream into the child stream.
@@ -2421,6 +2423,7 @@ class AccuRev2Git(object):
                                 if self.UpdateAndCheckoutRef(ref='refs/heads/{branch}'.format(branch=branchName), commitHash=basisCommitHash, checkout=False) != True:
                                     raise Exception("Failed to fast-forward {branch} to {hash} (latest commit on {parentBranch}).".format(branch=branchName, hash=basisCommitHash[:8], parentBranch=basisBranchName))
                                 parents = None # Don't commit this mkstream since it doesn't introduce anything new.
+                                self.LogBranchState(stream=stream, tr=tr, commitHash=basisCommitHash) # Since we are not committing we need to manually store the ref state at this time.
                             else:
                                 message="{msg} Created {dst} based on {b} at {h} (tree was not the same)".format(msg=message, b=basisBranchName, h=basisCommitHash[:8], dst=branchName)
                         else:
@@ -2524,6 +2527,7 @@ class AccuRev2Git(object):
                             if self.UpdateAndCheckoutRef(ref='refs/heads/{branch}'.format(branch=srcBranchName), commitHash=commitHash, checkout=False) != True:
                                 raise Exception("Failed to update source {branch} to {hash} latest commit.".format(branch=srcBranchName, hash=commitHash[:8]))
                             infoMessage = "{msg} Fast-forward {src} to {dst} {h}. (source stream fast-forwarded)".format(msg=infoMessage, src=srcBranchName, dst=branchName)
+                            self.LogBranchState(stream=srcStream, tr=tr, commitHash=commitHash) # Since we are not committing we need to manually store the ref state at this time.
                         logger.info(infoMessage)
                     else:
                         commitHash = self.CommitTransaction(tr=tr, stream=stream, treeHash=treeHash, branchName=branchName, srcStream=None, dstStream=stream)
