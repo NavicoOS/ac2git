@@ -1025,7 +1025,7 @@ class AccuRev2Git(object):
                 logger.debug( "First commit on the depots ref ({ref}) has failed. Aborting!".format(ref=depotsRef) )
                 return None
             else:
-                logger.info( "Depots ref updated {ref} -> commit {hash}".format(hash=commitHash[:8], ref=depotsRef) )
+                logger.info( "Depots ref updated {ref} -> commit {hash}".format(hash=self.ShortHash(commitHash), ref=depotsRef) )
                 haveCommitted = True
         else:
             depotsXml, depots = self.GetDepotsInfo(ref=commitHash)
@@ -1038,7 +1038,7 @@ class AccuRev2Git(object):
                 return d
 
         if haveCommitted:
-            logger.info( "Failed to find depot {d} on depots ref {r} at commit {h}".format(d=depot, h=commitHash[:8], r=depotsRef) )
+            logger.info( "Failed to find depot {d} on depots ref {r} at commit {h}".format(d=depot, h=self.ShortHash(commitHash), r=depotsRef) )
             return None
 
         # We haven't committed anything yet so a depot might have been renamed since we started. Run the depots command again and commit it if there have been any changes.
@@ -1062,7 +1062,7 @@ class AccuRev2Git(object):
             logger.debug( "Commit on the depots ref ({ref}) has failed. Couldn't find the depot {d}. Aborting!".format(ref=depotsRef, d=depot) )
             return None
         else:
-            logger.info( "Depots ref updated {ref} -> commit {hash}".format(hash=commitHash[:8], ref=depotsRef) )
+            logger.info( "Depots ref updated {ref} -> commit {hash}".format(hash=self.ShortHash(commitHash), ref=depotsRef) )
             haveCommitted = True
 
             # Try and find the depot in the list of existing depots.
@@ -1191,7 +1191,7 @@ class AccuRev2Git(object):
                     logger.debug( "{0} first commit has failed. Is it an empty commit? Aborting!".format(stream.name) )
                     return (None, None)
                 else:
-                    logger.info( "stream {streamName}: tr. #{trId} {trType} -> commit {hash} on {ref}".format(streamName=stream.name, trId=tr.id, trType=tr.Type, hash=commitHash[:8], ref=stateRef) )
+                    logger.info( "stream {streamName}: tr. #{trId} {trType} -> commit {hash} on {ref}".format(streamName=stream.name, trId=tr.id, trType=tr.Type, hash=self.ShortHash(commitHash), ref=stateRef) )
             else:
                 logger.info( "Failed to get the first transaction for {0} from accurev. Won't retrieve any further.".format(stream.name) )
                 return (None, None)
@@ -1260,7 +1260,7 @@ class AccuRev2Git(object):
                 else:
                     if self.UpdateAndCheckoutRef(ref=stateRef, commitHash=commitHash) != True:
                         return (None, None)
-                    logger.info( "stream {streamName}: tr. #{trId} {trType} -> commit {hash} on {ref}".format(streamName=stream.name, trId=tr.id, trType=tr.Type, hash=commitHash[:8], ref=stateRef) )
+                    logger.info( "stream {streamName}: tr. #{trId} {trType} -> commit {hash} on {ref}".format(streamName=stream.name, trId=tr.id, trType=tr.Type, hash=self.ShortHash(commitHash), ref=stateRef) )
             else:
                 logger.info( "Reached end transaction #{trId} for {streamName} -> {ref}".format(trId=endTr.id, streamName=stream.name, ref=stateRef) )
                 break
@@ -1366,7 +1366,7 @@ class AccuRev2Git(object):
             stateHash = stateHashList.pop()
             assert stateHash is not None and len(stateHash) != 0, "Invariant error! We shouldn't have empty strings in the stateHashList"
 
-            logger.info( "No {dr} found. Processing {h} on {sr} first.".format(dr=dataRef, h=stateHash[:8], sr=stateRef) )
+            logger.info( "No {dr} found. Processing {h} on {sr} first.".format(dr=dataRef, h=self.ShortHash(stateHash), sr=stateRef) )
 
             # Get the first transaction that we are about to process.
             trHistXml, trHist = self.GetHistInfo(ref=stateHash)
@@ -1395,7 +1395,7 @@ class AccuRev2Git(object):
                     logger.debug( "{0} failed to checkout data ref {1}. Aborting!".format(stream.name, dataRef) )
                     return (None, None)
 
-                logger.info( "stream {streamName}: tr. #{trId} {trType} -> commit {hash} on {ref}".format(streamName=stream.name, trId=tr.id, trType=tr.Type, hash=commitHash[:8], ref=dataRef) )
+                logger.info( "stream {streamName}: tr. #{trId} {trType} -> commit {hash} on {ref}".format(streamName=stream.name, trId=tr.id, trType=tr.Type, hash=self.ShortHash(commitHash), ref=dataRef) )
 
         # Find the last transaction number that we processed on the dataRef.
         lastStateTrId = self.GetTransactionForRef(ref=stateRef)
@@ -1488,7 +1488,7 @@ class AccuRev2Git(object):
                 logger.error( "Commit failed for {trId} on {dataRef}".format(trId=tr.id, dataRef=dataRef) )
                 return (None, None)
             else:
-                logger.info( "stream {streamName}: tr. #{trId} {trType} -> commit {hash} on {ref} (end tr. {endTrId})".format(streamName=stream.name, trId=tr.id, trType=tr.Type, hash=commitHash[:8], ref=dataRef, endTrId=lastStateTrId) )
+                logger.info( "stream {streamName}: tr. #{trId} {trType} -> commit {hash} on {ref} (end tr. {endTrId})".format(streamName=stream.name, trId=tr.id, trType=tr.Type, hash=self.ShortHash(commitHash), ref=dataRef, endTrId=lastStateTrId) )
 
         return (tr, commitHash)
 
@@ -1709,6 +1709,12 @@ class AccuRev2Git(object):
 
         return stateObj
 
+    def ShortHash(self, commitHash):
+        if commitHash is None:
+            return None
+        if not isinstance(commitHash, str):
+            return commitHash
+        return commitHash[:8]
 
     def AddNote(self, transaction, commitHash, ref, note, committerName=None, committerEmail=None, committerDate=None, committerTimezone=None):
         notesFilePath = None
@@ -1727,7 +1733,7 @@ class AccuRev2Git(object):
             os.remove(notesFilePath)
 
             if rv is not None:
-                logger.debug( "Added{ref} note for {hash}.".format(ref='' if ref is None else ' '+str(ref), hash=commitHash) )
+                logger.debug( "Added{ref} note for {hash}.".format(ref='' if ref is None else ' '+str(ref), hash=self.ShortHash(commitHash)) )
             else:
                 logger.error( "Failed to add{ref} note for {hash}{trStr}".format(ref='' if ref is None else ' '+str(ref), hash=commitHash, trStr='' if transaction is None else ', tr. ' + str(transaction.id)) )
                 logger.error(self.gitRepo.lastStderr)
@@ -2071,7 +2077,7 @@ class AccuRev2Git(object):
         stateCommitHash = self.Commit(transaction=tr, allowEmptyCommit=True, messageOverride='transaction {trId}'.format(trId=tr.id), parents=[ lastStateCommitHash, commitHash ], treeHash=emptyTree, ref=streamStateRefspec, checkout=False)
         if stateCommitHash is None:
             raise Exception("Failed to commit {Type} {tr} to hidden state ref {ref} with commit {h}".format(Type=tr.Type, tr=tr.id, ref=streamStateRefspec, h=commitHash))
-        logger.debug("Committed stream state to {ref} - commit {h}".format(streamName=stream.name, ref=streamStateRefspec, h=lastStateCommitHash))
+        logger.debug("Committed stream state to {ref} - commit {h}".format(streamName=stream.name, ref=streamStateRefspec, h=self.ShortHash(lastStateCommitHash)))
 
     def CommitTransaction(self, tr, stream, parents=None, treeHash=None, branchName=None, title=None, srcStream=None, dstStream=None, friendlyMessage=None):
         assert branchName is not None, "Error: CommitTransaction() is a helper for ProcessTransaction() and doesn't accept branchName as None."
@@ -2135,7 +2141,7 @@ class AccuRev2Git(object):
                         raise Exception("Couldn't get tree hash from stream {s} (branch {b}). tr {trId} {trType}".format(s=stream.name, b=branchName, trId=tr.id, trType=tr.Type))
 
                     commitHash = self.CommitTransaction(tr=tr, stream=stream, parents=parents, treeHash=treeHash, branchName=branchName, srcStream=srcStream, dstStream=dstStream)
-                    logger.info("{Type} {trId}. cherry-picked to {branch} {h}. Untracked parent stream {ps}.".format(Type=tr.Type, trId=tr.id, branch=branchName, h=commitHash[:8], ps=dstStreamName))
+                    logger.info("{Type} {trId}. cherry-picked to {branch} {h}. Untracked parent stream {ps}.".format(Type=tr.Type, trId=tr.id, branch=branchName, h=self.ShortHash(commitHash), ps=dstStreamName))
 
                     # Recurse down into children.
                     self.MergeIntoChildren(tr=tr, streamTree=streamTree, streamMap=streamMap, affectedStreamMap=affectedStreamMap, streams=streams, streamNumber=sn)
@@ -2173,22 +2179,22 @@ class AccuRev2Git(object):
                     if self.GitMergeBase(refs=[ lastChildCommitHash, lastCommitHash ], isAncestor=True):
                         # Fast-forward the child branch to here.
                         if self.UpdateAndCheckoutRef(ref='refs/heads/{branch}'.format(branch=childBranchName), commitHash=lastCommitHash, checkout=False) != True:
-                            raise Exception("Failed to fast-forward {branch} to {hash} (latest commit on {parentBranch}.".format(branch=childBranchName, hash=lastCommitHash[:8], parentBranch=branchName))
-                        logger.info("{trType} {trId}. Fast-forward {b} to {dst} {h} (affected child stream). Was at {ch}.".format(trType=tr.Type, trId=tr.id, b=childBranchName, dst=branchName, h=lastCommitHash[:8], ch=lastChildCommitHash[:8]))
+                            raise Exception("Failed to fast-forward {branch} to {hash} (latest commit on {parentBranch}.".format(branch=childBranchName, hash=self.ShortHash(lastCommitHash), parentBranch=branchName))
+                        logger.info("{trType} {trId}. Fast-forward {b} to {dst} {h} (affected child stream). Was at {ch}.".format(trType=tr.Type, trId=tr.id, b=childBranchName, dst=branchName, h=self.ShortHash(lastCommitHash), ch=self.ShortHash(lastChildCommitHash)))
                         self.LogBranchState(stream=childStream, tr=tr, commitHash=lastCommitHash) # Since we are not committing we need to manually store the ref state at this time.
                     else:
                         if self.config.git.emptyChildStreamAction == "merge":
                             # Merge by specifying the parent commits.
                             parents = [ lastChildCommitHash , lastCommitHash ] # Make this commit a merge of the parent stream into the child stream.
-                            logger.info("{trType} {trId}. Merge {dst} into {b} {h} (affected child stream). {ch} was not an ancestor of {h}.".format(trType=tr.Type, trId=tr.id, b=childBranchName, dst=branchName, h=lastCommitHash[:8], ch=lastChildCommitHash[:8]))
+                            logger.info("{trType} {trId}. Merge {dst} into {b} {h} (affected child stream). {ch} was not an ancestor of {h}.".format(trType=tr.Type, trId=tr.id, b=childBranchName, dst=branchName, h=self.ShortHash(lastCommitHash), ch=self.ShortHash(lastChildCommitHash)))
                         elif self.config.git.emptyChildStreamAction == "cherry-pick":
                             parents = [ lastChildCommitHash ] # Make this commit a cherry-pick of the parent stream into the child stream.
-                            logger.info("{trType} {trId}. Cherry-pick {dst} into {b} {h} (affected child stream). {ch} was not an ancestor of {h}.".format(trType=tr.Type, trId=tr.id, b=childBranchName, dst=branchName, h=lastCommitHash[:8], ch=lastChildCommitHash[:8]))
+                            logger.info("{trType} {trId}. Cherry-pick {dst} into {b} {h} (affected child stream). {ch} was not an ancestor of {h}.".format(trType=tr.Type, trId=tr.id, b=childBranchName, dst=branchName, h=self.ShortHash(lastCommitHash), ch=self.ShortHash(lastChildCommitHash)))
                         else:
                             raise Exception("Unhandled option for self.config.git.emptyChildStreamAction. Option was set to: {0}".format(self.config.git.emptyChildStreamAction))
                 else:
                     parents = [ lastChildCommitHash ] # Make this commit a cherry-pick with no relationship to the parent stream.
-                    logger.info("{trType} {trId}. Cherry-pick {dst} {dstHash} into {b} - diff between {h1} and {dstHash} was not empty! (affected child stream)".format(trType=tr.Type, trId=tr.id, b=childBranchName, dst=branchName, dstHash=lastCommitHash[:8], h1=childStreamData["data_hash"][:8]))
+                    logger.info("{trType} {trId}. Cherry-pick {dst} {dstHash} into {b} - diff between {h1} and {dstHash} was not empty! (affected child stream)".format(trType=tr.Type, trId=tr.id, b=childBranchName, dst=branchName, dstHash=self.ShortHash(lastCommitHash), h1=self.ShortHash(childStreamData["data_hash"])))
 
                 if parents is not None:
                     assert None not in parents, "Invariant error! Either the source hash {sh} or the destination hash {dh} was none!".format(sh=parents[1], dh=parents[0])
@@ -2391,7 +2397,7 @@ class AccuRev2Git(object):
             if basisCommitHash is None:
                 title = "{title} orphaned branch.".format(title=title)
             else:
-                title = "{title} based on {basisBranchName} at {h}".format(title=title, basisBranchName=basisBranchName, h=basisCommitHash[:8])
+                title = "{title} based on {basisBranchName} at {h}".format(title=title, basisBranchName=basisBranchName, h=self.ShortHash(basisCommitHash))
 
             assert len(targetStreams) != 0, "Invariant error! There should be at least one targetStreams item in the list!"
 
@@ -2405,9 +2411,9 @@ class AccuRev2Git(object):
                     elif amMergedIntoPrevBasis:
                         # Fast-forward the timelocked stream branch to the correct commit.
                         if self.UpdateAndCheckoutRef(ref='refs/heads/{branch}'.format(branch=branchName), commitHash=basisCommitHash, checkout=False) != True:
-                            raise Exception("Failed to fast-forward {branch} to {hash} (latest commit on {parentBranch}).".format(branch=branchName, hash=basisCommitHash[:8], parentBranch=basisBranchName))
+                            raise Exception("Failed to fast-forward {branch} to {hash} (latest commit on {parentBranch}).".format(branch=branchName, hash=self.ShortHash(basisCommitHash), parentBranch=basisBranchName))
                         parents = None # Do not commit!
-                        logger.info("{trType} {trId}. Fast-forward {dst} to {b} {h}.".format(trType=tr.Type, trId=tr.id, b=basisBranchName, h=basisCommitHash[:8], dst=branchName))
+                        logger.info("{trType} {trId}. Fast-forward {dst} to {b} {h}.".format(trType=tr.Type, trId=tr.id, b=basisBranchName, h=self.ShortHash(basisCommitHash), dst=branchName))
                         self.LogBranchState(stream=stream, tr=tr, commitHash=basisCommitHash) # Since we are not committing we need to manually store the ref state at this time.
                     else:
                         # Merge by specifying the parent commits.
@@ -2418,16 +2424,16 @@ class AccuRev2Git(object):
                         if len(parents) == 1:
                             basisTreeHash = self.GetTreeFromRef(ref=basisCommitHash)
                             if basisTreeHash == treeHash:
-                                message="{msg} Created {dst} on {b} at {h}".format(msg=message, b=basisBranchName, h=basisCommitHash[:8], dst=branchName)
+                                message="{msg} Created {dst} on {b} at {h}".format(msg=message, b=basisBranchName, h=self.ShortHash(basisCommitHash), dst=branchName)
                                 # Fast-forward the created stream branch to the correct commit.
                                 if self.UpdateAndCheckoutRef(ref='refs/heads/{branch}'.format(branch=branchName), commitHash=basisCommitHash, checkout=False) != True:
-                                    raise Exception("Failed to fast-forward {branch} to {hash} (latest commit on {parentBranch}).".format(branch=branchName, hash=basisCommitHash[:8], parentBranch=basisBranchName))
+                                    raise Exception("Failed to fast-forward {branch} to {hash} (latest commit on {parentBranch}).".format(branch=branchName, hash=self.ShortHash(basisCommitHash), parentBranch=basisBranchName))
                                 parents = None # Don't commit this mkstream since it doesn't introduce anything new.
                                 self.LogBranchState(stream=stream, tr=tr, commitHash=basisCommitHash) # Since we are not committing we need to manually store the ref state at this time.
                             else:
-                                message="{msg} Created {dst} based on {b} at {h} (tree was not the same)".format(msg=message, b=basisBranchName, h=basisCommitHash[:8], dst=branchName)
+                                message="{msg} Created {dst} based on {b} at {h} (tree was not the same)".format(msg=message, b=basisBranchName, h=self.ShortHash(basisCommitHash), dst=branchName)
                         else:
-                            message="{msg} Merging {b} {h} as first parent into {dst}.".format(msg=message, b=basisBranchName, h=basisCommitHash[:8], dst=branchName)
+                            message="{msg} Merging {b} {h} as first parent into {dst}.".format(msg=message, b=basisBranchName, h=self.ShortHash(basisCommitHash), dst=branchName)
                         logger.info(message)
             
                 if parents is not None:
@@ -2442,9 +2448,9 @@ class AccuRev2Git(object):
                     commitHash = self.CommitTransaction(tr=tr, stream=stream, treeHash=treeHash, parents=parents, branchName=branchName, title=title)
                     if commitHash is None:
                         raise Exception("Failed to commit chstream {trId}".format(trId=tr.id))
-                    logger.info("{Type} {tr}. committed to {branch} {h}. {title}".format(Type=tr.Type, tr=tr.id, branch=branchName, h=commitHash[:8], title=title))
+                    logger.info("{Type} {tr}. committed to {branch} {h}. {title}".format(Type=tr.Type, tr=tr.id, branch=branchName, h=self.ShortHash(commitHash), title=title))
                 else:
-                    logger.debug("{Type} {tr}. skiping commit to {branch}. (fast-forwarded to {h}) {title}".format(Type=tr.Type, tr=tr.id, branch=branchName, h=basisCommitHash[:8], title=title))
+                    logger.debug("{Type} {tr}. skiping commit to {branch}. (fast-forwarded to {h}) {title}".format(Type=tr.Type, tr=tr.id, branch=branchName, h=self.ShortHash(basisCommitHash), title=title))
 
 
                 # Process all affected streams.
@@ -2468,7 +2474,7 @@ class AccuRev2Git(object):
 
                 if branchName is not None:
                     commitHash = self.CommitTransaction(tr=tr, stream=stream, treeHash=treeHash, branchName=branchName)
-                    logger.info("{Type} {tr}. committed to {branch} {h}.".format(Type=tr.Type, tr=tr.id, branch=branchName, h=commitHash[:8]))
+                    logger.info("{Type} {tr}. committed to {branch} {h}.".format(Type=tr.Type, tr=tr.id, branch=branchName, h=self.ShortHash(commitHash)))
 
             elif stream.Type in [ "normal" ]:
                 if tr.Type not in [ "promote", "defunct", "purge" ]:
@@ -2521,17 +2527,17 @@ class AccuRev2Git(object):
                         
                         commitHash = self.CommitTransaction(tr=tr, stream=stream, parents=parents, treeHash=treeHash, branchName=branchName, srcStream=srcStream, dstStream=stream)
 
-                        infoMessage = "{trType} {tr}. Merged {src} into {dst} {h}.".format(tr=tr.id, trType=tr.Type, src=srcBranchName, dst=branchName, h=commitHash[:8])
+                        infoMessage = "{trType} {tr}. Merged {src} into {dst} {h}.".format(tr=tr.id, trType=tr.Type, src=srcBranchName, dst=branchName, h=self.ShortHash(commitHash))
                         if self.config.git.sourceStreamFastForward:
                             # This is a manual merge and the srcBranchName should be fastforwarded to this commit since its contents now matches the parent stream.
                             if self.UpdateAndCheckoutRef(ref='refs/heads/{branch}'.format(branch=srcBranchName), commitHash=commitHash, checkout=False) != True:
-                                raise Exception("Failed to update source {branch} to {hash} latest commit.".format(branch=srcBranchName, hash=commitHash[:8]))
+                                raise Exception("Failed to update source {branch} to {hash} latest commit.".format(branch=srcBranchName, hash=self.ShortHash(commitHash)))
                             infoMessage = "{msg} Fast-forward {src} to {dst} {h}. (source stream fast-forwarded)".format(msg=infoMessage, src=srcBranchName, dst=branchName)
                             self.LogBranchState(stream=srcStream, tr=tr, commitHash=commitHash) # Since we are not committing we need to manually store the ref state at this time.
                         logger.info(infoMessage)
                     else:
                         commitHash = self.CommitTransaction(tr=tr, stream=stream, treeHash=treeHash, branchName=branchName, srcStream=None, dstStream=stream)
-                        msg = "{trType} {tr}. Cherry-picked {src} into {dst} {h}.".format(tr=tr.id, trType=tr.Type, src=srcBranchName, dst=branchName, h=commitHash[:8])
+                        msg = "{trType} {tr}. Cherry-picked {src} into {dst} {h}.".format(tr=tr.id, trType=tr.Type, src=srcBranchName, dst=branchName, h=self.ShortHash(commitHash))
                         if len(diff.strip()) == 0:
                             msg = "{0} Diff was not empty.".format(msg)
                         logger.info(msg)
@@ -2543,7 +2549,7 @@ class AccuRev2Git(object):
                         msgSuffix = "Accurev 'from stream' information missing."
                     else:
                         msgSuffix = "Source stream {name} (id: {number}) is not tracked.".format(name=srcStreamName, number=srcStreamNumber)
-                    logger.info("{trType} {tr}. Cherry-picked into {dst} {h}. {suffix}".format(trType=tr.Type, tr=tr.id, dst=branchName, h=commitHash[:8], suffix=msgSuffix))
+                    logger.info("{trType} {tr}. Cherry-picked into {dst} {h}. {suffix}".format(trType=tr.Type, tr=tr.id, dst=branchName, h=self.ShortHash(commitHash), suffix=msgSuffix))
                 else:
                     logger.info("{trType} {tr}. destination stream {dst} (id: {num}) is not tracked.".format(trType=tr.Type, tr=tr.id, dst=streamName, num=streamNumber))
 
