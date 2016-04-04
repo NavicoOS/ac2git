@@ -2047,12 +2047,37 @@ class AccuRev2Git(object):
             return u'{refsNS}state/depots/{depotNumber}/streams/{streamNumber}/commit_history'.format(refsNS=AccuRev2Git.gitRefsNamespace, depotNumber=depot.number, streamNumber=streamNumber)
         return None
 
+    def LogBranchState(self, stream, tr, commitHash):
+        assert stream is not None and commitHash is not None and tr is not None, "LogBranchState(stream={s}, tr={t}, commitHash={h}) does not accept None arguments.".format(s=stream, t=tr, h=commitHash)
+
+        # Log this commit at this transaction in the state refs that keep track of this stream's history over time.
+        streamStateRefspec = self.GetStreamCommitHistoryRef(stream.depotName, stream.streamNumber)
+        if streamStateRefspec is None:
+            raise Exception("Failed to get hidden ref for stream {streamName} (id: {streamNumber}) depot {depotName}".format(streamName=stream.name, streamNumber=stream.streamNumber, depotName=stream.depotName))
+
+        # Write the empty tree to the git repository to ensure there is one.
+        emptyTree = self.gitRepo.empty_tree(write=True)
+        if emptyTree is None or len(emptyTree) == 0:
+            raise Exception("Failed to write empty tree to git repository!")
+
+        # Get the last known state
+        lastStateCommitHash = self.GetLastCommitHash(ref=streamStateRefspec)
+        if lastStateCommitHash is None:
+            # Since we will use git log --first-parent a lot we need to make sure we have a parentless commit to start off with.
+            lastStateCommitHash = self.Commit(transaction=tr, allowEmptyCommit=True, messageOverride='transaction {trId}'.format(trId=tr.id), parents=[], treeHash=emptyTree, ref=streamStateRefspec, checkout=False)
+            if lastStateCommitHash is None:
+                raise Exception("Failed to add empty state commit for stream {streamName} (id: {streamNumber})".format(streamName=stream.name, streamNumber=stream.streamNumber))
+            logger.debug("Created state branch for stream {streamName} as {ref} at commit {h}".format(streamName=stream.name, ref=streamStateRefspec, h=lastStateCommitHash))
+        stateCommitHash = self.Commit(transaction=tr, allowEmptyCommit=True, messageOverride='transaction {trId}'.format(trId=tr.id), parents=[ lastStateCommitHash, commitHash ], treeHash=emptyTree, ref=streamStateRefspec, checkout=False)
+        if stateCommitHash is None:
+            raise Exception("Failed to commit {Type} {tr} to hidden state ref {ref} with commit {h}".format(Type=tr.Type, tr=tr.id, ref=streamStateRefspec, h=commitHash))
+        logger.debug("Committed stream state to {ref} - commit {h}".format(streamName=stream.name, ref=streamStateRefspec, h=lastStateCommitHash))
+
     def CommitTransaction(self, tr, stream, parents=None, treeHash=None, branchName=None, title=None, srcStream=None, dstStream=None, friendlyMessage=None):
+        assert branchName is not None, "Error: CommitTransaction() is a helper for ProcessTransaction() and doesn't accept branchName as None."
+
         branchRef = None
-        if branchName is not None:
-            branchRef = 'refs/heads/{branch}'.format(branch=branchName)
-        else:
-            raise Exception("Error: CommitTransaction() is a helper for ProcessTransaction() and doesn't accept branchNames as None.")
+        branchRef = 'refs/heads/{branch}'.format(branch=branchName)
         checkout = (branchName is None)
 
         commitMessage, notes = self.GenerateCommitMessage(transaction=tr, stream=stream, title=title, friendlyMessage=friendlyMessage, srcStream=srcStream, dstStream=dstStream)
@@ -2062,31 +2087,9 @@ class AccuRev2Git(object):
         if notes is not None and self.AddNote(transaction=tr, commitHash=commitHash, ref=AccuRev2Git.gitNotesRef_accurevInfo, note=notes) is None:
             raise Exception("Failed to add note for commit {h} (transaction {trId}) to {br}.".format(trId=tr.id, br=branchName, h=commitHash))
 
-        if stream is not None:
-            # Log this commit at this transaction in the state refs that keep track of this stream's history over time.
-            streamStateRefspec = self.GetStreamCommitHistoryRef(stream.depotName, stream.streamNumber)
-            if streamStateRefspec is None:
-                raise Exception("Failed to get hidden ref for stream {streamName} (id: {streamNumber}) depot {depotName}".format(streamName=stream.name, streamNumber=stream.streamNumber, depotName=stream.depotName))
+        assert stream is not None, "Error: CommitTransaction() is a helper for ProcessTransaction() and doesn't accept stream as None."
 
-            # Write the empty tree to the git repository to ensure there is one.
-            emptyTree = self.gitRepo.empty_tree(write=True)
-            if emptyTree is None or len(emptyTree) == 0:
-                raise Exception("Failed to write empty tree to git repository!")
-
-            # Get the last known state
-            lastStateCommitHash = self.GetLastCommitHash(ref=streamStateRefspec)
-            if lastStateCommitHash is None:
-                # Since we will use git log --first-parent a lot we need to make sure we have a parentless commit to start off with.
-                lastStateCommitHash = self.Commit(transaction=tr, allowEmptyCommit=True, messageOverride='transaction {trId}'.format(trId=tr.id), parents=[], treeHash=emptyTree, ref=streamStateRefspec, checkout=False)
-                if lastStateCommitHash is None:
-                    raise Exception("Failed to add empty state commit for stream {streamName} (id: {streamNumber})".format(streamName=stream.name, streamNumber=stream.streamNumber))
-                logger.debug("Created state branch for stream {streamName} as {ref} at commit {h}".format(streamName=stream.name, ref=streamStateRefspec, h=lastStateCommitHash))
-            stateCommitHash = self.Commit(transaction=tr, allowEmptyCommit=True, messageOverride='transaction {trId}'.format(trId=tr.id), parents=[ lastStateCommitHash, commitHash ], treeHash=emptyTree, ref=streamStateRefspec, checkout=False)
-            if stateCommitHash is None:
-                raise Exception("Failed to commit {Type} {tr} to hidden state ref {ref} with commit {h}".format(Type=tr.Type, tr=tr.id, ref=streamStateRefspec, h=commitHash))
-            logger.debug("Committed stream state to {ref} - commit {h}".format(streamName=stream.name, ref=streamStateRefspec, h=lastStateCommitHash))
-        else:
-            raise Exception("Error: CommitTransaction() is a helper for ProcessTransaction() and doesn't accept stream as None.")
+        self.LogBranchState(stream=stream, tr=tr, commitHash=commitHash)
 
         return commitHash
 
