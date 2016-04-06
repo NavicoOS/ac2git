@@ -2535,19 +2535,17 @@ class AccuRev2Git(object):
                         
                         commitHash = self.CommitTransaction(tr=tr, stream=stream, parents=parents, treeHash=treeHash, branchName=branchName, srcStream=srcStream, dstStream=stream)
 
-                        infoMessage = "{trType} {tr}. Merged {src} into {dst} {h}.".format(tr=tr.id, trType=tr.Type, src=srcBranchName, dst=branchName, h=self.ShortHash(commitHash))
+                        infoMessage = "{trType} {tr}. Merged {src} {srcHash} into {dst} {dstHash}.".format(tr=tr.id, trType=tr.Type, src=srcBranchName, dst=branchName, srcHash=self.ShortHash(lastSrcBranchHash), dstHash=self.ShortHash(commitHash))
                         if self.config.git.sourceStreamFastForward:
                             # This is a manual merge and the srcBranchName should be fastforwarded to this commit since its contents now matches the parent stream.
                             if self.UpdateAndCheckoutRef(ref='refs/heads/{branch}'.format(branch=srcBranchName), commitHash=commitHash, checkout=False) != True:
                                 raise Exception("Failed to update source {branch} to {hash} latest commit.".format(branch=srcBranchName, hash=self.ShortHash(commitHash)))
-                            infoMessage = "{msg} Fast-forward {src} to {dst} {h}. (source stream fast-forwarded)".format(msg=infoMessage, src=srcBranchName, dst=branchName)
+                            infoMessage = "{msg} Fast-forward {src} from {srcHash} to {dst} at {dstHash}.".format(msg=infoMessage, src=srcBranchName, dst=branchName, srcHash=self.ShortHash(lastSrcBranchHash), dstHash=self.ShortHash(commitHash))
                             self.LogBranchState(stream=srcStream, tr=tr, commitHash=commitHash) # Since we are not committing we need to manually store the ref state at this time.
                         logger.info(infoMessage)
                     else:
                         commitHash = self.CommitTransaction(tr=tr, stream=stream, treeHash=treeHash, branchName=branchName, srcStream=None, dstStream=stream)
-                        msg = "{trType} {tr}. Cherry-picked {src} into {dst} {h}.".format(tr=tr.id, trType=tr.Type, src=srcBranchName, dst=branchName, h=self.ShortHash(commitHash))
-                        if len(diff.strip()) == 0:
-                            msg = "{0} Diff was not empty.".format(msg)
+                        msg = "{trType} {tr}. Cherry-picked {src} {srcHash} into {dst} {dstHash}. Diff {dataHash} to {srcHash} was not empty.".format(tr=tr.id, trType=tr.Type, src=srcBranchName, dst=branchName, dataHash=self.ShortHash(streamData["data_hash"]), srcHash=self.ShortHash(lastSrcBranchHash), dstHash=self.ShortHash(commitHash))
                         logger.info(msg)
                 elif branchName is not None:
                     # Cherry pick onto destination and merge into all the children.
@@ -2557,7 +2555,7 @@ class AccuRev2Git(object):
                         msgSuffix = "Accurev 'from stream' information missing."
                     else:
                         msgSuffix = "Source stream {name} (id: {number}) is not tracked.".format(name=srcStreamName, number=srcStreamNumber)
-                    logger.info("{trType} {tr}. Cherry-picked into {dst} {h}. {suffix}".format(trType=tr.Type, tr=tr.id, dst=branchName, h=self.ShortHash(commitHash), suffix=msgSuffix))
+                    logger.info("{trType} {tr}. Cherry-picked into {dst} {dstHash}. {suffix}".format(trType=tr.Type, tr=tr.id, dst=branchName, dstHash=self.ShortHash(commitHash), suffix=msgSuffix))
                 else:
                     logger.info("{trType} {tr}. destination stream {dst} (id: {num}) is not tracked.".format(trType=tr.Type, tr=tr.id, dst=streamName, num=streamNumber))
 
