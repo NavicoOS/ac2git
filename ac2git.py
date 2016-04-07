@@ -713,10 +713,9 @@ class AccuRev2Git(object):
         if parents is None:
             lastCommitHash = self.GetLastCommitHash(ref=ref) # If ref is None, it will get the last commit hash from the HEAD ref.
             if lastCommitHash is None:
-                logger.error("No last commit hash available. Fatal error, aborting!")
-                os.remove(messageFilePath)
-                return None
-            parents = [ lastCommitHash ]
+                parents = []
+            else:
+                parents = [ lastCommitHash ]
         elif len(parents) != 0:
             lastCommitHash = parents[0]
 
@@ -2168,6 +2167,8 @@ class AccuRev2Git(object):
                     continue
 
                 lastChildCommitHash = self.GetLastCommitHash(branchName=childBranchName)
+                if lastChildCommitHash is None:
+                    lastChildCommitHash = lastCommitHash
                 assert lastChildCommitHash is not None, "No last commit hash for branch {br}".format(br=childBranchName)
 
                 # Do a diff
