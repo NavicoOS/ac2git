@@ -3564,13 +3564,13 @@ def AccuRev2GitMain(argv):
                     return 1
             logger.info("Restart:" if args.restart else "Start:")
             rv = state.Start(isRestart=args.restart)
+            PrintRunningTime(referenceTime=startTime)
             if not args.track:
                 break
             elif args.intermission is not None:
                 print("Tracking mode enabled: sleep for {0} seconds.".format(args.intermission))
                 time.sleep(args.intermission)
             print("Tracking mode enabled: Continuing conversion.")
-            PrintRunningTime(referenceTime=startTime)
         except:
             if logger is not None:
                 PrintRunningTime(referenceTime=startTime)
