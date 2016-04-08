@@ -3426,11 +3426,12 @@ def InitializeLogging(filename, level):
         return True
     return False
 
-def PrintConfigSummary(config):
+def PrintConfigSummary(config, filename):
     if config is not None:
         logger.info('Config info:')
         logger.info('  now: {0}'.format(datetime.now()))
-        logger.info('  git')
+        logger.info('  filename: {0}'.format(filename))
+        logger.info('  git:')
         logger.info('    repo path: {0}'.format(config.git.repoPath))
         logger.info('    message style: {0}'.format(config.git.messageStyle))
         logger.info('    message key: {0}'.format(config.git.messageKey))
@@ -3556,7 +3557,7 @@ def AccuRev2GitMain(argv):
             # Start the script
             state = AccuRev2Git(config)
 
-            PrintConfigSummary(state.config)
+            PrintConfigSummary(state.config, args.configFilename)
             if args.checkMissingUsers in [ "warn", "strict" ]:
                 if PrintMissingUsers(state.config) and args.checkMissingUsers == "strict":
                     sys.stderr.write("Found missing users. Exiting.\n")
