@@ -1947,7 +1947,7 @@ class AccuRev2Git(object):
             
         return '\n'.join(lineList)
 
-    def GenerateCommitMessage(self, transaction, stream=None, dstStream=None, srcStream=None, title=None, friendlyMessage=None):
+    def GenerateCommitMessage(self, transaction, stream=None, dstStream=None, srcStream=None, title=None, friendlyMessage=None, cherryPickSrcHash=None):
         messageSections = []
         
         # The optional transaction key tag can be added to the footer or the header of the comment before anything else is done.
@@ -1973,25 +1973,29 @@ class AccuRev2Git(object):
         if self.config.git.messageStyle is not None:
             style = self.config.git.messageStyle.lower()
 
+        notes = None
         if style == "clean":
-            return (trComment, None)
+            messageSections.append(trComment)
         elif style in [ "normal", "notes" ]:
             if title is not None:
                 messageSections.append(title)
             if trComment is not None:
                 messageSections.append(trComment)
             
-            notes = None
             suffix = self.GenerateCommitMessageSuffix(transaction=transaction, stream=stream, dstStream=dstStream, srcStream=srcStream, friendlyMessage=friendlyMessage)
             if suffix is not None:
                 if style == "normal":
                     messageSections.append(suffix)
                 elif style == "notes":
                     notes = suffix
+        else:
+            raise Exception("Unrecognized git message style '{s}'".format(s=style))
 
-            return ('\n\n'.join(messageSections), notes)
+        if cherryPickSrcHash is not None:
+            messageSections[0] = "(CP) {0}".format(messageSections[0])
+            messageSections.append("(cherry picked from commit {hash})".format(hash=cherryPickSrcHash))
 
-        raise Exception("Unrecognized git message style '{s}'".format(s=style))
+        return ('\n\n'.join(messageSections), notes)
 
     def SanitizeBranchName(self, name):
         name = name.replace(' ', '_').strip()
@@ -2078,14 +2082,14 @@ class AccuRev2Git(object):
             raise Exception("Failed to commit {Type} {tr} to hidden state ref {ref} with commit {h}".format(Type=tr.Type, tr=tr.id, ref=streamStateRefspec, h=self.ShortHash(commitHash)))
         logger.debug("Committed stream state for {streamName} to {ref} - tr. {trType} {trId} - commit {h}".format(trType=tr.Type, trId=tr.id, streamName=stream.name, ref=streamStateRefspec, h=self.ShortHash(stateCommitHash)))
 
-    def CommitTransaction(self, tr, stream, parents=None, treeHash=None, branchName=None, title=None, srcStream=None, dstStream=None, friendlyMessage=None):
+    def CommitTransaction(self, tr, stream, parents=None, treeHash=None, branchName=None, title=None, srcStream=None, dstStream=None, friendlyMessage=None, cherryPickSrcHash=None):
         assert branchName is not None, "Error: CommitTransaction() is a helper for ProcessTransaction() and doesn't accept branchName as None."
 
         branchRef = None
         branchRef = 'refs/heads/{branch}'.format(branch=branchName)
         checkout = (branchName is None)
 
-        commitMessage, notes = self.GenerateCommitMessage(transaction=tr, stream=stream, title=title, friendlyMessage=friendlyMessage, srcStream=srcStream, dstStream=dstStream)
+        commitMessage, notes = self.GenerateCommitMessage(transaction=tr, stream=stream, title=title, friendlyMessage=friendlyMessage, srcStream=srcStream, dstStream=dstStream, cherryPickSrcHash=cherryPickSrcHash)
         commitHash = self.Commit(transaction=tr, allowEmptyCommit=True, messageOverride=commitMessage, parents=parents, treeHash=treeHash, ref=branchRef, checkout=checkout)
         if commitHash is None:
             raise Exception("Failed to commit {Type} {tr}".format(Type=tr.Type, tr=tr.id))
@@ -2139,7 +2143,7 @@ class AccuRev2Git(object):
                     elif treeHash is None:
                         raise Exception("Couldn't get tree hash from stream {s} (branch {b}). tr {trId} {trType}".format(s=stream.name, b=branchName, trId=tr.id, trType=tr.Type))
 
-                    commitHash = self.CommitTransaction(tr=tr, stream=stream, parents=parents, treeHash=treeHash, branchName=branchName, srcStream=srcStream, dstStream=dstStream)
+                    commitHash = self.CommitTransaction(tr=tr, stream=stream, parents=parents, treeHash=treeHash, branchName=branchName, srcStream=srcStream, dstStream=dstStream, cherryPickSrcHash=None)
                     logger.info("{Type} {trId}. cherry-picked to {branch} {h}. Untracked parent stream {ps}.".format(Type=tr.Type, trId=tr.id, branch=branchName, h=self.ShortHash(commitHash), ps=dstStreamName))
 
                     # Recurse down into children.
@@ -2199,7 +2203,10 @@ class AccuRev2Git(object):
 
                 if parents is not None:
                     assert None not in parents, "Invariant error! Either the source hash {sh} or the destination hash {dh} was none!".format(sh=parents[1], dh=parents[0])
-                    commitHash = self.CommitTransaction(tr=tr, stream=childStream, treeHash=childTreeHash, parents=parents, branchName=childBranchName, srcStream=srcStream, dstStream=dstStream)
+                    cherryPickSrcHash = None
+                    if len(parents) == 1 and parents[0] == lastChildCommitHash:
+                        cherryPickSrcHash = lastCommitHash
+                    commitHash = self.CommitTransaction(tr=tr, stream=childStream, treeHash=childTreeHash, parents=parents, branchName=childBranchName, srcStream=srcStream, dstStream=dstStream, cherryPickSrcHash=cherryPickSrcHash)
                     if commitHash is None:
                         raise Exception("Failed to commit transaction {trId} to branch {branchName}.".format(trId=tr.id, branchName=childBranchName))
 
@@ -2545,7 +2552,7 @@ class AccuRev2Git(object):
                             self.LogBranchState(stream=srcStream, tr=tr, commitHash=commitHash) # Since we are not committing we need to manually store the ref state at this time.
                         logger.info(infoMessage)
                     else:
-                        commitHash = self.CommitTransaction(tr=tr, stream=stream, treeHash=treeHash, branchName=branchName, srcStream=None, dstStream=stream)
+                        commitHash = self.CommitTransaction(tr=tr, stream=stream, treeHash=treeHash, branchName=branchName, srcStream=None, dstStream=stream, cherryPickSrcHash=lastSrcBranchHash)
                         msg = "{trType} {tr}. Cherry-picked {src} {srcHash} into {dst} {dstHash}. Diff {dataHash} to {srcHash} was not empty.".format(tr=tr.id, trType=tr.Type, src=srcBranchName, dst=branchName, dataHash=self.ShortHash(streamData["data_hash"]), srcHash=self.ShortHash(lastSrcBranchHash), dstHash=self.ShortHash(commitHash))
                         logger.info(msg)
                 elif branchName is not None:
