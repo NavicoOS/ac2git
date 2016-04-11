@@ -2260,6 +2260,7 @@ class AccuRev2Git(object):
 
             logger.debug("GetBasisCommitHash: Commit hash for stream {name} (id: {sn}){timelockMsg} was {h}. (Retrieved from {ref})".format(name=streamName, sn=streamNumber, ref=basisBranchHistoryRef, timelockMsg=timelockMessage, h=self.ShortHash(parents[1])))
 
+            logger.debug("GetBasisCommitHash: Commit hash for stream {name} (id: {sn}) was not found.".format(name=streamName, sn=streamNumber))
             return basisStream, basisBranchName, parents[1], minTime
 
         return None, None, None, None
