@@ -2258,11 +2258,12 @@ class AccuRev2Git(object):
 
             parents = parentHashes.split()
 
-            logger.debug("GetBasisCommitHash: Commit hash for stream {name} (id: {sn}){timelockMsg} was {h}. (Retrieved from {ref})".format(name=streamName, sn=streamNumber, ref=basisBranchHistoryRef, timelockMsg=timelockMessage, h=self.ShortHash(parents[1])))
+            logger.debug("GetBasisCommitHash: Basis stream {basisName} (id: {basisSN}) at commit hash {h} is the basis for stream {name} (id: {sn}){timelockMsg}. (Retrieved from {ref})".format(name=streamName, sn=streamNumber, basisName=basisStream.name, basisSN=basisStream.streamNumber, ref=basisBranchHistoryRef, timelockMsg=timelockMessage, h=self.ShortHash(parents[1])))
 
             logger.debug("GetBasisCommitHash: Commit hash for stream {name} (id: {sn}) was not found.".format(name=streamName, sn=streamNumber))
             return basisStream, basisBranchName, parents[1], minTime
 
+        logger.debug("GetBasisCommitHash: Commit hash for stream {name} (id: {sn}) was not found.".format(name=streamName, sn=streamNumber))
         return None, None, None, None
 
     # Processes a single transaction whose id is the trId (int) and which has been recorded against the streams outlined in the affectedStreamMap.
@@ -2348,13 +2349,13 @@ class AccuRev2Git(object):
 
                 prevBasisStreamNumber = tr.stream.prevBasisStreamNumber
                 if prevBasisStreamNumber is None:
-                    prevBasisStreamNumber = tr.stream.streamNumber
+                    prevBasisStreamNumber = tr.stream.basisStreamNumber
                 prevTime = tr.stream.prevTime
                 if prevTime is None:
                     prevTime = tr.stream.time
 
                 prevBasisStream, prevBasisBranchName, prevBasisCommitHash, prevStreamTime = self.GetBasisCommitHash(tr.stream.name, tr.stream.streamNumber, prevBasisStreamNumber, prevTime, prevStreams, streamMap, affectedStreamMap)
-                if prevBasisCommitHash is None:
+                if prevBasisBranchName is not None and prevBasisCommitHash is None:
                     raise Exception("Couldn't determine the last basis commit hash.")
 
                 # Stream renames can be looked up in the stream.prevName value here.
@@ -2377,13 +2378,13 @@ class AccuRev2Git(object):
                 assert branchName is not None, "Invariant error! branchName cannot be None here!"
 
                 if prevBasisCommitHash != basisCommitHash:
-                    amMergedIntoPrevBasis = ( len(parents) > 0 and self.GitMergeBase(refs=[ parents[0], prevBasisCommitHash ], isAncestor=True) )
+                    amMergedIntoPrevBasis = ( len(parents) > 0 and prevBasisCommitHash is not None and self.GitMergeBase(refs=[ parents[0], prevBasisCommitHash ], isAncestor=True) )
                     if None in [ amMergedIntoPrevBasis ]:
                         raise Exception("Error! The git merge-base command failed!")
                     elif amMergedIntoPrevBasis:
                         # Fast-forward the timelocked stream branch to the correct commit.
                         if self.UpdateAndCheckoutRef(ref='refs/heads/{branch}'.format(branch=branchName), commitHash=basisCommitHash, checkout=False) != True:
-                            raise Exception("Failed to fast-forward {branch} to {hash} (latest commit on {parentBranch}).".format(branch=branchName, hash=self.ShortHash(basisCommitHash), parentBranch=basisBranchName))
+                            raise Exception("Failed to fast-forward {branch} to {hash} (latest commit on {parentBranch}). Old basis {oldHash} on {oldParentBranch}. Title: {title}".format(branch=branchName, hash=self.ShortHash(basisCommitHash), parentBranch=basisBranchName, oldHash=self.ShortHash(prevBasisCommitHash), oldParentBranch=prevBasisBranchName, title=title))
                         parents = None # Do not commit!
                         logger.info("{trType} {trId}. Fast-forward {dst} to {b} {h}.".format(trType=tr.Type, trId=tr.id, b=basisBranchName, h=self.ShortHash(basisCommitHash), dst=branchName))
                         self.LogBranchState(stream=stream, tr=tr, commitHash=basisCommitHash) # Since we are not committing we need to manually store the ref state at this time.
