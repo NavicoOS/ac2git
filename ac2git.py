@@ -2177,7 +2177,7 @@ class AccuRev2Git(object):
             # Check if the destination stream is a part of our processing.
             if str(streamNumber) in streamMap:
                 branchName = streamMap[str(streamNumber)]["branch"]
-                if streamNumber in affectedStreamMap:
+                if affectedStreamMap is not None and streamNumber in affectedStreamMap:
                     streamData = affectedStreamMap[streamNumber]
                     treeHash = streamData["data_tree_hash"]
                     if treeHash is None:
