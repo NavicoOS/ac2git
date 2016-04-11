@@ -2704,7 +2704,8 @@ class AccuRev2Git(object):
 
                 logger.info("adding: {streamName} (id: {streamNumber}) -> {branchName}".format(streamNumber=streamNumberStr, streamName=streamName, branchName=branchName))
                 stream = self.GetStreamByName(depot.number, streamName)
-                self.ProcessStream(stream=stream, branchName=branchName, startTrId=int(self.config.accurev.startTransaction), endTrId=state["last_transaction"], streamMap=streamMap)
+                if self.ProcessStream(stream=stream, branchName=branchName, startTrId=int(self.config.accurev.startTransaction), endTrId=state["last_transaction"], streamMap=streamMap) is not None:
+                    logger.warning("Merge information prior to transaction {trId} will not be available for the newly added stream {streamName} (id: {streamNumber}) tracked by branch {branchName}.".format(trId=state["last_transaction"], streamNumber=streamNumberStr, streamName=streamName, branchName=branchName))
                 logger.info("added: {streamName} (id: {streamNumber}) -> {branchName}".format(streamNumber=streamNumberStr, streamName=streamName, branchName=branchName))
 
             # After all of the added/removed/renamed branches are handled we can continue with the new stream map.
