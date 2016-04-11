@@ -1800,10 +1800,10 @@ class AccuRev2Git(object):
                     basisStream, basisBranchName, basisCommitHash, streamTime = self.GetBasisCommitHash(stream.name, stream.streamNumber, stream.basisStreamNumber, stream.time, streams, streamMap, None)
                     if basisBranchName is not None and basisCommitHash is None:
                         # The basis stream we found is tracked but there isn't a commit for it? This means that we are being processed first even though we should have processed the basis first...
-                        # There are two options to fix this:
-                        #   1. Do a recursive call here to process the basis stream before we continue
-                        #   2. Handle the sequencing wherever we were called instead.
-                        assert False, "TODO: Potential sequencing issue! We are processing a child stream before its basis. Likely both a child and basis stream have been added here... Workaround: add one, then the other or properly fix this issue. Patches accepted! :)"
+                        self.ProcessStream(stream=basisStream, branchName=branchName, startTrId=startTrId, endTrId=endTrId, streamMap=streamMap)
+                        # Try again, but this time we don't care if it fails since that must mean that we can't do anything about it.
+                        basisStream, basisBranchName, basisCommitHash, streamTime = self.GetBasisCommitHash(stream.name, stream.streamNumber, stream.basisStreamNumber, stream.time, streams, streamMap, None)
+
                     if basisCommitHash is None:
                         logger.info( "Creating orphan branch {branchName}.".format(branchName=branchName) )
                     else:
