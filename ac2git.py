@@ -1718,7 +1718,7 @@ class AccuRev2Git(object):
         
         return None
 
-    def ProcessStream(self, stream, branchName, startTrId=None, endTrId=None):
+    def ProcessStream(self, stream, branchName, startTrId=None, endTrId=None, streamMap=None):
         if stream is not None:
             stateRef, dataRef, hwmRef = self.GetStreamRefs(depot=stream.depotName, streamNumber=stream.streamNumber)
             assert stateRef is not None and dataRef is not None and len(stateRef) != 0 and len(dataRef) != 0, "Invariant error! The state ({sr}) and data ({dr}) refs must not be None!".format(sr=stateRef, dr=dataRef)
@@ -1797,7 +1797,18 @@ class AccuRev2Git(object):
                 if commitHash is not None:
                     parents = [ commitHash ]
                 else:
-                    logger.info( "Creating orphan branch {branchName}".format(branchName=branchName) )
+                    basisStream, basisBranchName, basisCommitHash, streamTime = self.GetBasisCommitHash(stream.name, stream.streamNumber, stream.basisStreamNumber, stream.time, streams, streamMap, None)
+                    if basisBranchName is not None and basisCommitHash is None:
+                        # The basis stream we found is tracked but there isn't a commit for it? This means that we are being processed first even though we should have processed the basis first...
+                        # There are two options to fix this:
+                        #   1. Do a recursive call here to process the basis stream before we continue
+                        #   2. Handle the sequencing wherever we were called instead.
+                        assert False, "TODO: Potential sequencing issue! We are processing a child stream before its basis. Likely both a child and basis stream have been added here... Workaround: add one, then the other or properly fix this issue. Patches accepted! :)"
+                    if basisCommitHash is None:
+                        logger.info( "Creating orphan branch {branchName}.".format(branchName=branchName) )
+                    else:
+                        logger.info( "Creating branch {branchName} based on {basisBranchName} at {basisHash}".format(branchName=branchName, basisBranchName=basisBranchName, basisHash=basisCommitHash) )
+                        parents = [ basisCommitHash ]
 
                 commitHash = self.CommitTransaction(tr=tr, stream=stream, parents=parents, treeHash=treeHash, branchName=branchName, srcStream=srcStream, dstStream=dstStream)
                 logger.info("Committed transaction {trId} to {br}. Commit {h}".format(trId=tr.id, br=branchName, h=self.ShortHash(commitHash)))
@@ -2691,7 +2702,7 @@ class AccuRev2Git(object):
 
                 logger.info("adding: {streamName} (id: {streamNumber}) -> {branchName}".format(streamNumber=streamNumberStr, streamName=streamName, branchName=branchName))
                 stream = self.GetStreamByName(depot.number, streamName)
-                self.ProcessStream(stream=stream, branchName=branchName, startTrId=int(self.config.accurev.startTransaction), endTrId=state["last_transaction"])
+                self.ProcessStream(stream=stream, branchName=branchName, startTrId=int(self.config.accurev.startTransaction), endTrId=state["last_transaction"], streamMap=streamMap)
                 logger.info("added: {streamName} (id: {streamNumber}) -> {branchName}".format(streamNumber=streamNumberStr, streamName=streamName, branchName=branchName))
 
             # After all of the added/removed/renamed branches are handled we can continue with the new stream map.
