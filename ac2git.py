@@ -561,10 +561,12 @@ class AccuRev2Git(object):
 
         return hist, histXml
 
-    def TryGitCommand(self, cmd):
+    def TryGitCommand(self, cmd, retry=True):
         rv = None
         for i in range(0, AccuRev2Git.commandFailureRetryCount):
             rv = self.gitRepo.raw_cmd(cmd)
+            if not retry:
+                break
             if rv is not None:
                 rv = rv.strip()
                 if len(rv) == 0:
@@ -574,7 +576,7 @@ class AccuRev2Git(object):
             time.sleep(AccuRev2Git.commandFailureSleepSeconds)
         return rv
 
-    def GetLastCommitHash(self, branchName=None, ref=None, before=None):
+    def GetLastCommitHash(self, branchName=None, ref=None, before=None, retry=True):
         cmd = []
         commitHash = None
         if ref is not None:
@@ -589,7 +591,7 @@ class AccuRev2Git(object):
             # See http://stackoverflow.com/questions/13987273/git-log-filter-by-commits-author-date
             raise Exception("Not yet implemented! The search for a commit by date when the author time is not the same as the commiter time can't use the --before flag for git log.")
 
-        commitHash = self.TryGitCommand(cmd=cmd)
+        commitHash = self.TryGitCommand(cmd=cmd, retry=retry)
 
         if commitHash is None:
             logger.error("Failed to retrieve last git commit hash. Command `{0}` failed.".format(' '.join(cmd)))
@@ -1681,33 +1683,6 @@ class AccuRev2Git(object):
 
         return refMap
 
-    def GetStateForCommit(self, commitHash, notesRef):
-        stateObj = None
-
-        stateJson = None
-        for i in range(0, AccuRev2Git.commandFailureRetryCount):
-            stateJson = self.gitRepo.notes.show(obj=commitHash, ref=notesRef)
-            if stateJson is not None:
-                stateJson = stateJson.strip()
-                if len(stateJson) > 0:
-                    break
-                else:
-                    stateJson = None
-            time.sleep(AccuRev2Git.commandFailureSleepSeconds)
-
-        if stateJson is not None:
-            stateJson = stateJson.strip()
-            try:
-                stateObj = json.loads(stateJson)
-            except:
-                logger.error("While getting state for commit {hash} (notes ref {ref}). Failed to parse JSON string [{json}].".format(hash=commitHash, ref=notesRef, json=stateJson))
-                raise Exception("While getting state for commit {hash} (notes ref {ref}). Failed to parse JSON string [{json}].".format(hash=commitHash, ref=notesRef, json=stateJson))
-        else:
-            logger.error("Failed to load the last transaction for commit {hash} from {ref} notes.".format(hash=commitHash, ref=notesRef))
-            logger.error("  i.e git notes --ref={ref} show {hash}    - returned nothing.".format(ref=notesRef, hash=commitHash))
-
-        return stateObj
-
     def ShortHash(self, commitHash):
         if commitHash is None:
             return None
@@ -1743,18 +1718,6 @@ class AccuRev2Git(object):
         
         return None
 
-    # Adds a JSON string respresentation of `stateDict` to the given commit using `git notes add`.
-    def AddScriptStateNote(self, depotName, stream, transaction, commitHash, ref, dstStream=None, srcStream=None):
-        stateDict = { "depot": depotName, "stream": stream.name, "stream_number": stream.streamNumber, "transaction_number": transaction.id, "transaction_kind": transaction.Type }
-        if dstStream is not None:
-            stateDict["dst_stream"]        = dstStream.name
-            stateDict["dst_stream_number"] = dstStream.streamNumber
-        if srcStream is not None:
-            stateDict["src_stream"]        = srcStream.name
-            stateDict["src_stream_number"] = srcStream.streamNumber
-
-        return self.AddNote(transaction=transaction, commitHash=commitHash, ref=ref, note=json.dumps(stateDict))
-
     def ProcessStream(self, stream, branchName):
         if stream is not None:
             stateRef, dataRef, hwmRef = self.GetStreamRefs(depot=stream.depotName, streamNumber=stream.streamNumber)
@@ -1775,38 +1738,22 @@ class AccuRev2Git(object):
             lastDataCommitHash = None
             if branchName in [ br.name if br is not None else None for br in branchList ]:
                 commitHash = self.GetLastCommitHash(branchName=branchName)
-                commitState = self.GetStateForCommit(commitHash=commitHash, notesRef=AccuRev2Git.gitNotesRef_state)
 
-                # If we have failed to retrieve the state then auto-recover the last known good state.
-                lastGoodCommitHash = commitHash
-                badCount = 0
-                while commitState is None:
-                    # See if the parent commit has anything better?
-                    parentHash = self.gitRepo.raw_cmd(['git', 'log', '--format=%P', lastGoodCommitHash, '-1'])
-                    if parentHash is None or len(parentHash.strip()) == 0 or len(parentHash.strip().split(' ')) != 1:
-                        # We can't go beyond merges or commits without parents.
-                        lastGoodCommitHash = None
-                        break
-                    lastGoodCommitHash = parentHash.strip() # Follow first parent only.
-                    commitState = self.GetStateForCommit(commitHash=lastGoodCommitHash, notesRef=AccuRev2Git.gitNotesRef_state)
-                    badCount += 1
-
-                if lastGoodCommitHash is None:
-                    logger.error("Couldn't find commit state information in the {notesRef} notes for the commit. Aborting!".format(notesRef=AccuRev2Git.gitNotesRef_state))
+                streamHistoryRef = self.GetStreamCommitHistoryRef(stream.depotName, stream.streamNumber)
+                cmd = [ u'git', u'log', u'-1', u'--format=format:%s', streamHistoryRef ]
+                trString = self.TryGitCommand(cmd=cmd)
+                if trString is None or len(trString) == 0:
+                    logger.error("Branch {br} exists but no previous state was found for this branch. Cannot process branch, skipping...".format(br=branchName))
                     return None
-                elif lastGoodCommitHash != commitHash:
-                    logger.info("The last commit for which state information was found was {gh}, which means that {count} commits are bad.".format(gh=lastGoodCommitHash, count=badCount))
-                    linesToDelete = self.gitRepo.raw_cmd(['git', 'log', '--format=%h %s', commitHash, '^{h}'.format(h=lastGoodCommitHash)])
-                    logger.info("The following commits are being discarded:\n{lines}".format(lines=linesToDelete))
-                    if self.UpdateAndCheckoutRef(ref=branchRef, commitHash=lastGoodCommitHash, checkout=False) != True:
-                        logger.error("Failed to restore last known good state, aborting!")
-                        return None
 
                 # Here we know that the state must exist and be good!
-                lastTrId = commitState["transaction_number"]
+                lastTrId = int(trString.strip().split()[1])
+
                 # Find the commit hash on our dataRef that corresponds to our last transaction number.
                 lastDataCommitHash = self.GetHashForTransaction(ref=dataRef, trNum=lastTrId)
+
                 if lastDataCommitHash is None:
+                    logger.error("Branch {br} exists and its last transaction was {lastTrId}. No new accurev data found, continuing...".format(br=branchName, lastTrId=lastTrId))
                     return None
 
             # Get the list of new hashes that have been committed to the dataRef but we haven't processed on the dataRef just yet.
@@ -1839,24 +1786,13 @@ class AccuRev2Git(object):
                 srcStreamName, srcStreamNumber = trHist.fromStream()
                 srcStream = streams.getStream(srcStreamNumber)
 
-                commitMessage, notes = self.GenerateCommitMessage(transaction=tr, stream=stream, dstStream=dstStream, srcStream=srcStream)
                 parents = []
                 if commitHash is not None:
                     parents = [ commitHash ]
                 else:
                     logger.info( "Creating orphan branch {branchName}".format(branchName=branchName) )
 
-                commitHash = self.Commit(transaction=tr, allowEmptyCommit=True, messageOverride=commitMessage, parents=parents, treeHash=treeHash, ref=branchRef, checkout=False)
-                if commitHash is None:
-                    logger.error("Failed to commit transaction {trId} to {br}.".format(trId=tr.id, br=branchName))
-                    return None
-                if self.AddScriptStateNote(depotName=stream.depotName, stream=stream, transaction=tr, commitHash=commitHash, ref=AccuRev2Git.gitNotesRef_state, dstStream=dstStream, srcStream=srcStream) is None:
-                    logger.error("Failed to add note for commit {h} (transaction {trId}) to {br}.".format(trId=tr.id, br=branchName, h=commitHash))
-                    return None
-                if notes is not None and self.AddNote(transaction=tr, commitHash=commitHash, ref=AccuRev2Git.gitNotesRef_accurevInfo, note=notes) is None:
-                    logger.error("Failed to add note for commit {h} (transaction {trId}) to {br}.".format(trId=tr.id, br=branchName, h=commitHash))
-                    return None
-
+                commitHash = self.CommitTransaction(tr=tr, stream=stream, parents=parents, treeHash=treeHash, branchName=branchName, srcStream=srcStream, dstStream=dstStream)
                 logger.info("Committed transaction {trId} to {br}. Commit {h}".format(trId=tr.id, br=branchName, h=commitHash))
 
             return True
@@ -1881,7 +1817,7 @@ class AccuRev2Git(object):
             processingList.sort()
 
         for streamNumber, stream, branchName in processingList:
-            oldCommitHash = self.GetLastCommitHash(branchName=branchName)
+            oldCommitHash = self.GetLastCommitHash(branchName=branchName, retry=False)
 
             self.ProcessStream(stream=stream, branchName=branchName)
 
