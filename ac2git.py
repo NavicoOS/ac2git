@@ -561,7 +561,7 @@ class AccuRev2Git(object):
 
         return hist, histXml
 
-    def TryGitCommand(self, cmd, retry=True):
+    def TryGitCommand(self, cmd, allowEmptyString=False, retry=True):
         rv = None
         for i in range(0, AccuRev2Git.commandFailureRetryCount):
             rv = self.gitRepo.raw_cmd(cmd)
@@ -569,7 +569,7 @@ class AccuRev2Git(object):
                 break
             if rv is not None:
                 rv = rv.strip()
-                if len(rv) == 0:
+                if not allowEmptyString and len(rv) == 0:
                     rv = None
                 else:
                     break
@@ -1718,7 +1718,7 @@ class AccuRev2Git(object):
         
         return None
 
-    def ProcessStream(self, stream, branchName):
+    def ProcessStream(self, stream, branchName, startTrId=None, endTrId=None):
         if stream is not None:
             stateRef, dataRef, hwmRef = self.GetStreamRefs(depot=stream.depotName, streamNumber=stream.streamNumber)
             assert stateRef is not None and dataRef is not None and len(stateRef) != 0 and len(dataRef) != 0, "Invariant error! The state ({sr}) and data ({dr}) refs must not be None!".format(sr=stateRef, dr=dataRef)
@@ -1773,6 +1773,13 @@ class AccuRev2Git(object):
             for line in reversed(dataHashList):
                 columns = line.split(' ')
                 trId, treeHash = int(columns[2]), columns[3]
+                if endTrId is not None and endTrId < trId:
+                    logger.debug( "ProcessStream(stream='{s}', branchName='{b}', endTrId='{endTrId}') - next tr. is {trId}, stopping.".format(s=stream.name, b=branchName, trId=trId, endTrId=endTrId) )
+                    break
+                if startTrId is not None and trId < startTrId:
+                    logger.debug( "ProcessStream(stream='{s}', branchName='{b}', startTrId='{startTrId}') - tr. {trId} is earlier than the start transaction, skipping.".format(s=stream.name, b=branchName, trId=trId, startTrId=startTrId) )
+                    continue
+
                 # Get the transaction info.
                 stateHash = stateMap[trId]
                 if stateHash is None:
@@ -1793,7 +1800,7 @@ class AccuRev2Git(object):
                     logger.info( "Creating orphan branch {branchName}".format(branchName=branchName) )
 
                 commitHash = self.CommitTransaction(tr=tr, stream=stream, parents=parents, treeHash=treeHash, branchName=branchName, srcStream=srcStream, dstStream=dstStream)
-                logger.info("Committed transaction {trId} to {br}. Commit {h}".format(trId=tr.id, br=branchName, h=commitHash))
+                logger.info("Committed transaction {trId} to {br}. Commit {h}".format(trId=tr.id, br=branchName, h=self.ShortHash(commitHash)))
 
             return True
         return None
@@ -2631,6 +2638,7 @@ class AccuRev2Git(object):
             streamBranchList = [ state["stream_map"][s]["branch"] for s in state["stream_map"] ] # Get the list of all branches that we will create.
             loadedBranchList = [ b["name"] for b in state["branch_list"] ] # Get the list of all branches that we will create.
             branchList = self.gitRepo.branch_list()
+            branchNameSet = set([ b.name for b in branchList ])
             for b in branchList:
                 if b.name in streamBranchList and (state["branch_list"] is None or b.name not in loadedBranchList): # state["branch_list"] is a list of the branches that we have already created.
                     logger.warning("Branch {branch} exists in the repo but will need to be created later.".format(branch=b.name))
@@ -2641,7 +2649,7 @@ class AccuRev2Git(object):
                     if self.gitRepo.raw_cmd(['git', 'branch', '-D', b.name]) is None: # Delete the branch even if not merged.
                         raise Exception("Failed to delete branch {branch}!".format(branch=b.name))
                     logger.warning("Branch {branch} has been renamed to backup/{branch}_{number}.".format(branch=b.name, number=backupNumber))
-            for missingBranch in (set(loadedBranchList) - set([ b.name for b in branchList ])):
+            for missingBranch in (set(loadedBranchList) - branchNameSet):
                 logger.warning("Branch {branch} is missing from the repo!".format(branch=missingBranch))
 
             # Check for added/deleted/renamed streams w.r.t. the new config file and last known conversion reporitory state.
@@ -2651,21 +2659,44 @@ class AccuRev2Git(object):
             addedSet = newSet - oldSet
             changedSet = newSet & oldSet # intersect
 
-            errorMessageLines = []
-            for streamNumberStr in removedSet:
-                errorMessageLines.append("removed: {streamName} (id: {streamNumber}) -> {branchName}".format(streamNumber=streamNumberStr, streamName=state["stream_map"][streamNumberStr]["stream"], branchName=state["stream_map"][streamNumberStr]["branch"]))
-            for streamNumberStr in addedSet:
-                errorMessageLines.append("added: {streamName} (id: {streamNumber}) -> {branchName}".format(streamNumber=streamNumberStr, streamName=streamMap[streamNumberStr]["stream"], branchName=streamMap[streamNumberStr]["branch"]))
+            # Rename each of the branches that have changed names.
             for streamNumberStr in changedSet:
-                if streamMap[streamNumberStr]["branch"] != state["stream_map"][streamNumberStr]["branch"]:
-                    errorMessageLines.append("renamed: {streamName} (id: {streamNumber}) -> {branchName} (from {oldBranchName})".format(streamNumber=streamNumberStr, streamName=streamMap[streamNumberStr]["stream"], branchName=streamMap[streamNumberStr]["branch"], oldBranchName=state["stream_map"][streamNumberStr]["branch"]))
+                newBranchName = streamMap[streamNumberStr]["branch"]
+                oldBranchName = state["stream_map"][streamNumberStr]["branch"]
 
-            if len(errorMessageLines) > 0:
-                logger.error("Configured stream list has changed.")
-                for errorLine in errorMessageLines:
-                    logger.error("  - {0}".format(errorLine))
-                logger.error("The script currently cannot handle changing the stream list under the merging strategy.")
-                raise Exception("The script currently cannot handle changing the stream list under the merging strategy.")
+                if newBranchName != oldBranchName:
+                    msg = "(no-op)"
+                    if oldBranchName in branchNameSet:
+                        cmd = [ u'git', u'branch', u'-m', oldBranchName, newBranchName ]
+                        if self.TryGitCommand(cmd, allowEmptyString=True) is None:
+                            raise Exception("Failed to rename branch {old} to {new}.\nErr: {err}".format(old=oldBranchName, new=newBranchName, err=self.gitRepo.lastStderr))
+                        msg = "(done)"
+                    logger.info("renamed: {streamName} (id: {streamNumber}) -> {branchName} (from {oldBranchName}) {msg}".format(streamNumber=streamNumberStr, streamName=streamMap[streamNumberStr]["stream"], branchName=newBranchName, oldBranchName=oldBranchName, msg=msg))
+
+            # Delete the branches for the streams that were removed from the config file.
+            for streamNumberStr in removedSet:
+                branchName = state["stream_map"][streamNumberStr]["branch"]
+                msg = "(no-op)"
+                if branchName in branchNameSet:
+                    cmd = [ u'git', u'branch', u'-D', branchName ]
+                    if self.TryGitCommand(cmd) is None:
+                        raise Exception("Failed to delete branch {br}".format(br=branchName))
+                    msg = "(done)"
+                logger.info("removed: {streamName} (id: {streamNumber}) -> {branchName}".format(streamNumber=streamNumberStr, streamName=state["stream_map"][streamNumberStr]["stream"], branchName=branchName, msg=msg))
+
+            # Cherry pick all transactions from the creation of the stream until the last processed transaction for each added stream.
+            for streamNumberStr in addedSet:
+                streamName = streamMap[streamNumberStr]["stream"]
+                branchName = streamMap[streamNumberStr]["branch"]
+
+                logger.info("adding: {streamName} (id: {streamNumber}) -> {branchName}".format(streamNumber=streamNumberStr, streamName=streamName, branchName=branchName))
+                stream = self.GetStreamByName(depot.number, streamName)
+                self.ProcessStream(stream=stream, branchName=branchName, startTrId=int(self.config.accurev.startTransaction), endTrId=state["last_transaction"])
+                logger.info("added: {streamName} (id: {streamNumber}) -> {branchName}".format(streamNumber=streamNumberStr, streamName=streamName, branchName=branchName))
+
+            # After all of the added/removed/renamed branches are handled we can continue with the new stream map.
+            state["stream_map"] = streamMap
+
         else:
             logger.info("No last state in {ref}, starting new conversion.".format(ref=stateRefspec))
 
