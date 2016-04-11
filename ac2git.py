@@ -3000,7 +3000,8 @@ class AccuRev2Git(object):
                 streamMap = self.GetStreamMap()
                 branchList = [streamMap[x] for x in streamMap]
                 deleteCmd = [ u'git', u'update-ref', u'-d' ]
-                for refEntry in refOutput.split('\n'):
+                for refEntry in refOutput.strip().split('\n'):
+                    refEntry = refEntry.strip()
                     ref = refEntry.strip().split()[1]
                     delete = False
                     if ref.startswith('refs/heads/'):
@@ -3018,6 +3019,10 @@ class AccuRev2Git(object):
                     else:
                         #logger.debug("Skipping ref {r}".format(r=ref))
                         pass
+                # Checkout the master branch or an empty master branch if it doesn't exist.
+                if self.gitRepo.raw_cmd([ u'git', u'checkout', u'--orphan', u'master' ]) is None:
+                    if self.gitRepo.raw_cmd([ u'git', u'checkout', u'master' ]) is None:
+                        raise Exception("Failed to checkout master branch.")
 
             if self.config.mergeStrategy in [ "normal" ]:
                 logger.info("Processing transactions from hidden refs. Merge strategy '{strategy}'.".format(strategy=self.config.mergeStrategy))
