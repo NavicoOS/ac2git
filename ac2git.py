@@ -2886,7 +2886,7 @@ class AccuRev2Git(object):
 
     # Start
     #   Begins a new AccuRev to Git conversion process discarding the old repository (if any).
-    def Start(self, isRestart=False):
+    def Start(self, isRestart=False, isSoftRestart=False):
         global maxTransactions
 
         if not os.path.exists(self.config.git.repoPath):
@@ -2898,7 +2898,7 @@ class AccuRev2Git(object):
             logger.info( "Restarting the conversion operation." )
             logger.info( "Deleting old git repository." )
             git.delete(self.config.git.repoPath)
-            
+
         # From here on we will operate from the git repository.
         if self.config.accurev.commandCacheFilename is not None:
             self.config.accurev.commandCacheFilename = os.path.abspath(self.config.accurev.commandCacheFilename)
@@ -2941,10 +2941,6 @@ class AccuRev2Git(object):
                             raise Exception("Failed to set push url {url} for {remote}!".format(url=r.pushUrl, remote=r.name))
                         logger.info( "Added push url: {remote} ({url}).".format(remote=r.name, url=r.pushUrl) )
 
-            if not isRestart:
-                self.gitRepo.reset(isHard=True)
-                self.gitRepo.clean(force=True)
-            
             doLogout = False
             if self.config.method != 'skip':
                 acInfo = accurev.info()
@@ -2987,6 +2983,41 @@ class AccuRev2Git(object):
                 logger.info("Skipping retrieval of stream information from Accurev.")
             else:
                 raise Exception("Unrecognized method '{method}'".format(method=self.config.method))
+
+            if not isRestart and isSoftRestart:
+                logger.info( "Restarting the processing operation." )
+                if self.gitRepo.raw_cmd([ u'git', u'checkout', u'--orphan', u'__ac2git_temp__' ]) is None:
+                    raise Exception("Failed to checkout empty branch.")
+                if self.gitRepo.raw_cmd([ u'git', u'read-tree', u'--empty' ]) is None:
+                    raise Exception("Failed to clear the index.")
+                if self.gitRepo.raw_cmd([ u'git', u'clean', u'-dfx' ]) is None:
+                    raise Exception("Failed to remove untracked files.")
+                refOutput = self.gitRepo.raw_cmd([ u'git', u'show-ref' ])
+                if refOutput is None:
+                    raise Exception("Failed to retrieve refs.")
+
+                # Delete all the branches and refs that we won't need any more.
+                streamMap = self.GetStreamMap()
+                branchList = [streamMap[x] for x in streamMap]
+                deleteCmd = [ u'git', u'update-ref', u'-d' ]
+                for refEntry in refOutput.split('\n'):
+                    ref = refEntry.strip().split()[1]
+                    delete = False
+                    if ref.startswith('refs/heads/'):
+                        # Find out if it is a tracked branch that we should delete.
+                        branchName = ref[len('refs/heads/'):]
+                        if branchName in branchList:
+                            delete = True
+                    elif ref.startswith('refs/ac2git/state/') or ref in [ 'refs/notes/ac2git', 'refs/notes/accurev' ]:
+                        delete = True
+
+                    if delete:
+                        if self.gitRepo.raw_cmd( deleteCmd + [ ref ] ) is None:
+                            raise Exception("Failed to delete ref {r}.".format(ref))
+                        logger.debug("Deleting ref {r}".format(r=ref))
+                    else:
+                        #logger.debug("Skipping ref {r}".format(r=ref))
+                        pass
 
             if self.config.mergeStrategy in [ "normal" ]:
                 logger.info("Processing transactions from hidden refs. Merge strategy '{strategy}'.".format(strategy=self.config.mergeStrategy))
@@ -3495,7 +3526,8 @@ def AccuRev2GitMain(argv):
     parser.add_argument('-S', '--merge-strategy', dest='mergeStrategy', choices=['skip', 'normal', 'orphanage'], metavar='<merge-strategy>', help="Sets the merge strategy which dictates how the git repository branches are generated. Depending on the value chosen the branches can be orphan branches ('orphanage' strategy) or have merges where promotes have occurred with the 'normal' strategy. The 'skip' strategy forces the script to skip making the git branches and will cause it to only do the retrieving of information from accurev for use with some strategy at a later date.")
     parser.add_argument('-E', '--empty-child-stream-action', dest='emptyChildStreamAction', choices=['merge', 'cherry-pick'], metavar='<empty-child-stream-action>', help="When a promote to a parent stream affects the child stream and the result of the two commits on the two branches in git results in a git diff operation returning empty then it could be said that this was in-fact a merge (of sorts). This option controlls whether such situations are treated as cherry-picks or merges in git.")
     parser.add_argument('-K', '--source-stream-fast-forward', dest='sourceStreamFastForward', choices=['true', 'false'], metavar='<source-stream-fast-forward>', help="When both the source and destination streams are known this flag controlls whether the source branch is moved to the resulting merge commit (the destination branch is always updated/moved to this commit). This has an effect of making the history look like the letter K where the promotes come in and then branch from the merge commit instead of the previous commit which occured on the branch.")
-    parser.add_argument('-r', '--restart',    dest='restart', action='store_const', const=True, help="Discard any existing conversion and start over.")
+    parser.add_argument('-R', '--restart',    dest='restart', action='store_const', const=True, help="Discard any existing conversion and start over.")
+    parser.add_argument('-r', '--soft-restart',    dest='softRestart', action='store_const', const=True, help="Discard any existing processed branches and start the processing from the downloaded accurev data anew.")
     parser.add_argument('-v', '--verbose',    dest='debug',   action='store_const', const=True, help="Print the script debug information. Makes the script more verbose.")
     parser.add_argument('-L', '--log-file',   dest='logFile', metavar='<log-filename>',         help="Sets the filename to which all console output will be logged (console output is still printed).")
     parser.add_argument('-q', '--no-log-file', dest='disableLogFile',  action='store_const', const=True, help="Do not log info to the log file. Alternatively achieved by not specifying a log file filename in the configuration file.")
@@ -3562,8 +3594,8 @@ def AccuRev2GitMain(argv):
                 if PrintMissingUsers(state.config) and args.checkMissingUsers == "strict":
                     sys.stderr.write("Found missing users. Exiting.\n")
                     return 1
-            logger.info("Restart:" if args.restart else "Start:")
-            rv = state.Start(isRestart=args.restart)
+            logger.info("Restart:" if args.restart else "Soft restart:" if args.softRestart else "Start:")
+            rv = state.Start(isRestart=args.restart, isSoftRestart=args.softRestart)
             PrintRunningTime(referenceTime=startTime)
             if not args.track:
                 break
