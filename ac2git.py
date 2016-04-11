@@ -1797,6 +1797,9 @@ class AccuRev2Git(object):
                 if commitHash is not None:
                     parents = [ commitHash ]
                 else:
+                    # Note: if the streamMap is None the basisBranchName, basisCommitHash and streamTime will all be None and only the basisStream will be returned, hence this argument
+                    #       serves a dual purpose and can be used to control if this function attaches the processed branch to its basis. If you want an orphan branch pass in the streamMap
+                    #       as None.
                     basisStream, basisBranchName, basisCommitHash, streamTime = self.GetBasisCommitHash(stream.name, stream.streamNumber, stream.basisStreamNumber, stream.time, streams, streamMap, None)
                     if basisBranchName is not None and basisCommitHash is None:
                         # The basis stream we found is tracked but there isn't a commit for it? This means that we are being processed first even though we should have processed the basis first...
@@ -2175,7 +2178,7 @@ class AccuRev2Git(object):
         stream, branchName, streamData, treeHash = None, None, None, None
         if streamNumber is not None:
             # Check if the destination stream is a part of our processing.
-            if str(streamNumber) in streamMap:
+            if streamMap is not None and str(streamNumber) in streamMap:
                 branchName = streamMap[str(streamNumber)]["branch"]
                 if affectedStreamMap is not None and streamNumber in affectedStreamMap:
                     streamData = affectedStreamMap[streamNumber]
