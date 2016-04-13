@@ -2151,12 +2151,12 @@ class AccuRev2Git(object):
                             logger.info("{trType} {trId}. Merge {dst} into {b} {h} (affected child stream). {ch} was not an ancestor of {h}.".format(trType=tr.Type, trId=tr.id, b=childBranchName, dst=branchName, h=self.ShortHash(lastCommitHash), ch=self.ShortHash(lastChildCommitHash)))
                         elif self.config.git.emptyChildStreamAction == "cherry-pick":
                             parents = [ lastChildCommitHash ] # Make this commit a cherry-pick of the parent stream into the child stream.
-                            logger.info("{trType} {trId}. Cherry-pick {dst} into {b} {h} (affected child stream). {ch} was not an ancestor of {h}.".format(trType=tr.Type, trId=tr.id, b=childBranchName, dst=branchName, h=self.ShortHash(lastCommitHash), ch=self.ShortHash(lastChildCommitHash)))
+                            logger.info("{trType} {trId}. Cherry pick {dst} into {b} {h} (affected child stream). {ch} was not an ancestor of {h}.".format(trType=tr.Type, trId=tr.id, b=childBranchName, dst=branchName, h=self.ShortHash(lastCommitHash), ch=self.ShortHash(lastChildCommitHash)))
                         else:
                             raise Exception("Unhandled option for self.config.git.emptyChildStreamAction. Option was set to: {0}".format(self.config.git.emptyChildStreamAction))
                 else:
                     parents = [ lastChildCommitHash ] # Make this commit a cherry-pick with no relationship to the parent stream.
-                    logger.info("{trType} {trId}. Cherry-pick {dst} {dstHash} into {b} - diff between {h1} and {dstHash} was not empty! (affected child stream)".format(trType=tr.Type, trId=tr.id, b=childBranchName, dst=branchName, dstHash=self.ShortHash(lastCommitHash), h1=self.ShortHash(childStreamData["data_hash"])))
+                    logger.info("{trType} {trId}. Cherry pick {dst} {dstHash} into {b} - diff between {h1} and {dstHash} was not empty! (affected child stream)".format(trType=tr.Type, trId=tr.id, b=childBranchName, dst=branchName, dstHash=self.ShortHash(lastCommitHash), h1=self.ShortHash(childStreamData["data_hash"])))
 
                 if parents is not None:
                     assert None not in parents, "Invariant error! Either the source hash {sh} or the destination hash {dh} was none!".format(sh=parents[1], dh=parents[0])
@@ -2512,7 +2512,7 @@ class AccuRev2Git(object):
                         logger.info(infoMessage)
                     else:
                         commitHash = self.CommitTransaction(tr=tr, stream=stream, treeHash=treeHash, branchName=branchName, srcStream=None, dstStream=stream, cherryPickSrcHash=lastSrcBranchHash)
-                        msg = "{trType} {tr}. Cherry-picked {src} {srcHash} into {dst} {dstHash}. Diff {dataHash} to {srcHash} was not empty.".format(tr=tr.id, trType=tr.Type, src=srcBranchName, dst=branchName, dataHash=self.ShortHash(streamData["data_hash"]), srcHash=self.ShortHash(lastSrcBranchHash), dstHash=self.ShortHash(commitHash))
+                        msg = "{trType} {tr}. Cherry pick {src} {srcHash} into {dst} {dstHash}. Diff {dataHash} to {srcHash} was not empty.".format(tr=tr.id, trType=tr.Type, src=srcBranchName, dst=branchName, dataHash=self.ShortHash(streamData["data_hash"]), srcHash=self.ShortHash(lastSrcBranchHash), dstHash=self.ShortHash(commitHash))
                         logger.info(msg)
                 elif branchName is not None:
                     # Cherry pick onto destination and merge into all the children.
@@ -2522,7 +2522,7 @@ class AccuRev2Git(object):
                         msgSuffix = "Accurev 'from stream' information missing."
                     else:
                         msgSuffix = "Source stream {name} (id: {number}) is not tracked.".format(name=srcStreamName, number=srcStreamNumber)
-                    logger.info("{trType} {tr}. Cherry-picked into {dst} {dstHash}. {suffix}".format(trType=tr.Type, tr=tr.id, dst=branchName, dstHash=self.ShortHash(commitHash), suffix=msgSuffix))
+                    logger.info("{trType} {tr}. Cherry pick into {dst} {dstHash}. {suffix}".format(trType=tr.Type, tr=tr.id, dst=branchName, dstHash=self.ShortHash(commitHash), suffix=msgSuffix))
                 else:
                     logger.info("{trType} {tr}. destination stream {dst} (id: {num}) is not tracked.".format(trType=tr.Type, tr=tr.id, dst=streamName, num=streamNumber))
 
