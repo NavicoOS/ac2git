@@ -2068,7 +2068,10 @@ class AccuRev2Git(object):
         return None
     
     def GitDiff(self, ref1, ref2):
-        diff = self.gitRepo.diff(refs=[ref1, ref2], stat=True)
+        # The `git diff --stat` and `git diff` commands have different behavior w.r.t. .git/info/attributes file:
+        # http://stackoverflow.com/questions/10415100/want-to-exclude-file-from-git-diff#comment29471399_10421385
+        # therefore ensure not to use the `--stat` flag.
+        diff = self.gitRepo.diff(refs=[ref1, ref2], stat=False)
         if diff is None:
             raise Exception("Failed to diff {r1} to {r2}! Cmd: {cmd}, Err: {err}".format(r1=ref1, r2=ref2, cmd=' '.join(cmd), err=self.gitRepo.lastStderr))
         return diff.strip()
@@ -2135,9 +2138,8 @@ class AccuRev2Git(object):
                 # Do a diff
                 parents = None # Used to decide if we need to perform the commit. If None, don't commit, otherwise we manually set the parent chain.
                 diff = self.GitDiff(lastCommitHash, childStreamData["data_hash"])
-                if diff is None:
-                    raise Exception("Failed to diff branch {nBr} to branch {oBr}! Cmd: {cmd}, Err: {err}".format(nBr=childBranchName, oBr=branchName, cmd=' '.join(cmd), err=self.gitRepo.lastStderr))
-                elif len(diff.strip()) == 0:
+
+                if len(diff) == 0:
                     if self.GitMergeBase(refs=[ lastChildCommitHash, lastCommitHash ], isAncestor=True):
                         # Fast-forward the child branch to here.
                         if self.UpdateAndCheckoutRef(ref='refs/heads/{branch}'.format(branch=childBranchName), commitHash=lastCommitHash, checkout=False) != True:
@@ -2488,9 +2490,7 @@ class AccuRev2Git(object):
                     # Do a git diff between the two data commits that we will be merging.
                     diff = self.GitDiff(streamData["data_hash"], lastSrcBranchHash)
 
-                    if diff is None:
-                        raise Exception("Failed to diff new branch {nBr} to old branch {oBr}! Cmd: {cmd}, Err: {err}".format(nBr=branchName, oBr=srcBranchName, cmd=' '.join(cmd), err=self.gitRepo.lastStderr))
-                    elif len(diff.strip()) == 0:
+                    if len(diff) == 0:
                         parents = [ self.GetLastCommitHash(branchName=branchName) ]
                         isAncestor = self.GitMergeBase(refs=[ lastSrcBranchHash, parents[0] ], isAncestor=True)
                         assert isAncestor is not None, "Invariant error! Failed to determine merge base between {c1} and {c2}!".format(c1=lastSrcBranchHash, c2=parents[0])
