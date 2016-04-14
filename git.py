@@ -27,6 +27,40 @@ gitCmd = u'git'
 #  - `git commit --allow-empty -m "Initial commit"` on an empty repository and inspecting that commit's tree hash.
 emptyTreeHash = u'4b825dc642cb6eb9a060e54bf8d69288fbee4904'
 
+# When using the subprocess module with git it becomes more than a little annoying when it comes to encodings.
+# For the real issue refer to this SO answer: 
+#   http://stackoverflow.com/a/19436421/1667513
+#   "git is dumping out raw bytes. In this case, it doesn't care what your file's encoding is."
+# Basically, some git commands, like diff, will have an output encoding that will match the file and not the
+# actual encoding of sys.stdin.encoding.
+# On my Fedora21 machine for one particular repository the encoding that works seems to be the iso-8859-1 but that will
+# depend entirely on what encoding the files were committed with. Hence, we should simply try and decode the file
+# with some potential encodings and return the first one that works.
+#   The global variable git_output_encodings is a list of encodings that will be attempted in-order when trying
+# to decode the output of git commands. The first one that successfully decodes the string is returned.
+git_output_encodings = [ 'iso-8859-1', 'utf-8' ]
+
+def normalize_newlines(s):
+    if s is None:
+        return None
+    if not isinstance(s, str):
+        s = str(s)
+    return s.replace('\r\n', '\n').replace('\r', '\n')
+
+def decode_proc_output(o):
+    if o is None:
+        return None
+
+    s = o
+    if not isinstance(s, str):
+        for e in git_output_encodings:
+            try:
+                s = o.decode(e)
+                break
+            except:
+                pass
+    return normalize_newlines(s)
+
 class GitStatus(object):
     # Regular expressions used in fromgitoutput classmethod for parsing the different git lines.
     branchRe        = re.compile(pattern=r'^(HEAD detached at |HEAD detached from |On branch )(\S+)$')
@@ -382,22 +416,22 @@ class repo(object):
         self._lastCommand = None
     
     def _docmd(self, cmd, env=None):
-        process = subprocess.Popen(args=cmd, cwd=self.path, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+        process = subprocess.Popen(args=cmd, cwd=self.path, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=False)
 
         output = ''
         error  = ''
         process.poll()
         while process.returncode is None:
             stdoutdata, stderrdata = process.communicate()
-            output += stdoutdata
-            error  += stderrdata
+            output += decode_proc_output( stdoutdata )
+            error  += decode_proc_output( stderrdata )
             process.poll()
 
         if len(output) + len(error) == 0:
             try:
                 stdoutdata, stderrdata = process.communicate()
-                output += stdoutdata
-                error  += stderrdata
+                output += decode_proc_output( stdoutdata )
+                error  += decode_proc_output( stderrdata )
             except:
                 pass
         
