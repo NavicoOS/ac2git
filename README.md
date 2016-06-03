@@ -102,6 +102,14 @@ On Windows you might need to find where the command `true` lives but it should b
 
 - `Accurev 5.4.0 (2012/01/21)`, `git version 2.5.0.windows.1` and `Python 3.5.1` on a windows 8.1 Pro host.
 
+##### Known compatibility issues #####
+
+- Fails with `Accurev 4.7.2 (05/08/2009)` due to malformed XML for `mkstream` transactions. The `<transaction ... /></transaction>` type construct is invalid and python refuses to parse it. It would require rewriting the `accurev.py` script to handle it.
+
+- Fails with `python 3.1` due to using prefixed `u'string literals'`, minimum python that has them is `python 3.3`. Changing `u'some string'` to `'some string'` would fix the issue.
+
+- Fails with `git 1.7` due to missing `-C` flag. Not sure when this flag was added to git.
+
 #### Version 0.2 and earlier were tested with ####
 - `Accurev 6.1.1 (2014/05/05)`, `git version 2.1.0` and `Python 2.7.8` on a Fedora 21 host.
 
