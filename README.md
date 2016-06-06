@@ -104,7 +104,10 @@ On Windows you might need to find where the command `true` lives but it should b
 
 ##### Known compatibility issues #####
 
-- Fails with `Accurev 4.7.2 (05/08/2009)` due to malformed XML for `mkstream` transactions. The `<transaction ... /></transaction>` type construct is invalid and python refuses to parse it. It would require rewriting the `accurev.py` script to handle it.
+- Fails with `Accurev 4.7.2 (05/08/2009)` due to:
+ + malformed XML for `mkstream` transactions. The `<transaction ... /></transaction>` type construct is invalid and python refuses to parse it. It would require rewriting the `accurev.py` script to handle it.
+ + The `accurev pop` command does not have the `-t` option. (It is not possible to get past versions of the source code without a workspace)
+ + The `accurev diff -a -i -v -V` command does not have the `-t` option. (Inferring incremental changes becomes impossible)
 
 - Fails with `python 3.1` due to using prefixed `u'string literals'`, minimum python that has them is `python 3.3`. Changing `u'some string'` to `'some string'` would fix the issue.
 
