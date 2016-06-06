@@ -109,6 +109,8 @@ On Windows you might need to find where the command `true` lives but it should b
  + The `accurev pop` command does not have the `-t` option. (It is not possible to get past versions of the source code without a workspace)
  + The `accurev diff -a -i -v -V` command does not have the `-t` option. (Inferring incremental changes becomes impossible)
 
+_Note: It may be possible to convert an `Accurev 4.7` depot by creating a single workspace that starts at transaction 1 and updating the workspace to every transaction up to `highest`, commiting into git if there are any differences._
+
 - Fails with `python 3.1` due to using prefixed `u'string literals'`, minimum python that has them is `python 3.3`. Changing `u'some string'` to `'some string'` would fix the issue.
 
 - Fails with `git 1.7` due to missing `-C` flag. Not sure when this flag was added to git.
