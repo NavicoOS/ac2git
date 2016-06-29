@@ -922,6 +922,11 @@ class AccuRev2Git(object):
                     break
         return depots, depotsXml
 
+    def NormalizeAccurevXml(self, xml):
+        xmlNormalized = re.sub('TaskId="[0-9]+"', 'TaskId="0"', xml)
+        xmlDecoded = git.decode_proc_output(xmlNormalized)
+        return xmlDecoded
+
     def WriteInfoFiles(self, path, depot, transaction, streamsXml=None, histXml=None, streamName=None, diffXml=None, useCommandCache=False):
         streams = None
         hist = None
@@ -956,16 +961,16 @@ class AccuRev2Git(object):
                     return (None, None)
 
             diffFilePath = os.path.join(self.gitRepo.path, 'diff.xml')
-            with codecs.open(diffFilePath, 'w') as f:
-                f.write(re.sub('TaskId="[0-9]+"', 'TaskId="0"', diffXml))
+            with codecs.open(diffFilePath, mode='w', encoding='utf-8') as f:
+                f.write(self.NormalizeAccurevXml(diffXml))
 
         streamsFilePath = os.path.join(path, 'streams.xml')
-        with codecs.open(streamsFilePath, 'w') as f:
-            f.write(re.sub('TaskId="[0-9]+"', 'TaskId="0"', streamsXml))
+        with codecs.open(streamsFilePath, mode='w', encoding='utf-8') as f:
+            f.write(self.NormalizeAccurevXml(streamsXml))
         
         histFilePath = os.path.join(path, 'hist.xml')
-        with codecs.open(histFilePath, 'w') as f:
-            f.write(re.sub('TaskId="[0-9]+"', 'TaskId="0"', histXml))
+        with codecs.open(histFilePath, mode='w', encoding='utf-8') as f:
+            f.write(self.NormalizeAccurevXml(histXml))
 
     # GetDepotRefsNamespace
     # When depot is None it returns the git ref namespace where all depots are under.
