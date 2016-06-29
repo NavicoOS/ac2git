@@ -674,7 +674,7 @@ class AccuRev2Git(object):
 
         # Create temporary file for the commit message.
         messageFilePath = None
-        with tempfile.NamedTemporaryFile(mode='w+', prefix='ac2git_commit_', delete=False) as messageFile:
+        with tempfile.NamedTemporaryFile(mode='w+', prefix='ac2git_commit_', encoding='utf-8', delete=False) as messageFile:
             messageFilePath = messageFile.name
             emptyMessage = True
             if messageOverride is not None:
@@ -1698,7 +1698,7 @@ class AccuRev2Git(object):
     def AddNote(self, transaction, commitHash, ref, note, committerName=None, committerEmail=None, committerDate=None, committerTimezone=None):
         notesFilePath = None
         if note is not None:
-            with tempfile.NamedTemporaryFile(mode='w+', prefix='ac2git_note_', delete=False) as notesFile:
+            with tempfile.NamedTemporaryFile(mode='w+', prefix='ac2git_note_', encoding='utf-8', delete=False) as notesFile:
                 notesFilePath = notesFile.name
                 notesFile.write(note)
 
@@ -2569,7 +2569,7 @@ class AccuRev2Git(object):
     def WriteFileRef(self, ref, text):
         if ref is not None and text is not None and len(text) > 0:
             filePath = None
-            with tempfile.NamedTemporaryFile(mode='w+', prefix='ac2git_ref_file_', delete=False) as f:
+            with tempfile.NamedTemporaryFile(mode='w+', prefix='ac2git_ref_file_', encoding='utf-8', delete=False) as f:
                 filePath = f.name
                 f.write(text)
             if filePath is not None:
