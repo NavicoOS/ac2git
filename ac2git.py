@@ -1802,15 +1802,19 @@ class AccuRev2Git(object):
                 if commitHash is not None:
                     parents = [ commitHash ]
                 else:
+                    # At the time the stream was created the current basis or time lock may not have
+                    # been in effect. Hence we need the streams state at the given transaction.
+                    streamAtTr = streams.getStream(stream.streamNumber)
+
                     # Note: if the streamMap is None the basisBranchName, basisCommitHash and streamTime will all be None and only the basisStream will be returned, hence this argument
                     #       serves a dual purpose and can be used to control if this function attaches the processed branch to its basis. If you want an orphan branch pass in the streamMap
                     #       as None.
-                    basisStream, basisBranchName, basisCommitHash, streamTime = self.GetBasisCommitHash(stream.name, stream.streamNumber, stream.basisStreamNumber, stream.time, streams, streamMap, None)
+                    basisStream, basisBranchName, basisCommitHash, streamTime = self.GetBasisCommitHash(streamAtTr.name, streamAtTr.streamNumber, streamAtTr.basisStreamNumber, streamAtTr.time, streams, streamMap, None)
                     if basisBranchName is not None and basisCommitHash is None:
                         # The basis stream we found is tracked but there isn't a commit for it? This means that we are being processed first even though we should have processed the basis first...
                         self.ProcessStream(stream=basisStream, branchName=branchName, startTrId=startTrId, endTrId=endTrId, streamMap=streamMap)
                         # Try again, but this time we don't care if it fails since that must mean that we can't do anything about it.
-                        basisStream, basisBranchName, basisCommitHash, streamTime = self.GetBasisCommitHash(stream.name, stream.streamNumber, stream.basisStreamNumber, stream.time, streams, streamMap, None)
+                        basisStream, basisBranchName, basisCommitHash, streamTime = self.GetBasisCommitHash(streamAtTr.name, streamAtTr.streamNumber, streamAtTr.basisStreamNumber, streamAtTr.time, streams, streamMap, None)
 
                     if basisCommitHash is None:
                         logger.info( "Creating orphan branch {branchName}.".format(branchName=branchName) )
