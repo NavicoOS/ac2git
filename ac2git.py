@@ -42,6 +42,14 @@ def utc2local(utc):
     offset = datetime.fromtimestamp (epoch) - datetime.utcfromtimestamp (epoch)
     return utc + offset
 
+# The min() function returns None if either artument is None. This function
+# returns the non-None argument if one argument is None or the result of
+# min() if neither is None.
+def NonNoneMin(*args):
+    for i in xrange(args.count(None)):
+        args.remove(None)
+
+    return min(args)
 
 # ################################################################################################ #
 # Script Classes                                                                                   #
@@ -1802,6 +1810,10 @@ class AccuRev2Git(object):
                 if commitHash is not None:
                     parents = [ commitHash ]
                 else:
+                    # Invariant: The commitHash being None implies that this is
+                    # the first commit for this stream and hence this must be a
+                    # mkstream transaction.
+
                     # At the time the stream was created the current basis or time lock may not have
                     # been in effect. Hence we need the streams state at the given transaction.
                     streamAtTr = streams.getStream(stream.streamNumber)
@@ -1809,12 +1821,12 @@ class AccuRev2Git(object):
                     # Note: if the streamMap is None the basisBranchName, basisCommitHash and streamTime will all be None and only the basisStream will be returned, hence this argument
                     #       serves a dual purpose and can be used to control if this function attaches the processed branch to its basis. If you want an orphan branch pass in the streamMap
                     #       as None.
-                    basisStream, basisBranchName, basisCommitHash, streamTime = self.GetBasisCommitHash(streamAtTr.name, streamAtTr.streamNumber, streamAtTr.basisStreamNumber, streamAtTr.time, streams, streamMap, None)
+                    basisStream, basisBranchName, basisCommitHash, streamTime = self.GetBasisCommitHash(streamAtTr.name, streamAtTr.streamNumber, streamAtTr.basisStreamNumber, streamAtTr.time, streams, streamMap, None, streamAtTr.startTime)
                     if basisBranchName is not None and basisCommitHash is None:
                         # The basis stream we found is tracked but there isn't a commit for it? This means that we are being processed first even though we should have processed the basis first...
                         self.ProcessStream(stream=basisStream, branchName=branchName, startTrId=startTrId, endTrId=endTrId, streamMap=streamMap)
                         # Try again, but this time we don't care if it fails since that must mean that we can't do anything about it.
-                        basisStream, basisBranchName, basisCommitHash, streamTime = self.GetBasisCommitHash(streamAtTr.name, streamAtTr.streamNumber, streamAtTr.basisStreamNumber, streamAtTr.time, streams, streamMap, None)
+                        basisStream, basisBranchName, basisCommitHash, streamTime = self.GetBasisCommitHash(streamAtTr.name, streamAtTr.streamNumber, streamAtTr.basisStreamNumber, streamAtTr.time, streams, streamMap, None, streamAtTr.startTime)
 
                     if basisCommitHash is None:
                         logger.info( "Creating orphan branch {branchName}.".format(branchName=branchName) )
@@ -2213,7 +2225,7 @@ class AccuRev2Git(object):
         cmd = [u'git', u'log', u'-1', u'--format=format:{format}'.format(format=customFormat), u'--first-parent', u'--max-parents=0', ref]
         return self.TryGitCommand(cmd=cmd)
 
-    def GetBasisCommitHash(self, streamName, streamNumber, streamBasisNumber, streamTime, streams, streamMap, affectedStreamMap):
+    def GetBasisCommitHash(self, streamName, streamNumber, streamBasisNumber, streamTime, streams, streamMap, affectedStreamMap, streamCreationTime):
         # Get the current/new basis stream
         basisStream, basisBranchName, basisStreamData, basisTreeHash = self.UnpackStreamDetails(streams=streams, streamMap=streamMap, affectedStreamMap=affectedStreamMap, streamNumber=streamBasisNumber)
         minTimestamp = None if streamTime is None or accurev.GetTimestamp(streamTime) == 0 else accurev.GetTimestamp(streamTime)
@@ -2222,7 +2234,7 @@ class AccuRev2Git(object):
             if basisStream.time is not None:
                 basisTimestamp = accurev.GetTimestamp(basisStream.time)
                 if basisTimestamp != 0:
-                    minTimestamp = basisTimestamp if minTimestamp is None else min(minTimestamp, basisTimestamp)
+                    minTimestamp = NonNoneMin(minTimestamp, basisTimestamp)
             # Make the basis streams basis our basis and try again...
             basisStream, basisBranchName, basisStreamData, basisTreeHash = self.UnpackStreamDetails(streams=streams, streamMap=streamMap, affectedStreamMap=affectedStreamMap, streamNumber=basisStream.basisStreamNumber)
 
@@ -2233,6 +2245,17 @@ class AccuRev2Git(object):
             logger.debug("GetBasisCommitHash: One of the parent streams had an earlier timelock.")
             logger.debug("  - Stream timelock:          {ts} ({t})".format(ts=accurev.GetTimestamp(streamTime), t=streamTime))
             logger.debug("  - Earliest parent timelock: {ts} ({t})".format(ts=minTimestamp, t=accurev.UTCDateTimeOrNone(minTimestamp)))
+
+        if streamCreationTime is not None:
+            streamCreationTimestamp = accurev.GetTimestamp(streamCreationTime)
+            if minTimestamp is None:
+                logger.debug("GetBasisCommitHash: streamCreationTime specified but no timelock found.")
+                logger.debug("  - streamCreationTime will replace the timelock in further processing.")
+                minTime, minTimestamp = streamCreationTime, streamCreationTimestamp
+            elif streamCreationTimestamp < minTimestamp:
+                logger.warning("GetBasisCommitHash: streamCreationTime is earlier than the timelock!")
+                logger.warning("  - streamCreationTime will replace the timelock in further processing.")
+                minTime, minTimestamp = streamCreationTime, streamCreationTimestamp
 
         if basisBranchName is not None:
             basisBranchHistoryRef = self.GetStreamCommitHistoryRef(basisStream.depotName, basisStream.streamNumber)
@@ -2368,7 +2391,7 @@ class AccuRev2Git(object):
                 if prevTime is None:
                     prevTime = tr.stream.time
 
-                prevBasisStream, prevBasisBranchName, prevBasisCommitHash, prevStreamTime = self.GetBasisCommitHash(tr.stream.name, tr.stream.streamNumber, prevBasisStreamNumber, prevTime, prevStreams, streamMap, affectedStreamMap)
+                prevBasisStream, prevBasisBranchName, prevBasisCommitHash, prevStreamTime = self.GetBasisCommitHash(tr.stream.name, tr.stream.streamNumber, prevBasisStreamNumber, prevTime, prevStreams, streamMap, affectedStreamMap, None)
                 if prevBasisBranchName is not None and prevBasisCommitHash is None:
                     raise Exception("Couldn't determine the last basis commit hash.")
 
@@ -2380,7 +2403,7 @@ class AccuRev2Git(object):
                 raise Exception("Not yet implemented! {trId} {trType}, unrecognized transaction type.".format(trId=tr.id, trType=tr.Type))
 
             # Get the commit hash off which we should be based off from this chstream transaction forward.
-            basisStream, basisBranchName, basisCommitHash, streamTime = self.GetBasisCommitHash(stream.name, stream.streamNumber, stream.basisStreamNumber, stream.time, streams, streamMap, affectedStreamMap)
+            basisStream, basisBranchName, basisCommitHash, streamTime = self.GetBasisCommitHash(stream.name, stream.streamNumber, stream.basisStreamNumber, stream.time, streams, streamMap, affectedStreamMap, None)
             if basisCommitHash is None:
                 title = "{title} orphaned branch.".format(title=title)
             else:

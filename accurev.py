@@ -322,13 +322,13 @@ class obj:
             self.Type                  = Type
             self.basis                 = basis
             self.basisStreamNumber     = IntOrNone(basisStreamNumber)
-            self.time                  = UTCDateTimeOrNone(time)
+            self.time                  = UTCDateTimeOrNone(time)           # Represents the timelock
             self.prevTime              = UTCDateTimeOrNone(prevTime)
             self.prevBasis             = prevBasis
             self.prevBasisStreamNumber = IntOrNone(prevBasisStreamNumber)
             self.prevName              = prevName
             self.workspace             = workspace
-            self.startTime             = UTCDateTimeOrNone(startTime)
+            self.startTime             = UTCDateTimeOrNone(startTime)      # The time at which the last mkstream or chstream transaction was recorded for this stream
             self.isDynamic             = obj.Bool.fromstring(isDynamic)
             self.hasDefaultGroup       = obj.Bool.fromstring(hasDefaultGroup)
     
