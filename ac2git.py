@@ -1542,6 +1542,9 @@ class AccuRev2Git(object):
 
         depot  = self.config.accurev.depot
         endTrHist = accurev.hist(depot=depot, timeSpec=self.config.accurev.endTransaction)
+        if endTrHist is None or endTrHist.transactions is None or len(endTrHist.transactions) == 0:
+            logger.error( "Failed to get end transaction for depot {0}. `accurev hist -p {0} -t {1}` returned no transactions. Please make sure the depot name is spelled correctly and that the transaction number/keyword is valid.".format(depot, self.config.accurev.endTransaction) )
+            return
         endTr = endTrHist.transactions[0]
 
         # Retrieve stream information from Accurev and store it inside git.
