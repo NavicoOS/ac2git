@@ -597,7 +597,7 @@ class AccuRev2Git(object):
                 cmd.append(branchName)
         else:
             # See http://stackoverflow.com/questions/13987273/git-log-filter-by-commits-author-date
-            raise Exception("Not yet implemented! The search for a commit by date when the author time is not the same as the commiter time can't use the --before flag for git log.")
+            raise Exception("Not yet implemented! The search for a commit by date when the author time is not the same as the commiter time can't use the --before flag for git log. Please set the author-is-committer option to 'true' in your configuration file and run again.")
 
         commitHash = self.TryGitCommand(cmd=cmd, retry=retry)
 
