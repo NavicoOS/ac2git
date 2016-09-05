@@ -2010,11 +2010,22 @@ class AccuRev2Git(object):
             "*": "_",
             "[": "_",
             "\\": "/",
-            "@{": "_"
+            "@{": "_",
+            " ": "_"
         }
         for s in illegalSequence:
             name = name.replace(s, illegalSequence[s])
+        
+        # Remove control characters
+        nonControl = ""
+        for ch in name:
+            if ord(ch) <= 40:
+                nonControl += '_'
+            else:
+                nonControl += ch
+        name = nonControl
 
+        # Sanitize components
         name = "/".join([self.SanitizeRefComponent(x) for x in name.split('/')])
 
         illegalEnding = {
