@@ -35,6 +35,8 @@ import git
 
 logger = None
 
+ignored_transaction_types = [ "archive", "compress", "defcomp", "dispatch", "unarchive" ]
+
 # Taken from this StackOverflow answer: http://stackoverflow.com/a/19238551
 # Compulsary quote: https://twitter.com/codinghorror/status/712467615780708352
 def utc2local(utc):
@@ -814,14 +816,17 @@ class AccuRev2Git(object):
             # Find the next transaction
             for tr in deepHist:
                 if tr.id > startTrNumber:
-                    diff, diffXml = self.TryDiff(streamName=streamName, firstTrNumber=startTrNumber, secondTrNumber=tr.id)
-                    if diff is None:
-                        return (None, None)
-                    elif len(diff.elements) > 0:
-                        logger.debug("FindNextChangeTransaction deep-hist: {0}".format(tr.id))
-                        return (tr.id, diff)
+                    if tr.Type in ignored_transaction_types:
+                        logger.debug("Ignoring transaction #{id} - {Type} (transaction type is in ignored_transaction_types list)".format(id=tr.id, Type=tr.Type))
                     else:
-                        logger.debug("FindNextChangeTransaction deep-hist skipping: {0}, diff was empty...".format(tr.id))
+                        diff, diffXml = self.TryDiff(streamName=streamName, firstTrNumber=startTrNumber, secondTrNumber=tr.id)
+                        if diff is None:
+                            return (None, None)
+                        elif len(diff.elements) > 0:
+                            logger.debug("FindNextChangeTransaction deep-hist: {0}".format(tr.id))
+                            return (tr.id, diff)
+                        else:
+                            logger.debug("FindNextChangeTransaction deep-hist skipping: {0}, diff was empty...".format(tr.id))
 
             diff, diffXml = self.TryDiff(streamName=streamName, firstTrNumber=startTrNumber, secondTrNumber=endTrNumber)
             return (endTrNumber + 1, diff) # The end transaction number is inclusive. We need to return the one after it.
@@ -2333,8 +2338,8 @@ class AccuRev2Git(object):
         stream, branchName, streamData, treeHash = self.UnpackStreamDetails(streams=streams, streamMap=streamMap, affectedStreamMap=affectedStreamMap, streamNumber=streamNumber)
 
         # Process the transaction based on type.
-        if tr.Type in [ "defcomp" ]: # Ignored transactions.
-            logger.info("Ignoring transaction #{id} - {Type}".format(id=tr.id, Type=tr.Type))
+        if tr.Type in ignored_transaction_types: # Ignored transactions.
+            logger.info("Ignoring transaction #{id} - {Type} (transaction type is in ignored_transaction_types list)".format(id=tr.id, Type=tr.Type))
 
         elif tr.Type in [ "mkstream", "chstream" ]:
             parents = None
@@ -3511,6 +3516,7 @@ def PrintConfigSummary(config, filename):
         logger.info('    end tran.:   #{0}'.format(config.accurev.endTransaction))
         logger.info('    username: {0}'.format(config.accurev.username))
         logger.info('    command cache: {0}'.format(config.accurev.commandCacheFilename))
+        logger.info('    ignored transaction types (hard-coded): {0}'.format(", ".join(ignored_transaction_types)))
         logger.info('  method: {0}'.format(config.method))
         logger.info('  merge strategy: {0}'.format(config.mergeStrategy))
         logger.info('  usermaps: {0}'.format(len(config.usermaps)))
