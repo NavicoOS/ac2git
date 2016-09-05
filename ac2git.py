@@ -1745,11 +1745,13 @@ class AccuRev2Git(object):
             assert stateRef is not None and dataRef is not None and len(stateRef) != 0 and len(dataRef) != 0, "Invariant error! The state ({sr}) and data ({dr}) refs must not be None!".format(sr=stateRef, dr=dataRef)
 
             if branchName is None:
-                branchName = self.SanitizeBranchName(stream.name)
-            else:
-                branchName = self.SanitizeBranchName(branchName)
+                branchName = stream.name
 
             branchRef = 'refs/heads/{branchName}'.format(branchName=branchName)
+            sanitizedRef = self.SanitizeRefName(branchRef)
+            if branchRef != sanitizedRef:
+                logger.warning("Branch name '{0}' is not allowed, renamed to '{1}'.".format(branchRef[len("refs/heads/"):], sanitizedRef[len("refs/heads/"):]))
+                branchRef = sanitizedRef
 
             branchList = self.gitRepo.branch_list()
             if branchList is None:
@@ -1984,9 +1986,57 @@ class AccuRev2Git(object):
 
         return ('\n\n'.join(messageSections), notes)
 
-    def SanitizeBranchName(self, name):
-        name = name.replace(' ', '_').strip()
+    def SanitizeRefComponent(self, component):
+        if component is None or len(component) == 0:
+            return component
+        # If it starts with a dot, remove the dot
+        if component[0] == '.':
+            component = component[1:]
+        # If it ends with .lock, remove the .lock
+        if component.endswith(".lock"):
+            component = component[:-len(".lock")]
+        return component
+
+    def SanitizeRefName(self, name):
+        if name is None or len(name) == 0:
+            return name
+
+        while "//" in name:
+            name = name.replace("//", "/")
+
+        illegalSequence = {
+            "..": "__",
+            "?": "_",
+            "*": "_",
+            "[": "_",
+            "\\": "/",
+            "@{": "_"
+        }
+        for s in illegalSequence:
+            name = name.replace(s, illegalSequence[s])
+
+        name = "/".join([self.SanitizeRefComponent(x) for x in name.split('/')])
+
+        illegalEnding = {
+            ".": "",
+            "/": "/_"
+        }
+        for e in illegalEnding:
+            if name[-1] == e:
+                name = name[:-1] + illegalEnding[e]
+
+        if name == "@":
+            return "_"
+
         return name
+
+    def SanitizeBranchName(self, name):
+        if name is None or len(name) == 0:
+            return name
+        sanitized = self.SanitizeRefName("refs/heads/{0}".format(name))
+        if sanitized is None or len(sanitized) == 0:
+            return sanitized
+        return sanitized[len("refs/heads/"):]
 
     def BuildStreamTree(self, streams):
         rv = {}
