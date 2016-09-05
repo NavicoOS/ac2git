@@ -1973,7 +1973,8 @@ class AccuRev2Git(object):
             raise Exception("Unrecognized git message style '{s}'".format(s=style))
 
         if cherryPickSrcHash is not None:
-            messageSections[0] = "(CP) {0}".format(messageSections[0])
+            if len(messageSections) > 0:
+                messageSections[0] = "(CP) {0}".format(messageSections[0])
             messageSections.append("(cherry picked from commit {hash})".format(hash=cherryPickSrcHash))
 
         return ('\n\n'.join(messageSections), notes)
