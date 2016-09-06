@@ -68,9 +68,13 @@ class Config(object):
                 endTransaction   = xmlElement.attrib.get('end-transaction')
                 commandCacheFilename = xmlElement.attrib.get('command-cache-filename')
                 
+                excludeStreamTypes = None
                 streamMap = None
                 streamListElement = xmlElement.find('stream-list')
                 if streamListElement is not None:
+                    excludeStreamTypes = streamListElement.attrib.get("exclude-types")
+                    if excludeStreamTypes is not None:
+                        excludeStreamTypes = [x.strip() for x in excludeStreamTypes.split(',') if len(x.strip()) > 0]
                     streamMap = OrderedDict()
                     streamElementList = streamListElement.findall('stream')
                     for streamElement in streamElementList:
@@ -81,11 +85,11 @@ class Config(object):
 
                         streamMap[streamName] = branchName
                 
-                return cls(depot, username, password, startTransaction, endTransaction, streamMap, commandCacheFilename)
+                return cls(depot, username, password, startTransaction, endTransaction, streamMap, commandCacheFilename, excludeStreamTypes)
             else:
                 return None
             
-        def __init__(self, depot = None, username = None, password = None, startTransaction = None, endTransaction = None, streamMap = None, commandCacheFilename = None):
+        def __init__(self, depot = None, username = None, password = None, startTransaction = None, endTransaction = None, streamMap = None, commandCacheFilename = None, excludeStreamTypes = None):
             self.depot    = depot
             self.username = username
             self.password = password
@@ -93,6 +97,7 @@ class Config(object):
             self.endTransaction   = endTransaction
             self.streamMap = streamMap
             self.commandCacheFilename = commandCacheFilename
+            self.excludeStreamTypes = excludeStreamTypes
     
         def __repr__(self):
             str = "Config.AccuRev(depot=" + repr(self.depot)
@@ -787,6 +792,9 @@ class AccuRev2Git(object):
             # When the stream map is missing or empty we intend to process all streams
             streams = accurev.show.streams(depot=self.config.accurev.depot)
             for stream in streams.streams:
+                if self.config.accurev.excludeStreamTypes is not None and stream.Type in self.config.accurev.excludeStreamTypes:
+                    logger.info("Excluded stream '{0}' of type '{1}'".format(stream.name, stream.Type))
+                    continue
                 streamMap[stream.name] = self.SanitizeBranchName(stream.name)
 
         return streamMap
@@ -3159,9 +3167,12 @@ def DumpExampleConfigFile(outputFilename):
         start-transaction="1" 
         end-transaction="now" 
         command-cache-filename="command_cache.sqlite3" >
-        <!-- The stream-list is optional. If not given all streams are processed -->
+        <!-- The stream-list is optional. If not given all streams are processed
+                exclude-types:   A comma separated list of stream types that are to be excluded from being automatically added. Doesn't exclude streams that were explicitly specified.
+                                 The stream types have to match the stream types returned by Accurev in its command line client's XML output. Example list: "normal, workspace, snapshot".
+         -->
         <!-- The branch-name attribute is also optional for each stream element. If provided it specifies the git branch name to which the stream will be mapped. -->
-        <stream-list>
+        <stream-list exclude-types="workspace">
             <stream branch-name="some_branch">some_stream</stream>
             <stream>some_other_stream</stream>
         </stream-list>
@@ -3320,7 +3331,11 @@ def AutoConfigFile(filename, args, preserveConfig=False):
         command-cache-filename="command_cache.sqlite3" >
         <!-- The stream-list is optional. If not given all streams are processed -->
         <!-- The branch-name attribute is also optional for each stream element. If provided it specifies the git branch name to which the stream will be mapped. -->
-        <stream-list>""".format(accurev_username=config.accurev.username, accurev_password=config.accurev.password, accurev_depot=config.accurev.depot, start_transaction=1, end_transaction="now"))
+        <stream-list{exclude_types}>""".format(accurev_username=config.accurev.username,
+                                               accurev_password=config.accurev.password,
+                                               accurev_depot=config.accurev.depot,
+                                               start_transaction=1, end_transaction="now",
+                                               exclude_types="" if self.config.excludeStreamTypes is None else " {0}".format(", ".join(self.config.excludeStreamTypes))))
 
         if preserveConfig:
             for stream in config.accurev.streamMap:
