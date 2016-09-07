@@ -2166,11 +2166,11 @@ class AccuRev2Git(object):
             raise Exception("Failed to commit {Type} {tr} to hidden state ref {ref} with commit {h}".format(Type=tr.Type, tr=tr.id, ref=streamStateRefspec, h=self.ShortHash(commitHash)))
         logger.debug("Committed stream state for {streamName} to {ref} - tr. {trType} {trId} - commit {h}".format(trType=tr.Type, trId=tr.id, streamName=stream.name, ref=streamStateRefspec, h=self.ShortHash(stateCommitHash)))
 
-    def CommitTransaction(self, tr, stream, parents=None, treeHash=None, branchName=None, title=None, srcStream=None, dstStream=None, friendlyMessage=None, cherryPickSrcHash=None):
+    def CommitTransaction(self, tr, stream, parents=None, treeHash=None, branchName=None, title=None, srcStream=None, dstStream=None, friendlyMessage=None, cherryPickSrcHash=None, refNamespace='refs/heads/'):
         assert branchName is not None, "Error: CommitTransaction() is a helper for ProcessTransaction() and doesn't accept branchName as None."
 
         branchRef = None
-        branchRef = 'refs/heads/{branch}'.format(branch=branchName)
+        branchRef = '{ns}{branch}'.format(ns=refNamespace, branch=branchName)
         checkout = (branchName is None)
 
         commitMessage, notes = self.GenerateCommitMessage(transaction=tr, stream=stream, title=title, friendlyMessage=friendlyMessage, srcStream=srcStream, dstStream=dstStream, cherryPickSrcHash=cherryPickSrcHash)
@@ -2444,6 +2444,7 @@ class AccuRev2Git(object):
             title = None
             targetStreams = []
             prevBasisCommitHash = None
+            refNamespace = 'refs/heads/'
             if tr.Type == "mkstream":
                 # Old versions of accurev don't tell you the name of the stream that was created in the mkstream transaction.
                 # The only way to find out what stream was created is to diff the output of the `accurev show streams` command
@@ -2456,6 +2457,9 @@ class AccuRev2Git(object):
                 parents = [] # First, orphaned, commit is denoted with an empty parents list.
                 title = 'Created {name}'.format(name=branchName)
                 targetStreams.append( (stream, branchName, streamData, treeHash, parents) )
+
+                if stream.Type == "snapshot":
+                    refNamespace = 'refs/tags/'
             elif tr.Type == "chstream":
                 assert tr.stream is not None, "Invariant error! Can't handle not having a stream in the accurev hist XML output for a chstream transaction..."
 
@@ -2526,7 +2530,7 @@ class AccuRev2Git(object):
                         raise Exception("Error! The git merge-base command failed!")
                     elif amMergedIntoPrevBasis:
                         # Fast-forward the timelocked stream branch to the correct commit.
-                        if self.UpdateAndCheckoutRef(ref='refs/heads/{branch}'.format(branch=branchName), commitHash=basisCommitHash, checkout=False) != True:
+                        if self.UpdateAndCheckoutRef(ref='{ns}{branch}'.format(ns=refNamespace, branch=branchName), commitHash=basisCommitHash, checkout=False) != True:
                             raise Exception("Failed to fast-forward {branch} to {hash} (latest commit on {parentBranch}). Old basis {oldHash} on {oldParentBranch}. Title: {title}".format(branch=branchName, hash=self.ShortHash(basisCommitHash), parentBranch=basisBranchName, oldHash=self.ShortHash(prevBasisCommitHash), oldParentBranch=prevBasisBranchName, title=title))
                         parents = None # Do not commit!
                         logger.info("{trType} {trId}. Fast-forward {dst} to {b} {h}.".format(trType=tr.Type, trId=tr.id, b=basisBranchName, h=self.ShortHash(basisCommitHash), dst=branchName))
@@ -2544,7 +2548,7 @@ class AccuRev2Git(object):
                             basisTreeHash = self.GetTreeFromRef(ref=basisCommitHash)
                             if basisTreeHash == treeHash:
                                 # Fast-forward the created stream branch to the correct commit.
-                                if self.UpdateAndCheckoutRef(ref='refs/heads/{branch}'.format(branch=branchName), commitHash=basisCommitHash, checkout=False) != True:
+                                if self.UpdateAndCheckoutRef(ref='{ns}{branch}'.format(ns=refNamespace, branch=branchName), commitHash=basisCommitHash, checkout=False) != True:
                                     raise Exception("Failed to fast-forward {branch} to {hash} (latest commit on {parentBranch}).".format(branch=branchName, hash=self.ShortHash(basisCommitHash), parentBranch=basisBranchName))
                                 parents = None # Don't commit this mkstream since it doesn't introduce anything new.
                                 logger.info("{trInfo} Created {dst} on {b} at {h}".format(trInfo=trInfoMsg, b=basisBranchName, h=self.ShortHash(basisCommitHash), dst=branchName))
@@ -2563,7 +2567,7 @@ class AccuRev2Git(object):
                         if treeHash is None:
                             raise Exception("Couldn't get last tree for {trType} {trId} on untracked stream {s}. Message: {m}".format(trType=tr.Type, trId=tr.id, s=stream.name, m=title))
 
-                    commitHash = self.CommitTransaction(tr=tr, stream=stream, treeHash=treeHash, parents=parents, branchName=branchName, title=title)
+                    commitHash = self.CommitTransaction(tr=tr, stream=stream, treeHash=treeHash, parents=parents, branchName=branchName, title=title, refNamespace=refNamespace)
                     if commitHash is None:
                         raise Exception("Failed to commit chstream {trId}".format(trId=tr.id))
                     logger.info("{Type} {tr}. committed to {branch} {h}. {title}".format(Type=tr.Type, tr=tr.id, branch=branchName, h=self.ShortHash(commitHash), title=title))

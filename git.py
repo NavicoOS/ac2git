@@ -747,6 +747,38 @@ class repo(object):
             return GitStatus.fromgitoutput(output)
         return None
 
+    def create_tag(self, name, obj, force=False, annotated=False, signed=False, keyId=None, message=None, message_paragraphs=[], message_file=None):
+        cmd = [ gitCmd, u'tag' ]
+        
+        if name is None:
+            raise Exception("Name is required when creating a tag")
+        
+        # Handle mutually exclusive tag type arguments
+        if keyId is not None:
+            cmd.extend([u'-u', keyId])
+        elif signed:
+            cmd.append(u'-s')
+        elif annotated:
+            cmd.append(u'-a')
+        
+        # Handle mutually exclusive message arguments
+        if message_file is not None:
+            cmd.extend([u'-F', message_file])
+        elif len(message_paragraphs) > 0:
+            for paragraph in message_paragraphs:
+                cmd.extend([u'-m', paragraph])
+        elif message is not None:
+            cmd.extend([u'-m', message])
+        
+        cmd.append(name)
+        if obj is not None:
+            cmd.append(obj)
+        
+        output = self._docmd(cmd)
+        if output is not None:
+            return output
+        return None
+
     def reset(self, branch=None, isHard=False, isSoft=False):
         cmd = [ gitCmd, u'reset' ]
         
