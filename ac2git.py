@@ -1246,6 +1246,10 @@ class AccuRev2Git(object):
         endTr = endTrHist.transactions[0]
         logger.info("{0}: retrieving transaction range #{1} - #{2}".format(stream.name, tr.id, endTr.id))
 
+        if tr.id > endTr.id:
+            logger.info("{0}: nothing to do, last processed transaction {1} is greater than the end transaction {2}.".format(stream.name, tr.id, endTr.id))
+            return (tr, self.GetLastCommitHash(ref=stateRef))
+
         # Iterate over all of the transactions that affect the stream we are interested in and maybe the "chstream" transactions (which affect the streams.xml).
         deepHist = None
         if self.config.method == "deep-hist":
@@ -1541,20 +1545,33 @@ class AccuRev2Git(object):
     # have to redo a lot of the work that we have already done for the 7 streams. Instead we have the two steps decoupled so that all we need to do is
     # download the 8th stream information from accurev (which we don't yet have) and do the reprocessing by only looking for information already in git.
     def RetrieveStream(self, depot, stream, dataRef, stateRef, hwmRef, startTransaction, endTransaction):
+        prevHwm = None
+        if hwmRef is not None:
+            hwmRefText = self.ReadFileRef(ref=hwmRef)
+            if hwmRefText is not None and len(hwmRefText) > 0:
+                prevHwmMetadata = json.loads(hwmRefText)
+                prevHwm = prevHwmMetadata.get("high-water-mark")
+                startTransaction = max(int(startTransaction), prevHwm) # make sure we start from the transaction we last processed.
+
         logger.info( "Retrieving stream {0} info from Accurev for transaction range : {1} - {2}".format(stream.name, startTransaction, endTransaction) )
         stateTr, stateHash = self.RetrieveStreamInfo(depot=depot, stream=stream, stateRef=stateRef, startTransaction=startTransaction, endTransaction=endTransaction)
-        logger.info( "Retrieving stream {0} data from Accurev for transaction range : {1} - {2}".format(stream.name, startTransaction, endTransaction) )
-        dataTr,  dataHash  = self.RetrieveStreamData(stream=stream, dataRef=dataRef, stateRef=stateRef)
+        logger.info( "Retrieving stream {0} data from Accurev for transaction range : {1} - {2}".format(stream.name, startTransaction if prevHwm is None else prevHwm, endTransaction) )
+        dataTr,  dataHash  = self.RetrieveStreamData(stream=stream, dataRef=dataRef, stateRef=stateRef) # Note: In case the last retrieval was interrupted, we will retrieve those transactions first.
 
         if stateTr is not None and dataTr is not None:
+            newHwm = max(dataTr.id, prevHwm)
             if stateTr.id != dataTr.id:
                 logger.error( "Missmatch while retrieving stream {streamName} (id: streamId), the data ref ({dataRef}) is on tr. {dataTr} while the state ref ({stateRef}) is on tr. {stateTr}.".format(streamName=stream.name, streamId=stream.streamNumber, dataTr=dataTr.id, stateTr=stateTr.id, dataRef=dataRef, stateRef=stateRef) )
-            # Success! Update the high water mark for the stream.
-            metadata = { "high-water-mark": int(endTransaction) }
-            if self.WriteFileRef(ref=hwmRef, text=json.dumps(metadata)) != True:
-                logger.error( "Failed to write the high-water-mark to ref {ref}".format(ref=hwmRef) )
             else:
-                logger.info( "Updated the high-water-mark to ref {ref} as {trId}".format(ref=hwmRef, trId=endTransaction) )
+                newHwm = max(int(endTransaction), newHwm)
+
+            # Success! Update the high water mark for the stream.
+            if hwmRef is not None:
+                metadata = { "high-water-mark": newHwm }
+                if self.WriteFileRef(ref=hwmRef, text=json.dumps(metadata)) != True:
+                    logger.error( "Failed to write the high-water-mark to ref {ref}".format(ref=hwmRef) )
+                else:
+                    logger.info( "Updated the high-water-mark to ref {ref} as {trId}".format(ref=hwmRef, trId=newHwm) )
         elif stateTr is not None and dataTr is None:
             logger.error( "Missmatch while retrieving stream {streamName} (id: streamId), the state ref ({stateRef}) is on tr. {stateTr} but the data ref ({dataRef}) wasn't retrieved.".format(streamName=stream.name, streamId=stream.streamNumber, stateTr=stateTr.id, dataRef=dataRef, stateRef=stateRef) )
         elif stateTr is None:
