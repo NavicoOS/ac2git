@@ -105,8 +105,12 @@ class Config(object):
             str += ", password="          + repr(self.password)
             str += ", startTransaction="  + repr(self.startTransaction)
             str += ", endTransaction="    + repr(self.endTransaction)
-            if streamMap is not None:
+            if self.streamMap is not None:
                 str += ", streamMap="    + repr(self.streamMap)
+            if self.commandCacheFilename is not None:
+                str += ", commandCacheFilename=" + repr(self.commandCacheFilename)
+            if self.excludeStreamTypes is not None:
+                str += ", excludeStreamTypes=" + repr(self.excludeStreamTypes)
             str += ")"
             
             return str
@@ -124,6 +128,7 @@ class Config(object):
                 authorIsCommitter = xmlElement.attrib.get('author-is-committer')
                 emptyChildStreamAction  = xmlElement.attrib.get('empty-child-stream-action')
                 sourceStreamFastForward = xmlElement.attrib.get('source-stream-fast-forward')
+                newBasisIsFirstParent = xmlElement.attrib.get('new-basis-is-first-parent')
 
                 remoteMap = OrderedDict()
                 remoteElementList = xmlElement.findall('remote')
@@ -134,11 +139,11 @@ class Config(object):
                     
                     remoteMap[remoteName] = git.GitRemoteListItem(name=remoteName, url=remoteUrl, pushUrl=remotePushUrl)
 
-                return cls(repoPath=repoPath, messageStyle=messageStyle, messageKey=messageKey, authorIsCommitter=authorIsCommitter, remoteMap=remoteMap, emptyChildStreamAction=emptyChildStreamAction, sourceStreamFastForward=sourceStreamFastForward)
+                return cls(repoPath=repoPath, messageStyle=messageStyle, messageKey=messageKey, authorIsCommitter=authorIsCommitter, remoteMap=remoteMap, emptyChildStreamAction=emptyChildStreamAction, sourceStreamFastForward=sourceStreamFastForward, newBasisIsFirstParent=newBasisIsFirstParent)
             else:
                 return None
             
-        def __init__(self, repoPath, messageStyle=None, messageKey=None, authorIsCommitter=None, remoteMap=None, emptyChildStreamAction=None, sourceStreamFastForward=None):
+        def __init__(self, repoPath, messageStyle=None, messageKey=None, authorIsCommitter=None, remoteMap=None, emptyChildStreamAction=None, sourceStreamFastForward=None, newBasisIsFirstParent=None):
             self.repoPath               = repoPath
             self.messageStyle           = messageStyle
             self.messageKey             = messageKey
@@ -167,6 +172,14 @@ class Config(object):
                 self.sourceStreamFastForward = (sourceStreamFastForward == "true")
             else:
                 self.sourceStreamFastForward = False
+            
+            if newBasisIsFirstParent is not None:
+                newBasisIsFirstParent = newBasisIsFirstParent.lower()
+                if newBasisIsFirstParent not in [ "true", "false" ]:
+                    raise Exception("Error, the new-basis-is-first-parent attribute only accepts true or false options but got: {0}".format(sourceStreamFastForward))
+                self.newBasisIsFirstParent = (newBasisIsFirstParent == "true")
+            else:
+                self.newBasisIsFirstParent = True
 
         def __repr__(self):
             str = "Config.Git(repoPath=" + repr(self.repoPath)
@@ -178,6 +191,8 @@ class Config(object):
                 str += ", remoteMap="    + repr(self.remoteMap)
             if self.authorIsCommitter is not None:
                 str += ", authorIsCommitter="    + repr(self.authorIsCommitter)
+            if self.newBasisIsFirstParent is not None:
+                str += ", newBasisIsFirstParent=" + repr(self.newBasisIsFirstParent)
             str += ")"
             
             return str
@@ -793,7 +808,7 @@ class AccuRev2Git(object):
             streams = accurev.show.streams(depot=self.config.accurev.depot)
             for stream in streams.streams:
                 if self.config.accurev.excludeStreamTypes is not None and stream.Type in self.config.accurev.excludeStreamTypes:
-                    logger.info("Excluded stream '{0}' of type '{1}'".format(stream.name, stream.Type))
+                    logger.debug("Excluded stream '{0}' of type '{1}'".format(stream.name, stream.Type))
                     continue
                 streamMap[stream.name] = self.SanitizeBranchName(stream.name)
 
@@ -2505,7 +2520,10 @@ class AccuRev2Git(object):
                         self.LogBranchState(stream=stream, tr=tr, commitHash=basisCommitHash) # Since we are not committing we need to manually store the ref state at this time.
                     else:
                         # Merge by specifying the parent commits.
-                        parents.insert(0, basisCommitHash) # Make this commit a merge of the parent stream into the child stream.
+                        if self.config.accurev.newBasisIsFirstParent:
+                            parents.insert(0, basisCommitHash) # Make this commit a merge of the parent stream into the child stream.
+                        else:
+                            parents.append(basisCommitHash)
                         assert None not in parents, "Invariant error! Either the source hash or the destination hash in {p} was none!".format(p=parents)
 
                         trInfoMsg="{trType} {trId}.".format(trType=tr.Type, trId=tr.id)
@@ -3195,6 +3213,8 @@ def DumpExampleConfigFile(outputFilename):
             source-stream-fast-forward: [ "true", "false" ] - when a promote is made and both the source and destination streams are known a merge commit is made on the destination stream. If
                                         this option is set to "true" then the source stream's branch is moved up to the destination branch after the commit is made, otherwise it is left where
                                         it was before.
+            new-basis-is-first-parent: [ "true", "false" ] - If set to true, for a chstream transaction, the new basis transaction will be made the corresponding commit's first parent, while
+                                                             the previous transaction made in the stream will be the second parent. If set to false the order of the two parents is reversed.
     -->
     <git 
         repo-path="/put/the/git/repo/here" 
@@ -3202,7 +3222,8 @@ def DumpExampleConfigFile(outputFilename):
         message-key="footer" 
         author-is-committer="true" 
         empty-child-stream-action="merge" 
-        source-stream-fast-forward="false" > 
+        source-stream-fast-forward="false"
+        new-basis-is-first-parent="true" > 
         <!-- Optional: You can add remote elements to specify the remotes to which the converted branches will be pushed. The push-url attribute is optional. -->
         <remote name="origin" url="https://github.com/orao/ac2git.git" push-url="https://github.com/orao/ac2git.git" /> 
         <remote name="backup" url="https://github.com/orao/ac2git.git" />
@@ -3335,7 +3356,7 @@ def AutoConfigFile(filename, args, preserveConfig=False):
                                                accurev_password=config.accurev.password,
                                                accurev_depot=config.accurev.depot,
                                                start_transaction=1, end_transaction="now",
-                                               exclude_types="" if self.config.excludeStreamTypes is None else " {0}".format(", ".join(self.config.excludeStreamTypes))))
+                                               exclude_types="" if config.excludeStreamTypes is None else " {0}".format(", ".join(config.excludeStreamTypes))))
 
         if preserveConfig:
             for stream in config.accurev.streamMap:
@@ -3371,6 +3392,8 @@ def AutoConfigFile(filename, args, preserveConfig=False):
             source-stream-fast-forward: [ "true", "false" ] - when a promote is made and both the source and destination streams are known a merge commit is made on the destination stream. If
                                         this option is set to "true" then the source stream's branch is moved up to the destination branch after the commit is made, otherwise it is left where
                                         it was before.
+            new-basis-is-first-parent: [ "true", "false" ] - If set to true, for a chstream transaction, the new basis transaction will be made the corresponding commit's first parent, while
+                                                             the previous transaction made in the stream will be the second parent. If set to false the order of the two parents is reversed.
     -->
     <git 
         repo-path="{git_repo_path}" 
@@ -3378,7 +3401,14 @@ def AutoConfigFile(filename, args, preserveConfig=False):
         message-key="{message_key}"  
         author-is-committer="{author_is_committer}"
         empty-child-stream-action="{empty_child_stream_action}" 
-        source-stream-fast-forward="{source_stream_fast_forward}" >""".format(git_repo_path=config.git.repoPath, message_style=config.git.messageStyle if config.git.messageStyle is not None else 'notes', message_key=config.git.messageKey if config.git.messageKey is not None else 'footer', author_is_committer="true" if self.config.git.authorIsCommitter else "false", empty_child_stream_action=config.git.emptyChildStreamAction, source_stream_fast_forward="true" if self.config.git.sourceStreamFastForward else "false"))
+        source-stream-fast-forward="{source_stream_fast_forward}"
+        new-basis-is-first-parent="{new_basis_is_first_parent}" >""".format(git_repo_path=config.git.repoPath,
+                                                                            message_style=config.git.messageStyle if config.git.messageStyle is not None else 'notes',
+                                                                            message_key=config.git.messageKey if config.git.messageKey is not None else 'footer',
+                                                                            author_is_committer="true" if config.git.authorIsCommitter else "false",
+                                                                            empty_child_stream_action=config.git.emptyChildStreamAction,
+                                                                            source_stream_fast_forward="true" if config.git.sourceStreamFastForward else "false",
+                                                                            new_basis_is_first_parent="true" if config.git.newBasisIsFirstParent else "false"))
         if config.git.remoteMap is not None:
             for remoteName in remoteMap:
                 remote = remoteMap[remoteName]
@@ -3575,6 +3605,7 @@ def PrintConfigSummary(config, filename):
         logger.info('    author is committer: {0}'.format(config.git.authorIsCommitter))
         logger.info('    empty child stream action: {0}'.format(config.git.emptyChildStreamAction))
         logger.info('    source stream fast forward: {0}'.format(config.git.sourceStreamFastForward))
+        logger.info('    new basis is first parent: {0}'.format(config.git.newBasisIsFirstParent))
         if config.git.remoteMap is not None:
             for remoteName in config.git.remoteMap:
                 remote = config.git.remoteMap[remoteName]
@@ -3593,6 +3624,8 @@ def PrintConfigSummary(config, filename):
         logger.info('    username: {0}'.format(config.accurev.username))
         logger.info('    command cache: {0}'.format(config.accurev.commandCacheFilename))
         logger.info('    ignored transaction types (hard-coded): {0}'.format(", ".join(ignored_transaction_types)))
+        if config.accurev.excludeStreamTypes is not None:
+            logger.info('    excluded stream types: {0}'.format(", ".join(config.accurev.excludeStreamTypes)))
         logger.info('  method: {0}'.format(config.method))
         logger.info('  merge strategy: {0}'.format(config.mergeStrategy))
         logger.info('  usermaps: {0}'.format(len(config.usermaps)))
