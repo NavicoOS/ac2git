@@ -44,14 +44,10 @@ def utc2local(utc):
     offset = datetime.fromtimestamp (epoch) - datetime.utcfromtimestamp (epoch)
     return utc + offset
 
-# The min() function returns None if either artument is None. This function
-# returns the non-None argument if one argument is None or the result of
-# min() if neither is None.
-def NonNoneMin(*args):
-    for i in xrange(args.count(None)):
-        args.remove(None)
-
-    return min(args)
+# This function calls the provided function func, only with arguments that were
+# not None.
+def CallOnNonNoneArgs(func, *args):
+    return func(a for a in args if a is not None)
 
 # ################################################################################################ #
 # Script Classes                                                                                   #
@@ -1551,7 +1547,7 @@ class AccuRev2Git(object):
             if hwmRefText is not None and len(hwmRefText) > 0:
                 prevHwmMetadata = json.loads(hwmRefText)
                 prevHwm = prevHwmMetadata.get("high-water-mark")
-                startTransaction = max(int(startTransaction), prevHwm) # make sure we start from the transaction we last processed.
+                startTransaction = CallOnNonNoneArgs(max, int(startTransaction), prevHwm) # make sure we start from the transaction we last processed.
 
         logger.info( "Retrieving stream {0} info from Accurev for transaction range : {1} - {2}".format(stream.name, startTransaction, endTransaction) )
         stateTr, stateHash = self.RetrieveStreamInfo(depot=depot, stream=stream, stateRef=stateRef, startTransaction=startTransaction, endTransaction=endTransaction)
@@ -1559,11 +1555,11 @@ class AccuRev2Git(object):
         dataTr,  dataHash  = self.RetrieveStreamData(stream=stream, dataRef=dataRef, stateRef=stateRef) # Note: In case the last retrieval was interrupted, we will retrieve those transactions first.
 
         if stateTr is not None and dataTr is not None:
-            newHwm = max(dataTr.id, prevHwm)
+            newHwm = CallOnNonNoneArgs(max, dataTr.id, prevHwm)
             if stateTr.id != dataTr.id:
                 logger.error( "Missmatch while retrieving stream {streamName} (id: streamId), the data ref ({dataRef}) is on tr. {dataTr} while the state ref ({stateRef}) is on tr. {stateTr}.".format(streamName=stream.name, streamId=stream.streamNumber, dataTr=dataTr.id, stateTr=stateTr.id, dataRef=dataRef, stateRef=stateRef) )
             else:
-                newHwm = max(int(endTransaction), newHwm)
+                newHwm = CallOnNonNoneArgs(max, int(endTransaction), newHwm)
 
             # Success! Update the high water mark for the stream.
             if hwmRef is not None:
@@ -2344,7 +2340,7 @@ class AccuRev2Git(object):
             if basisStream.time is not None:
                 basisTimestamp = accurev.GetTimestamp(basisStream.time)
                 if basisTimestamp != 0:
-                    minTimestamp = NonNoneMin(minTimestamp, basisTimestamp)
+                    minTimestamp = CallOnNonNoneArgs(min, minTimestamp, basisTimestamp)
             # Make the basis streams basis our basis and try again...
             basisStream, basisBranchName, basisStreamData, basisTreeHash = self.UnpackStreamDetails(streams=streams, streamMap=streamMap, affectedStreamMap=affectedStreamMap, streamNumber=basisStream.basisStreamNumber)
 
