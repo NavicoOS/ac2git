@@ -2533,7 +2533,7 @@ class AccuRev2Git(object):
                         self.LogBranchState(stream=stream, tr=tr, commitHash=basisCommitHash) # Since we are not committing we need to manually store the ref state at this time.
                     else:
                         # Merge by specifying the parent commits.
-                        if self.config.accurev.newBasisIsFirstParent:
+                        if self.config.git.newBasisIsFirstParent:
                             parents.insert(0, basisCommitHash) # Make this commit a merge of the parent stream into the child stream.
                         else:
                             parents.append(basisCommitHash)
