@@ -2369,14 +2369,23 @@ class ext(object):
                 # Get all the mkstream transactions before the first transaction on this stream.
                 mkstreams = hist(depot=depot, timeSpec=mkstreamsTimeSpecStr, transactionKind="mkstream", useCache=useCache)
 
+                mkstreamTrList = []
                 for t in mkstreams.transactions:
                     if GetTimestamp(t.time) == GetTimestamp(streamInfo.startTime):
-                        if mkstreamTr is None:
-                            mkstreamTr = t
-                        else:
-                            raise Exception("Invariant error! Ambiguous: multiple mkstream transactions match! Could not determine if stream {s} (name: {n}, id: {sn}) was created by transaction {t1} or {t2}!".format(s=stream, n=streamInfo.name, sn=streamInfo.streamNumber, t1=mkstreamTr.id, t2=t.id))
+                        mkstreamTrList.append(t)
                     elif GetTimestamp(t.time) < GetTimestamp(streamInfo.startTime):
                         break # There's no point in looking for it any further than this since the transactions are sorted in descending order of transaction number and hence by time as well.
+                
+                if len(mkstreamTrList) == 1:
+                    mkstreamTr = mkstreamTrList[0]
+                elif len(mkstreamTrList) > 1:
+                    # You're really, really unlucky here.
+                    for t in mkstreamTrList:
+                        before = show.streams(depot=depot, timeSpec=(t.id - 1)).getStream(streamInfo.streamNumber)
+                        after = show.streams(depot=depot, timeSpec=(t.id)).getStream(streamInfo.streamNumber)
+                        if before is None and after is not None:
+                            mkstreamTr = t
+                            break
                 if mkstreamTr is None:
                     raise Exception("Failed to find the mkstream transaction for stream {s} (name: {n}, id: {sn}, created: {t} UTC)!".format(s=stream, n=streamInfo.name, sn=streamInfo.streamNumber, t=streamInfo.startTime))
             else:
