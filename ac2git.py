@@ -2166,6 +2166,60 @@ class AccuRev2Git(object):
             raise Exception("Failed to commit {Type} {tr} to hidden state ref {ref} with commit {h}".format(Type=tr.Type, tr=tr.id, ref=streamStateRefspec, h=self.ShortHash(commitHash)))
         logger.debug("Committed stream state for {streamName} to {ref} - tr. {trType} {trId} - commit {h}".format(trType=tr.Type, trId=tr.id, streamName=stream.name, ref=streamStateRefspec, h=self.ShortHash(stateCommitHash)))
 
+    def TagTransaction(self, tagName, objHash, tr, stream, title=None, friendlyMessage=None, force=False):
+        tagMessage, notes = self.GenerateCommitMessage(transaction=tr, stream=stream, title=title, friendlyMessage=friendlyMessage)
+        
+        # Create temporary file for the commit message.
+        messageFilePath = None
+        with tempfile.NamedTemporaryFile(mode='w+', prefix='ac2git_tag_', encoding='utf-8', delete=False) as messageFile:
+            messageFilePath = messageFile.name
+            emptyMessage = True
+            if tagMessage is not None:
+                if len(tagMessage) > 0:
+                    messageFile.write(tagMessage)
+                    emptyMessage = False
+            elif tr is not None and tr.comment is not None and len(tr.comment) > 0:
+                # In git the # at the start of the line indicate that this line is a comment inside the message and will not be added.
+                # So we will just add a space to the start of all the lines starting with a # in order to preserve them.
+                messageFile.write(tr.comment)
+                emptyMessage = False
+
+            if emptyMessage:
+                # `git commit` and `git commit-tree` commands, when given an empty file for the commit message, seem to revert to
+                # trying to read the commit message from the STDIN. This is annoying since we don't want to be opening a pipe to
+                # the spawned process all the time just to write an EOF character so instead we will just add a single space as the
+                # message and hope the user doesn't notice.
+                # For the `git commit` command it's not as bad since white-space is always stripped from commit messages. See the 
+                # `git commit --cleanup` option for details.
+                messageFile.write(' ')
+        
+        if messageFilePath is None:
+            logger.error("Failed to create temporary file for tag message. Transaction {trType} {trId}".format(trType=tr.Type, trId=tr.id))
+            return None
+
+        # Get the author's and committer's name, email and timezone information.
+        taggerName, taggerEmail, taggerDate, taggerTimezone = None, None, None, None
+        if tr is not None:
+            taggerName, taggerEmail = self.GetGitUserFromAccuRevUser(tr.user)
+            taggerDate, taggerTimezone = self.GetGitDatetime(accurevUsername=tr.user, accurevDatetime=tr.time)
+
+        rv = self.gitRepo.create_tag(name=tagName, obj=objHash, annotated=True, message_file=messageFilePath, tagger_name=taggerName, tagger_email=taggerEmail, tagger_date=taggerDate, tagger_tz=taggerTimezone, cleanup='whitespace')
+        os.remove(messageFilePath)
+        
+        if rv is None:
+            # Depending on the version of Git we can't trust the return value of the `git tag` command.
+            # Hence we use `git log refs/tags/<tag name>` instead of peeling back the tag to ensure that
+            # it was correctly created.
+            commitHash = self.GetLastCommitHash(branchName="refs/tags/{0}".format(tagName), retry=True)
+            if commitHash != objHash:
+                # Note: This assumes that we are ONLY taggint commit objects. If this ever changes then
+                # we will need to properly peel back the tag and get the commit hash to which it points
+                # to so that we can directly compare it to the objHash.
+                logger.error("Failed to tag {trType} {trId}. Tag points to {commitHash} instead of {objHash}".format(trType=tr.Type, trId=tr.id, commitHash=commitHash, objHash=objHash))
+                return False
+
+        return True
+        
     def CommitTransaction(self, tr, stream, parents=None, treeHash=None, branchName=None, title=None, srcStream=None, dstStream=None, friendlyMessage=None, cherryPickSrcHash=None, refNamespace='refs/heads/'):
         assert branchName is not None, "Error: CommitTransaction() is a helper for ProcessTransaction() and doesn't accept branchName as None."
 
@@ -2445,6 +2499,7 @@ class AccuRev2Git(object):
             targetStreams = []
             prevBasisCommitHash = None
             refNamespace = 'refs/heads/'
+            createTag = False
             if tr.Type == "mkstream":
                 # Old versions of accurev don't tell you the name of the stream that was created in the mkstream transaction.
                 # The only way to find out what stream was created is to diff the output of the `accurev show streams` command
@@ -2460,6 +2515,7 @@ class AccuRev2Git(object):
 
                 if stream.Type == "snapshot":
                     refNamespace = 'refs/tags/'
+                    createTag = True
             elif tr.Type == "chstream":
                 assert tr.stream is not None, "Invariant error! Can't handle not having a stream in the accurev hist XML output for a chstream transaction..."
 
@@ -2530,6 +2586,7 @@ class AccuRev2Git(object):
                         raise Exception("Error! The git merge-base command failed!")
                     elif amMergedIntoPrevBasis:
                         # Fast-forward the timelocked stream branch to the correct commit.
+                        assert createTag == False, "Invariant error! We only create tags for snapshots and we can't move a snapshot!"
                         if self.UpdateAndCheckoutRef(ref='{ns}{branch}'.format(ns=refNamespace, branch=branchName), commitHash=basisCommitHash, checkout=False) != True:
                             raise Exception("Failed to fast-forward {branch} to {hash} (latest commit on {parentBranch}). Old basis {oldHash} on {oldParentBranch}. Title: {title}".format(branch=branchName, hash=self.ShortHash(basisCommitHash), parentBranch=basisBranchName, oldHash=self.ShortHash(prevBasisCommitHash), oldParentBranch=prevBasisBranchName, title=title))
                         parents = None # Do not commit!
@@ -2548,7 +2605,10 @@ class AccuRev2Git(object):
                             basisTreeHash = self.GetTreeFromRef(ref=basisCommitHash)
                             if basisTreeHash == treeHash:
                                 # Fast-forward the created stream branch to the correct commit.
-                                if self.UpdateAndCheckoutRef(ref='{ns}{branch}'.format(ns=refNamespace, branch=branchName), commitHash=basisCommitHash, checkout=False) != True:
+                                if createTag:
+                                    if self.TagTransaction(tagName=branchName, objHash=basisCommitHash, tr=tr, stream=stream, title=title) != True:
+                                        raise Exception("Failed to create tag {branch} at {hash} (latest commit on {parentBranch}).".format(branch=branchName, hash=self.ShortHash(basisCommitHash), parentBranch=basisBranchName))
+                                elif self.UpdateAndCheckoutRef(ref='{ns}{branch}'.format(ns=refNamespace, branch=branchName), commitHash=basisCommitHash, checkout=False) != True:
                                     raise Exception("Failed to fast-forward {branch} to {hash} (latest commit on {parentBranch}).".format(branch=branchName, hash=self.ShortHash(basisCommitHash), parentBranch=basisBranchName))
                                 parents = None # Don't commit this mkstream since it doesn't introduce anything new.
                                 logger.info("{trInfo} Created {dst} on {b} at {h}".format(trInfo=trInfoMsg, b=basisBranchName, h=self.ShortHash(basisCommitHash), dst=branchName))
@@ -2571,6 +2631,10 @@ class AccuRev2Git(object):
                     if commitHash is None:
                         raise Exception("Failed to commit chstream {trId}".format(trId=tr.id))
                     logger.info("{Type} {tr}. committed to {branch} {h}. {title}".format(Type=tr.Type, tr=tr.id, branch=branchName, h=self.ShortHash(commitHash), title=title))
+                    if createTag:
+                        if self.TagTransaction(tagName=branchName, objHash=commitHash, tr=tr, stream=stream, title=title) != True:
+                            raise Exception("Failed to create tag {branch} at {hash}.".format(branch=branchName, hash=self.ShortHash(commitHash)))
+                        logger.warning("{Type} {tr}. creating tag {branch} for branch {branch} at {h}. {title}".format(Type=tr.Type, tr=tr.id, branch=branchName, h=self.ShortHash(commitHash), title=title))
                 else:
                     logger.debug("{Type} {tr}. skiping commit to {branch}. (fast-forwarded to {h}) {title}".format(Type=tr.Type, tr=tr.id, branch=branchName, h=self.ShortHash(basisCommitHash), title=title))
 

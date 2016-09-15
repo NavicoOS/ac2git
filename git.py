@@ -402,6 +402,24 @@ def getDatetimeString(date, timezone=None):
     
     return dateStr
 
+def set_author_or_committer_environment(who="author", name=None, email=None, date=None, tz=None, env={}):
+    if who is None or who.lower() not in [ "author", "committer" ]:
+        raise Exception("set_author_or_committer_environment: the 'who' argument can be set to 'author' or 'commiter' but not '{0}'".format(who))
+    
+    who = who.upper()
+    date_str = date if date is None else getDatetimeString(date, tz)
+    
+    newEnv = {
+        'GIT_{who}_NAME' : name,
+        'GIT_{who}_EMAIL': email,
+        'GIT_{who}_DATE' : None if date_str is None else str('{0}'.format(date_str))
+    }
+    
+    for k in newEnv:
+        if newEnv[k] is not None:
+            env[k.format(who=who)] = newEnv[k]
+    return env
+
 class repo(object):
     def __init__(self, path):
         if not isinstance(path, str):
@@ -577,29 +595,10 @@ class repo(object):
 
         cmd.append(tree)
         
+        # Set the author & commiter information
         newEnv = os.environ.copy()
-        
-        # Set the author information
-        if author_name is not None:
-            newEnv['GIT_AUTHOR_NAME'] = author_name
-        if author_email is not None:
-            newEnv['GIT_AUTHOR_EMAIL'] = author_email
-        
-        if author_date is not None:
-            author_date_str = getDatetimeString(author_date, author_tz)
-            if author_date_str is not None:
-                newEnv['GIT_AUTHOR_DATE'] = str('{0}'.format(author_date_str))
-        
-        # Set the committer information
-        if committer_name is not None:
-            newEnv['GIT_COMMITTER_NAME'] = committer_name
-        if committer_email is not None:
-            newEnv['GIT_COMMITTER_EMAIL'] = committer_email
-        
-        if committer_date is not None:
-            committer_date_str = getDatetimeString(committer_date, committer_tz)
-            if committer_date_str is not None:
-                newEnv['GIT_COMMITTER_DATE'] = str('{0}'.format(committer_date_str))
+        newEnv = set_author_or_committer_environment(who="author", name=author_name, email=author_email, date=author_date, tz=author_tz, env=newEnv)
+        newEnv = set_author_or_committer_environment(who="committer", name=committer_name, email=committer_email, date=committer_date, tz=committer_tz, env=newEnv)
         
         # Execute the command
         output = self._docmd(cmd, env=newEnv)
@@ -645,29 +644,10 @@ class repo(object):
                 raise Exception("git.commit() unrecognized value for parameter cleanup. Got '{val}' but expected one of '{allowed}'.".format(val=cleanup, allowed="', '".join(allowedValues)))
             cmd.append(u'--cleanup={cleanup}'.format(cleanup=cleanup))
 
+        # Set the author & commiter information
         newEnv = os.environ.copy()
-        
-        # Set the author information
-        if author_name is not None:
-            newEnv['GIT_AUTHOR_NAME'] = author_name
-        if author_email is not None:
-            newEnv['GIT_AUTHOR_EMAIL'] = author_email
-        
-        if author_date is not None:
-            author_date_str = getDatetimeString(author_date, author_tz)
-            if author_date_str is not None:
-                newEnv['GIT_AUTHOR_DATE'] = str('{0}'.format(author_date_str))
-        
-        # Set the committer information
-        if committer_name is not None:
-            newEnv['GIT_COMMITTER_NAME'] = committer_name
-        if committer_email is not None:
-            newEnv['GIT_COMMITTER_EMAIL'] = committer_email
-        
-        if committer_date is not None:
-            committer_date_str = getDatetimeString(committer_date, committer_tz)
-            if committer_date_str is not None:
-                newEnv['GIT_COMMITTER_DATE'] = str('{0}'.format(committer_date_str))
+        newEnv = set_author_or_committer_environment(who="author", name=author_name, email=author_email, date=author_date, tz=author_tz, env=newEnv)
+        newEnv = set_author_or_committer_environment(who="committer", name=committer_name, email=committer_email, date=committer_date, tz=committer_tz, env=newEnv)
         
         # Execute the command
         output = self._docmd(cmd, env=newEnv)
@@ -747,7 +727,7 @@ class repo(object):
             return GitStatus.fromgitoutput(output)
         return None
 
-    def create_tag(self, name, obj, force=False, annotated=False, signed=False, keyId=None, message=None, message_paragraphs=[], message_file=None):
+    def create_tag(self, name, obj, force=False, annotated=False, signed=False, keyId=None, message=None, message_paragraphs=[], message_file=None, tagger_name=None, tagger_email=None, tagger_date=None, tagger_tz=None, cleanup=None, git_opts=[]):
         cmd = [ gitCmd, u'tag' ]
         
         if name is None:
@@ -769,15 +749,32 @@ class repo(object):
                 cmd.extend([u'-m', paragraph])
         elif message is not None:
             cmd.extend([u'-m', message])
+        elif annotated or signed or keyId is not None:
+            raise Exception("create_tag: an annotated tag requires a message argument.")
         
         cmd.append(name)
         if obj is not None:
             cmd.append(obj)
         
-        output = self._docmd(cmd)
-        if output is not None:
-            return output
-        return None
+        if cleanup is not None:
+            # This option determines how the supplied commit message should be cleaned up before committing. The <mode> can be strip, whitespace, verbatim, scissors or default.
+            #   * strip      - Strip leading and trailing empty lines, trailing whitespace, commentary and collapse consecutive empty lines.
+            #   * whitespace - Same as strip except #commentary is not removed.
+            #   * verbatim   - Do not change the message at all.
+            #   * scissors   - Same as whitespace, except that everything from (and including) the line "# ------------------------ >8 ------------------------" is truncated if the message is to be edited. "#" can be customized with core.commentChar.
+            #   * default    - Same as strip if the message is to be edited. Otherwise whitespace.
+            # See: https://www.kernel.org/pub/software/scm/git/docs/git-commit.html
+            allowedValues = [ 'strip', 'whitespace', 'verbatim', 'scissors', 'default' ]
+            if cleanup not in allowedValues:
+                raise Exception("git.commit() unrecognized value for parameter cleanup. Got '{val}' but expected one of '{allowed}'.".format(val=cleanup, allowed="', '".join(allowedValues)))
+            cmd.append(u'--cleanup={cleanup}'.format(cleanup=cleanup))
+        
+        # Set the author & commiter information
+        newEnv = os.environ.copy()
+        newEnv = set_author_or_committer_environment(who="committer", name=tagger_name, email=tagger_email, date=tagger_date, tz=tagger_tz, env=newEnv)
+        
+        output = self._docmd(cmd, env=newEnv)
+        return output
 
     def reset(self, branch=None, isHard=False, isSoft=False):
         cmd = [ gitCmd, u'reset' ]
@@ -848,29 +845,10 @@ class repo(object):
 
             cmd.append(obj)
         
+            # Set the author & commiter information
             newEnv = os.environ.copy()
-
-            # Set the author information
-            if authorName is not None:
-                newEnv['GIT_AUTHOR_NAME'] = authorName
-            if authorEmail is not None:
-                newEnv['GIT_AUTHOR_EMAIL'] = authorEmail
-            
-            if authorDate is not None:
-                author_date_str = getDatetimeString(authorDate, authorTimezone)
-                if author_date_str is not None:
-                    newEnv['GIT_AUTHOR_DATE'] = str('{0}'.format(author_date_str))
-            
-            # Set the committer information
-            if committerName is not None:
-                newEnv['GIT_COMMITTER_NAME'] = committerName
-            if committerEmail is not None:
-                newEnv['GIT_COMMITTER_EMAIL'] = committerEmail
-            
-            if committerDate is not None:
-                committer_date_str = getDatetimeString(committerDate, committerTimezone)
-                if committer_date_str is not None:
-                    newEnv['GIT_COMMITTER_DATE'] = str('{0}'.format(committer_date_str))
+            newEnv = set_author_or_committer_environment(who="author", name=authorName, email=authorEmail, date=authorDate, tz=authorTimezone, env=newEnv)
+            newEnv = set_author_or_committer_environment(who="committer", name=committerName, email=committerEmail, date=committerDate, tz=committerTimezone, env=newEnv)
 
             return self._docmd(cmd=cmd, ref=ref, env=newEnv)
 
