@@ -1649,6 +1649,17 @@ class AccuRev2Git(object):
     def GetStreamByName(self, depot, streamName):
         depot = self.GetDepot(depot)
 
+        if accurev.ext.is_loggedin():
+            try:
+                stream = accurev.show.streams(depot=depot, stream=streamName, useCache=self.config.accurev.UseCommandCache()).streams[0]
+                if stream is not None and stream.name is not None:
+                    return stream
+            except:
+                logger.info("Failed to find stream '{0}' using `accurev show streams -s '{0}'`, trying to search through processed history (slow way)...".format(streamName))
+        else:
+            logger.info("Not logged into Accurev. Searching for stream '{0}' by name (the slow way)...".format(streamName))
+
+        # Without using Accurev we can search for it in our Git history but this is really slow...
         streamNamesRefspec = u'{refsNS}cache/depots/{depotNumber}/stream_names'.format(refsNS=AccuRev2Git.gitRefsNamespace, depotNumber=depot.number)
         streamNames = {} # This is so we cache the stream name to stream number mapping which can take about 10 seconds to compute in a large-ish repo...
         streamNamesText = self.ReadFileRef(ref=streamNamesRefspec)
@@ -1659,10 +1670,10 @@ class AccuRev2Git(object):
             commitHash = streamNames[streamName]
             if commitHash is not None:
                 streamsXml, streams = self.GetStreamsInfo(ref=commitHash)
-                for s in streams.streams:
-                    if s.name == streamName:
-                        logger.debug("Loaded cached stream '{name}' by name.".format(name=streamName))
-                        return s # Found it!
+                s = streams.getStream(streamName)
+                if s is not None:
+                    logger.debug("Loaded cached stream '{name}' by name.".format(name=streamName))
+                    return s # Found it!
 
         logger.debug("Searching for stream '{name}' by name.".format(name=streamName))
 
@@ -1696,11 +1707,11 @@ class AccuRev2Git(object):
                     # the stream name appears.
                     commitHash = hashList[-1]
                     streamsXml, streams = self.GetStreamsInfo(ref=commitHash)
-                    for s in streams.streams:
-                        if s.name == streamName:
-                            streamNames[streamName] = commitHash # Write the commit hash where we found the stream name in the cache.
-                            self.WriteFileRef(ref=streamNamesRefspec, text=json.dumps(streamNames)) # Do it for each stream since this is cheaper than searching.
-                            return s
+                    s = streams.getStream(streamName)
+                    if s is not None:
+                        streamNames[streamName] = commitHash # Write the commit hash where we found the stream name in the cache.
+                        self.WriteFileRef(ref=streamNamesRefspec, text=json.dumps(streamNames)) # Do it for each stream since this is cheaper than searching.
+                        return s
                     assert False, "Invariant error! We successfully found that the hash {h} on ref {r} mentions the stream {sn} but couldn't match it?!".format(h=commitHash, r=ref, sn=streamName)
         return None
 
