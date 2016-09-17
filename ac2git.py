@@ -1649,9 +1649,9 @@ class AccuRev2Git(object):
     def GetStreamByName(self, depot, streamName):
         depot = self.GetDepot(depot)
 
-        if accurev.ext.is_loggedin():
+        if depot is not None and accurev.ext.is_loggedin():
             try:
-                stream = accurev.show.streams(depot=depot, stream=streamName, useCache=self.config.accurev.UseCommandCache()).streams[0]
+                stream = accurev.show.streams(depot=depot.name, stream=streamName, useCache=self.config.accurev.UseCommandCache()).streams[0]
                 if stream is not None and stream.name is not None:
                     return stream
             except:
