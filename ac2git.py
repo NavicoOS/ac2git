@@ -602,20 +602,15 @@ class AccuRev2Git(object):
             time.sleep(AccuRev2Git.commandFailureSleepSeconds)
         return rv
 
-    def GetLastCommitHash(self, branchName=None, ref=None, before=None, retry=True):
+    def GetLastCommitHash(self, branchName=None, ref=None, retry=True):
         cmd = []
         commitHash = None
         if ref is not None:
             cmd = [ u'git', u'show-ref', u'--hash', ref ]
-        elif self.config.git.authorIsCommitter:
+        else:
             cmd = [u'git', u'log', u'-1', u'--format=format:%H']
-            if before is not None:
-                cmd.append(u'--before={before}'.format(before=before))
             if branchName is not None:
                 cmd.append(branchName)
-        else:
-            # See http://stackoverflow.com/questions/13987273/git-log-filter-by-commits-author-date
-            raise Exception("Not yet implemented! The search for a commit by date when the author time is not the same as the commiter time can't use the --before flag for git log. Please set the author-is-committer option to 'true' in your configuration file and run again.")
 
         commitHash = self.TryGitCommand(cmd=cmd, retry=retry)
 
@@ -682,8 +677,11 @@ class AccuRev2Git(object):
             if len(status.staged) != 0 or len(status.changed) != 0 or len(status.untracked) != 0:
                 raise Exception("Invalid initial state! There are changes in the tracking repository. Staged {staged}, changed {changed}, untracked {untracked}.".format(staged=status.staged, changed=status.changed, untracked=status.untracked))
 
-    def Commit(self, transaction=None, allowEmptyCommit=False, messageOverride=None, parents=None, treeHash=None, ref=None, checkout=True):
+    def Commit(self, transaction=None, allowEmptyCommit=False, messageOverride=None, parents=None, treeHash=None, ref=None, checkout=True, authorIsCommitter=None):
         usePlumbing = (parents is not None or treeHash is not None)
+
+        if authorIsCommitter is None:
+            authorIsCommitter = self.config.git.authorIsCommitter
 
         # Custom messages for when we have a transaction.
         trMessage, forTrMessage = '', ''
@@ -734,7 +732,7 @@ class AccuRev2Git(object):
 
         # If the author-is-committer flag is set to true make the committer the same as the author.
         committerName, committerEmail, committerDate, committerTimezone = None, None, None, None
-        if self.config.git.authorIsCommitter:
+        if authorIsCommitter:
             committerName, committerEmail, committerDate, committerTimezone = authorName, authorEmail, authorDate, authorTimezone
 
         lastCommitHash = None
@@ -1224,7 +1222,7 @@ class AccuRev2Git(object):
 
                 self.WriteInfoFiles(path=self.gitRepo.path, depot=depot, streamName=stream.name, transaction=tr.id, useCommandCache=self.config.accurev.UseCommandCache())
 
-                commitHash = self.Commit(transaction=tr, messageOverride="transaction {trId}".format(trId=tr.id), parents=[], ref=stateRef)
+                commitHash = self.Commit(transaction=tr, messageOverride="transaction {trId}".format(trId=tr.id), parents=[], ref=stateRef, authorIsCommitter=True)
                 if commitHash is None:
                     logger.debug( "{0} first commit has failed. Is it an empty commit? Aborting!".format(stream.name) )
                     return (None, None)
@@ -1293,7 +1291,7 @@ class AccuRev2Git(object):
                 self.WriteInfoFiles(path=self.gitRepo.path, depot=depot, streamName=stream.name, transaction=tr.id, useCommandCache=self.config.accurev.UseCommandCache())
                     
                 # Commit
-                commitHash = self.Commit(transaction=tr, messageOverride="transaction {trId}".format(trId=tr.id), ref=stateRef)
+                commitHash = self.Commit(transaction=tr, messageOverride="transaction {trId}".format(trId=tr.id), ref=stateRef, authorIsCommitter=True)
                 if commitHash is None:
                     if "nothing to commit" in self.gitRepo.lastStdout:
                         logger.info("stream {streamName}: tr. #{trId} is a no-op. Potential but unlikely error. Continuing.".format(streamName=stream.name, trId=tr.id))
@@ -1427,7 +1425,7 @@ class AccuRev2Git(object):
                 return (None, None)
 
             # Make first commit.
-            commitHash = self.Commit(transaction=tr, allowEmptyCommit=True, messageOverride="transaction {trId}".format(trId=tr.id), parents=[], ref=dataRef)
+            commitHash = self.Commit(transaction=tr, allowEmptyCommit=True, messageOverride="transaction {trId}".format(trId=tr.id), parents=[], ref=dataRef, authorIsCommitter=True)
             if commitHash is None:
                 # The first streams mkstream transaction will be empty so we may end up with an empty commit.
                 logger.debug( "{0} first commit has failed.".format(stream.name) )
@@ -1525,7 +1523,7 @@ class AccuRev2Git(object):
 
             # Make the commit. Empty commits are allowed so that we match the state ref exactly (transaction for transaction).
             # Reasoning: Empty commits are cheap and since these are not intended to be seen by the user anyway so we may as well make them to have a simpler mapping.
-            commitHash = self.Commit(transaction=tr, allowEmptyCommit=True, messageOverride="transaction {trId}".format(trId=tr.id), ref=dataRef)
+            commitHash = self.Commit(transaction=tr, allowEmptyCommit=True, messageOverride="transaction {trId}".format(trId=tr.id), ref=dataRef, authorIsCommitter=True)
             if commitHash is None:
                 logger.error( "Commit failed for {trId} on {dataRef}".format(trId=tr.id, dataRef=dataRef) )
                 return (None, None)
@@ -2157,11 +2155,11 @@ class AccuRev2Git(object):
         lastStateCommitHash = self.GetLastCommitHash(ref=streamStateRefspec)
         if lastStateCommitHash is None:
             # Since we will use git log --first-parent a lot we need to make sure we have a parentless commit to start off with.
-            lastStateCommitHash = self.Commit(transaction=tr, allowEmptyCommit=True, messageOverride='transaction {trId}'.format(trId=tr.id), parents=[], treeHash=emptyTree, ref=streamStateRefspec, checkout=False)
+            lastStateCommitHash = self.Commit(transaction=tr, allowEmptyCommit=True, messageOverride='transaction {trId}'.format(trId=tr.id), parents=[], treeHash=emptyTree, ref=streamStateRefspec, checkout=False, authorIsCommitter=True)
             if lastStateCommitHash is None:
                 raise Exception("Failed to add empty state commit for stream {streamName} (id: {streamNumber})".format(streamName=stream.name, streamNumber=stream.streamNumber))
             logger.debug("Created state branch for stream {streamName} as {ref} - tr. {trType} {trId} - commit {h}".format(trType=tr.Type, trId=tr.id, streamName=stream.name, ref=streamStateRefspec, h=self.ShortHash(lastStateCommitHash)))
-        stateCommitHash = self.Commit(transaction=tr, allowEmptyCommit=True, messageOverride='transaction {trId}'.format(trId=tr.id), parents=[ lastStateCommitHash, commitHash ], treeHash=emptyTree, ref=streamStateRefspec, checkout=False)
+        stateCommitHash = self.Commit(transaction=tr, allowEmptyCommit=True, messageOverride='transaction {trId}'.format(trId=tr.id), parents=[ lastStateCommitHash, commitHash ], treeHash=emptyTree, ref=streamStateRefspec, checkout=False, authorIscommitter=True)
         if stateCommitHash is None:
             raise Exception("Failed to commit {Type} {tr} to hidden state ref {ref} with commit {h}".format(Type=tr.Type, tr=tr.id, ref=streamStateRefspec, h=self.ShortHash(commitHash)))
         logger.debug("Committed stream state for {streamName} to {ref} - tr. {trType} {trId} - commit {h}".format(trType=tr.Type, trId=tr.id, streamName=stream.name, ref=streamStateRefspec, h=self.ShortHash(stateCommitHash)))
