@@ -799,7 +799,8 @@ class AccuRev2Git(object):
 
         if len(streamMap) == 0:
             # When the stream map is missing or empty we intend to process all streams
-            streams = accurev.show.streams(depot=self.config.accurev.depot)
+            includeDeactivatedItems = "hidden" not in self.config.accurev.excludeStreamTypes
+            streams = accurev.show.streams(depot=self.config.accurev.depot, includeDeactivatedItems=includeDeactivatedItems, includeOldDefinitions=False)
             for stream in streams.streams:
                 if self.config.accurev.excludeStreamTypes is not None and stream.Type in self.config.accurev.excludeStreamTypes:
                     logger.debug("Excluded stream '{0}' of type '{1}'".format(stream.name, stream.Type))
@@ -2212,7 +2213,7 @@ class AccuRev2Git(object):
             taggerName, taggerEmail = self.GetGitUserFromAccuRevUser(tr.user)
             taggerDate, taggerTimezone = self.GetGitDatetime(accurevUsername=tr.user, accurevDatetime=tr.time)
 
-        rv = self.gitRepo.create_tag(name=tagName, obj=objHash, annotated=True, message_file=messageFilePath, tagger_name=taggerName, tagger_email=taggerEmail, tagger_date=taggerDate, tagger_tz=taggerTimezone, cleanup='whitespace')
+        rv = self.gitRepo.create_tag(name=tagName, obj=objHash, annotated=True, force=force, message_file=messageFilePath, tagger_name=taggerName, tagger_email=taggerEmail, tagger_date=taggerDate, tagger_tz=taggerTimezone, cleanup='whitespace')
         os.remove(messageFilePath)
         
         if rv is None:
@@ -2507,8 +2508,6 @@ class AccuRev2Git(object):
             title = None
             targetStreams = []
             prevBasisCommitHash = None
-            refNamespace = 'refs/heads/'
-            createTag = False
             if tr.Type == "mkstream":
                 # Old versions of accurev don't tell you the name of the stream that was created in the mkstream transaction.
                 # The only way to find out what stream was created is to diff the output of the `accurev show streams` command
@@ -2521,10 +2520,6 @@ class AccuRev2Git(object):
                 parents = [] # First, orphaned, commit is denoted with an empty parents list.
                 title = 'Created {name}'.format(name=branchName)
                 targetStreams.append( (stream, branchName, streamData, treeHash, parents) )
-
-                if stream.Type == "snapshot":
-                    refNamespace = 'refs/tags/'
-                    createTag = True
             elif tr.Type == "chstream":
                 assert tr.stream is not None, "Invariant error! Can't handle not having a stream in the accurev hist XML output for a chstream transaction..."
 
@@ -2589,17 +2584,29 @@ class AccuRev2Git(object):
             for stream, branchName, streamData, treeHash, parents in targetStreams:
                 assert branchName is not None, "Invariant error! branchName cannot be None here!"
 
+                createTag = False
+                refNamespace = 'refs/heads/'
+                if stream.Type == "snapshot":
+                    refNamespace = 'refs/tags/'
+                    createTag = True
+
                 if prevBasisCommitHash != basisCommitHash:
                     amMergedIntoPrevBasis = ( len(parents) > 0 and prevBasisCommitHash is not None and self.GitMergeBase(refs=[ parents[0], prevBasisCommitHash ], isAncestor=True) )
                     if None in [ amMergedIntoPrevBasis ]:
                         raise Exception("Error! The git merge-base command failed!")
                     elif amMergedIntoPrevBasis:
-                        # Fast-forward the timelocked stream branch to the correct commit.
-                        assert createTag == False, "Invariant error! We only create tags for snapshots and we can't move a snapshot!"
-                        if self.UpdateAndCheckoutRef(ref='{ns}{branch}'.format(ns=refNamespace, branch=branchName), commitHash=basisCommitHash, checkout=False) != True:
+                        # Fast-forward the timelocked or snapshot stream branch to the correct commit.
+                        if createTag:
+                            # Note: This is unlikely to execute as we tend to compare hashes from refs directly and annotated tags have a hash that is different from the commit to which
+                            #       they point. This is here in case we decide to peel the tags back to expose the commits in the core git processing logic.
+                            logger.warning("{trInfo} Re-creating tag {dst} on {b} at {h}".format(trInfo=trInfoMsg, b=basisBranchName, h=self.ShortHash(basisCommitHash), dst=branchName))
+                            if self.TagTransaction(tagName=branchName, objHash=basisCommitHash, tr=tr, stream=stream, title=title, force=True) != True:
+                                raise Exception("Failed to re-create tag {branch} at {hash} (latest commit on {parentBranch}).".format(branch=branchName, hash=self.ShortHash(basisCommitHash), parentBranch=basisBranchName))
+                        elif self.UpdateAndCheckoutRef(ref='{ns}{branch}'.format(ns=refNamespace, branch=branchName), commitHash=basisCommitHash, checkout=False) != True:
                             raise Exception("Failed to fast-forward {branch} to {hash} (latest commit on {parentBranch}). Old basis {oldHash} on {oldParentBranch}. Title: {title}".format(branch=branchName, hash=self.ShortHash(basisCommitHash), parentBranch=basisBranchName, oldHash=self.ShortHash(prevBasisCommitHash), oldParentBranch=prevBasisBranchName, title=title))
+                        else:
+                            logger.info("{trType} {trId}. Fast-forward {dst} to {b} {h}.".format(trType=tr.Type, trId=tr.id, b=basisBranchName, h=self.ShortHash(basisCommitHash), dst=branchName))
                         parents = None # Do not commit!
-                        logger.info("{trType} {trId}. Fast-forward {dst} to {b} {h}.".format(trType=tr.Type, trId=tr.id, b=basisBranchName, h=self.ShortHash(basisCommitHash), dst=branchName))
                         self.LogBranchState(stream=stream, tr=tr, commitHash=basisCommitHash) # Since we are not committing we need to manually store the ref state at this time.
                     else:
                         # Merge by specifying the parent commits.
@@ -2616,11 +2623,16 @@ class AccuRev2Git(object):
                                 # Fast-forward the created stream branch to the correct commit.
                                 if createTag:
                                     if self.TagTransaction(tagName=branchName, objHash=basisCommitHash, tr=tr, stream=stream, title=title) != True:
-                                        raise Exception("Failed to create tag {branch} at {hash} (latest commit on {parentBranch}).".format(branch=branchName, hash=self.ShortHash(basisCommitHash), parentBranch=basisBranchName))
+                                        if branchName in self.gitRepo.tag_list():
+                                            # Snapshot streams do have `chstream` transactions. For what reason, I can't say, but I suspect that their creation used to be a 2 step process. Either way,
+                                            # we need to be able to handle that case. Simply recreate the tag at the right point and ignore the history. It's supposed to be immutable anyway...
+                                            logger.warning("{trInfo} Tag {dst} exists, re-creating on {b} at {h}".format(trInfo=trInfoMsg, b=basisBranchName, h=self.ShortHash(basisCommitHash), dst=branchName))
+                                        if self.TagTransaction(tagName=branchName, objHash=basisCommitHash, tr=tr, stream=stream, title=title, force=True) != True:
+                                            raise Exception("Failed to create tag {branch} at {hash} (latest commit on {parentBranch}).".format(branch=branchName, hash=self.ShortHash(basisCommitHash), parentBranch=basisBranchName))
                                 elif self.UpdateAndCheckoutRef(ref='{ns}{branch}'.format(ns=refNamespace, branch=branchName), commitHash=basisCommitHash, checkout=False) != True:
                                     raise Exception("Failed to fast-forward {branch} to {hash} (latest commit on {parentBranch}).".format(branch=branchName, hash=self.ShortHash(basisCommitHash), parentBranch=basisBranchName))
                                 parents = None # Don't commit this mkstream since it doesn't introduce anything new.
-                                logger.info("{trInfo} Created {dst} on {b} at {h}".format(trInfo=trInfoMsg, b=basisBranchName, h=self.ShortHash(basisCommitHash), dst=branchName))
+                                logger.info("{trInfo} Created {tagMsg}{dst} on {b} at {h}".format(trInfo=trInfoMsg, b=basisBranchName, h=self.ShortHash(basisCommitHash), dst=branchName, tagMsg="tag " if createTag else ""))
                                 self.LogBranchState(stream=stream, tr=tr, commitHash=basisCommitHash) # Since we are not committing we need to manually store the ref state at this time.
                             else:
                                 logger.info("{trInfo} Created {dst} based on {b} at {h} (tree was not the same)".format(trInfo=trInfoMsg, b=basisBranchName, h=self.ShortHash(basisCommitHash), dst=branchName))
@@ -3276,8 +3288,10 @@ def DumpExampleConfigFile(outputFilename):
         end-transaction="now" 
         command-cache-filename="command_cache.sqlite3" >
         <!-- The stream-list is optional. If not given all streams are processed
-                exclude-types:   A comma separated list of stream types that are to be excluded from being automatically added. Doesn't exclude streams that were explicitly specified.
-                                 The stream types have to match the stream types returned by Accurev in its command line client's XML output. Example list: "normal, workspace, snapshot".
+                exclude-types:   A comma separated list of stream types that are to be excluded from being automatically added. Doesn't apply to streams that were explicitly specified.
+                                 The stream types have to match the stream types returned by Accurev in its command line client's XML output and a special keyword "hidden" for excluding
+                                 hidden streams. Known Accurev stream types are "normal", "workspace", "snapshot", "passthrough".
+                                 Example list: "normal, workspace, snapshot, hidden".
          -->
         <!-- The branch-name attribute is also optional for each stream element. If provided it specifies the git branch name to which the stream will be mapped. -->
         <stream-list exclude-types="workspace">
@@ -3440,13 +3454,18 @@ def AutoConfigFile(filename, args, preserveConfig=False):
         start-transaction="{start_transaction}" 
         end-transaction="{end_transaction}" 
         command-cache-filename="command_cache.sqlite3" >
-        <!-- The stream-list is optional. If not given all streams are processed -->
+        <!-- The stream-list is optional. If not given all streams are processed
+                exclude-types:   A comma separated list of stream types that are to be excluded from being automatically added. Doesn't apply to streams that were explicitly specified.
+                                 The stream types have to match the stream types returned by Accurev in its command line client's XML output and a special keyword "hidden" for excluding
+                                 hidden streams. Known Accurev stream types are "normal", "workspace", "snapshot", "passthrough".
+                                 Example list: "normal, workspace, snapshot, hidden".
+         -->
         <!-- The branch-name attribute is also optional for each stream element. If provided it specifies the git branch name to which the stream will be mapped. -->
         <stream-list{exclude_types}>""".format(accurev_username=config.accurev.username,
                                                accurev_password=config.accurev.password,
                                                accurev_depot=config.accurev.depot,
                                                start_transaction=1, end_transaction="now",
-                                               exclude_types="" if config.excludeStreamTypes is None else " {0}".format(", ".join(config.excludeStreamTypes))))
+                                               exclude_types="" if config.excludeStreamTypes is None else " exclude-types=\"{0}\"".format(", ".join(config.excludeStreamTypes))))
 
         if preserveConfig:
             for stream in config.accurev.streamMap:

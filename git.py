@@ -727,6 +727,13 @@ class repo(object):
             return GitStatus.fromgitoutput(output)
         return None
 
+    def tag_list(self):
+        cmd = [ gitCmd, u'tag', u'--list' ]
+        output = self._docmd(cmd)
+        if output is None:
+            return None
+        return output.split()
+
     def create_tag(self, name, obj, force=False, annotated=False, signed=False, keyId=None, message=None, message_paragraphs=[], message_file=None, tagger_name=None, tagger_email=None, tagger_date=None, tagger_tz=None, cleanup=None, git_opts=[]):
         cmd = [ gitCmd, u'tag' ]
         
