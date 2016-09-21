@@ -799,7 +799,8 @@ class AccuRev2Git(object):
 
         if len(streamMap) == 0:
             # When the stream map is missing or empty we intend to process all streams
-            streams = accurev.show.streams(depot=self.config.accurev.depot)
+            includeDeactivatedItems = "hidden" not in self.config.accurev.excludeStreamTypes
+            streams = accurev.show.streams(depot=self.config.accurev.depot, includeDeactivatedItems=includeDeactivatedItems, includeOldDefinitions=False)
             for stream in streams.streams:
                 if self.config.accurev.excludeStreamTypes is not None and stream.Type in self.config.accurev.excludeStreamTypes:
                     logger.debug("Excluded stream '{0}' of type '{1}'".format(stream.name, stream.Type))
@@ -3287,8 +3288,10 @@ def DumpExampleConfigFile(outputFilename):
         end-transaction="now" 
         command-cache-filename="command_cache.sqlite3" >
         <!-- The stream-list is optional. If not given all streams are processed
-                exclude-types:   A comma separated list of stream types that are to be excluded from being automatically added. Doesn't exclude streams that were explicitly specified.
-                                 The stream types have to match the stream types returned by Accurev in its command line client's XML output. Example list: "normal, workspace, snapshot".
+                exclude-types:   A comma separated list of stream types that are to be excluded from being automatically added. Doesn't apply to streams that were explicitly specified.
+                                 The stream types have to match the stream types returned by Accurev in its command line client's XML output and a special keyword "hidden" for excluding
+                                 hidden streams. Known Accurev stream types are "normal", "workspace", "snapshot", "passthrough".
+                                 Example list: "normal, workspace, snapshot, hidden".
          -->
         <!-- The branch-name attribute is also optional for each stream element. If provided it specifies the git branch name to which the stream will be mapped. -->
         <stream-list exclude-types="workspace">
@@ -3451,13 +3454,18 @@ def AutoConfigFile(filename, args, preserveConfig=False):
         start-transaction="{start_transaction}" 
         end-transaction="{end_transaction}" 
         command-cache-filename="command_cache.sqlite3" >
-        <!-- The stream-list is optional. If not given all streams are processed -->
+        <!-- The stream-list is optional. If not given all streams are processed
+                exclude-types:   A comma separated list of stream types that are to be excluded from being automatically added. Doesn't apply to streams that were explicitly specified.
+                                 The stream types have to match the stream types returned by Accurev in its command line client's XML output and a special keyword "hidden" for excluding
+                                 hidden streams. Known Accurev stream types are "normal", "workspace", "snapshot", "passthrough".
+                                 Example list: "normal, workspace, snapshot, hidden".
+         -->
         <!-- The branch-name attribute is also optional for each stream element. If provided it specifies the git branch name to which the stream will be mapped. -->
         <stream-list{exclude_types}>""".format(accurev_username=config.accurev.username,
                                                accurev_password=config.accurev.password,
                                                accurev_depot=config.accurev.depot,
                                                start_transaction=1, end_transaction="now",
-                                               exclude_types="" if config.excludeStreamTypes is None else " {0}".format(", ".join(config.excludeStreamTypes))))
+                                               exclude_types="" if config.excludeStreamTypes is None else " exclude-types=\"{0}\"".format(", ".join(config.excludeStreamTypes))))
 
         if preserveConfig:
             for stream in config.accurev.streamMap:
