@@ -2583,6 +2583,20 @@ class ext(object):
             else:
                 ts.start = mkstreamTr.id
 
+        # Special case: Accurev pass-through stream
+        # -----------------------------------------
+        # Here we will only restrict the timeSpec to be after the pass-through stream was created and return the history of the parent
+        # stream instead with an early return.
+        if streamInfo.Type == "passthrough":
+            if streamInfo.basisStreamNumber is None:
+                return []
+
+            rv = ext.deep_hist(depot=depot, stream=streamInfo.basisStreamNumber, timeSpec=ts, ignoreTimelocks=ignoreTimelocks, useCache=useCache)
+            if not isAsc:
+                rv.reverse()
+
+            return rv
+
         #print('{0}:{1}'.format(stream, ts)) # debug info
 
         # Perform deep-hist algorithm
@@ -2598,10 +2612,15 @@ class ext(object):
         prevTr = None
         parentTs = ts
         for tr in history.transactions:
-            if tr.Type == "chstream":
+            if tr.Type == "chstream" and streamInfo.Type != "snapshot":
                 # Parent stream has potentially changed. Here we will split the history into before and after the `chstream` transaction.
                 # For the _before_ part we will recursively run the deep-hist algorithm on our entire parent hierarchy and record the
                 # _after_ part in the _parentTs_ variable as a time-spec.
+                # Spacial case: Accurev snapshot streams
+                # --------------------------------------
+                #   A "snapshot" is an immutable (“frozen”, “static”) stream that captures the configuration of another stream at a
+                #   particular time. A snapshot cannot be renamed or modified in any way. Hence there is no need to recursively
+                #   search the history of our parents.
                 if prevTr is not None:
                     # Add the parent stream's history to our own, recursively up the parent chain,
                     # for all of the transactions leading up to this `chstream` transaction.
@@ -2630,11 +2649,12 @@ class ext(object):
             trList.append(tr)
             prevTr = tr
 
-        # Run the deep-hist algorithm on our parent stream for the time-spec in _parentTs_ which represents either the whole time-spec - if no `chstream` transactions
-        # occurred in the range - or the time-spec from the last `chstream` transaction to the end of the original time-spec range.
+        # Run the deep-hist algorithm on our parent stream (except if we are a snapshot stream) for the time-spec in _parentTs_ which represents
+        # either the whole time-spec - if no `chstream` transactions occurred in the range - or the time-spec from the last `chstream` transaction
+        # to the end of the original time-spec range.
         streamInfo = show.streams(depot=depot, stream=streamInfo.streamNumber, timeSpec=parentTs.start, useCache=useCache).streams[0]
         parentStream = streamInfo.basis
-        if parentStream is not None:
+        if parentStream is not None and streamInfo.Type != "snapshot":
             timelockTs = parentTs
             if not ignoreTimelocks:
                 timelockTs = ext.restrict_timespec_to_timelock(depot=streamInfo.depotName, timeSpec=parentTs, timelock=streamInfo.time)
