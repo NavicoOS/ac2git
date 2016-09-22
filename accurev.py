@@ -2591,7 +2591,7 @@ class ext(object):
             if streamInfo.basisStreamNumber is None:
                 return []
 
-            rv = ext.deep_hist(depot=depot, stream=streamInfo.basisStreamNumber, timeSpec=ts, ignoreTimelocks=ignoreTimelocks, useCache=useCache)
+            rv = ext.deep_hist(depot=depot, stream=streamInfo.basis, timeSpec=ts, ignoreTimelocks=ignoreTimelocks, useCache=useCache)
             if not isAsc:
                 rv.reverse()
 
