@@ -94,6 +94,40 @@ folder/bad_file.c diff=nodiff
 
 On Windows you might need to find where the command `true` lives but it should be included with Git.
 
+### Tips & tricks ###
+
+#### The two stages ####
+
+The script has 2 stages. The first stage downloads all of the information out of accurev into Git, while the second stage processes it all and produces Git branches. Stage 1 uses Accurev commands while Stage 2 executes solely Git commands.
+
+Stage 1 stores everything under the `refs/ac2git/depots/` which is hidden from the normal user of the Git repository and isn't cloned/fetched by default. After we have this information we no longer need to access the Accurev server in order to produce Git branches with or without merges.
+
+Stage 2 stores it's information about the produced branches and its state under the `refs/ac2git/state/` primarily and stores some useful lookup tables under `refs/ac2git/cache/` (i.e. a lookup table from stream names to stream numbers). This stage doesn't execute any Accurev commands and uses only Git commands that operate on the `refs/ac2git/depots/` which was produced in Stage 1.
+
+#### Quick re-conversion ####
+
+If you're trying out different configuration options there shouldn't be a need
+for you to redownload everything from Accurev every time _(for some options
+you might, but most should be ok)_.
+
+If you execute `git show-ref` in your converted repository you will see a lot of references starting with `refs/ac2git/`. These have 3 categories:
+
+```
+refs/ac2git/depots/...    <-- These store Accurev data & metadata for each stream (stage 1)
+refs/ac2git/cache/...     <-- These store lookup tables for converting stream names to numbers (stage 2 -start)
+refs/ac2git/state/...     <-- These store past positions of all branches. (stage 2 -main)
+```
+
+If you delete all of the refs starting with `refs/ac2git/state/` and re-run the script you will save yourself a lot of time by **not re-downloading** accurev data & metadata.
+
+To simply delete a single ref you would run the `git update-ref -d <ref>` command. So, to delete all of your "stage 2" refs, run the following command:
+
+```bash
+for REF in $(git show-ref | grep refs/ac2git/state | cut -d' ' -f2); do git update-ref -d $REF; echo "deleted $REF"; done
+```
+
+After which you should delete all the branches and restart the script.
+
 ### Tested with ###
 
 #### master branch ####

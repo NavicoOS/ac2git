@@ -35,6 +35,8 @@ import git
 
 logger = None
 
+ignored_transaction_types = [ "archive", "compress", "defcomp", "dispatch", "unarchive" ]
+
 # Taken from this StackOverflow answer: http://stackoverflow.com/a/19238551
 # Compulsary quote: https://twitter.com/codinghorror/status/712467615780708352
 def utc2local(utc):
@@ -42,14 +44,10 @@ def utc2local(utc):
     offset = datetime.fromtimestamp (epoch) - datetime.utcfromtimestamp (epoch)
     return utc + offset
 
-# The min() function returns None if either artument is None. This function
-# returns the non-None argument if one argument is None or the result of
-# min() if neither is None.
-def NonNoneMin(*args):
-    for i in xrange(args.count(None)):
-        args.remove(None)
-
-    return min(args)
+# This function calls the provided function func, only with arguments that were
+# not None.
+def CallOnNonNoneArgs(func, *args):
+    return func(a for a in args if a is not None)
 
 # ################################################################################################ #
 # Script Classes                                                                                   #
@@ -66,9 +64,13 @@ class Config(object):
                 endTransaction   = xmlElement.attrib.get('end-transaction')
                 commandCacheFilename = xmlElement.attrib.get('command-cache-filename')
                 
+                excludeStreamTypes = None
                 streamMap = None
                 streamListElement = xmlElement.find('stream-list')
                 if streamListElement is not None:
+                    excludeStreamTypes = streamListElement.attrib.get("exclude-types")
+                    if excludeStreamTypes is not None:
+                        excludeStreamTypes = [x.strip() for x in excludeStreamTypes.split(',') if len(x.strip()) > 0]
                     streamMap = OrderedDict()
                     streamElementList = streamListElement.findall('stream')
                     for streamElement in streamElementList:
@@ -79,11 +81,11 @@ class Config(object):
 
                         streamMap[streamName] = branchName
                 
-                return cls(depot, username, password, startTransaction, endTransaction, streamMap, commandCacheFilename)
+                return cls(depot, username, password, startTransaction, endTransaction, streamMap, commandCacheFilename, excludeStreamTypes)
             else:
                 return None
             
-        def __init__(self, depot = None, username = None, password = None, startTransaction = None, endTransaction = None, streamMap = None, commandCacheFilename = None):
+        def __init__(self, depot = None, username = None, password = None, startTransaction = None, endTransaction = None, streamMap = None, commandCacheFilename = None, excludeStreamTypes = None):
             self.depot    = depot
             self.username = username
             self.password = password
@@ -91,6 +93,7 @@ class Config(object):
             self.endTransaction   = endTransaction
             self.streamMap = streamMap
             self.commandCacheFilename = commandCacheFilename
+            self.excludeStreamTypes = excludeStreamTypes
     
         def __repr__(self):
             str = "Config.AccuRev(depot=" + repr(self.depot)
@@ -98,8 +101,12 @@ class Config(object):
             str += ", password="          + repr(self.password)
             str += ", startTransaction="  + repr(self.startTransaction)
             str += ", endTransaction="    + repr(self.endTransaction)
-            if streamMap is not None:
+            if self.streamMap is not None:
                 str += ", streamMap="    + repr(self.streamMap)
+            if self.commandCacheFilename is not None:
+                str += ", commandCacheFilename=" + repr(self.commandCacheFilename)
+            if self.excludeStreamTypes is not None:
+                str += ", excludeStreamTypes=" + repr(self.excludeStreamTypes)
             str += ")"
             
             return str
@@ -117,6 +124,7 @@ class Config(object):
                 authorIsCommitter = xmlElement.attrib.get('author-is-committer')
                 emptyChildStreamAction  = xmlElement.attrib.get('empty-child-stream-action')
                 sourceStreamFastForward = xmlElement.attrib.get('source-stream-fast-forward')
+                newBasisIsFirstParent = xmlElement.attrib.get('new-basis-is-first-parent')
 
                 remoteMap = OrderedDict()
                 remoteElementList = xmlElement.findall('remote')
@@ -127,11 +135,11 @@ class Config(object):
                     
                     remoteMap[remoteName] = git.GitRemoteListItem(name=remoteName, url=remoteUrl, pushUrl=remotePushUrl)
 
-                return cls(repoPath=repoPath, messageStyle=messageStyle, messageKey=messageKey, authorIsCommitter=authorIsCommitter, remoteMap=remoteMap, emptyChildStreamAction=emptyChildStreamAction, sourceStreamFastForward=sourceStreamFastForward)
+                return cls(repoPath=repoPath, messageStyle=messageStyle, messageKey=messageKey, authorIsCommitter=authorIsCommitter, remoteMap=remoteMap, emptyChildStreamAction=emptyChildStreamAction, sourceStreamFastForward=sourceStreamFastForward, newBasisIsFirstParent=newBasisIsFirstParent)
             else:
                 return None
             
-        def __init__(self, repoPath, messageStyle=None, messageKey=None, authorIsCommitter=None, remoteMap=None, emptyChildStreamAction=None, sourceStreamFastForward=None):
+        def __init__(self, repoPath, messageStyle=None, messageKey=None, authorIsCommitter=None, remoteMap=None, emptyChildStreamAction=None, sourceStreamFastForward=None, newBasisIsFirstParent=None):
             self.repoPath               = repoPath
             self.messageStyle           = messageStyle
             self.messageKey             = messageKey
@@ -160,6 +168,14 @@ class Config(object):
                 self.sourceStreamFastForward = (sourceStreamFastForward == "true")
             else:
                 self.sourceStreamFastForward = False
+            
+            if newBasisIsFirstParent is not None:
+                newBasisIsFirstParent = newBasisIsFirstParent.lower()
+                if newBasisIsFirstParent not in [ "true", "false" ]:
+                    raise Exception("Error, the new-basis-is-first-parent attribute only accepts true or false options but got: {0}".format(sourceStreamFastForward))
+                self.newBasisIsFirstParent = (newBasisIsFirstParent == "true")
+            else:
+                self.newBasisIsFirstParent = True
 
         def __repr__(self):
             str = "Config.Git(repoPath=" + repr(self.repoPath)
@@ -171,6 +187,8 @@ class Config(object):
                 str += ", remoteMap="    + repr(self.remoteMap)
             if self.authorIsCommitter is not None:
                 str += ", authorIsCommitter="    + repr(self.authorIsCommitter)
+            if self.newBasisIsFirstParent is not None:
+                str += ", newBasisIsFirstParent=" + repr(self.newBasisIsFirstParent)
             str += ")"
             
             return str
@@ -584,20 +602,15 @@ class AccuRev2Git(object):
             time.sleep(AccuRev2Git.commandFailureSleepSeconds)
         return rv
 
-    def GetLastCommitHash(self, branchName=None, ref=None, before=None, retry=True):
+    def GetLastCommitHash(self, branchName=None, ref=None, retry=True):
         cmd = []
         commitHash = None
         if ref is not None:
             cmd = [ u'git', u'show-ref', u'--hash', ref ]
-        elif self.config.git.authorIsCommitter:
+        else:
             cmd = [u'git', u'log', u'-1', u'--format=format:%H']
-            if before is not None:
-                cmd.append(u'--before={before}'.format(before=before))
             if branchName is not None:
                 cmd.append(branchName)
-        else:
-            # See http://stackoverflow.com/questions/13987273/git-log-filter-by-commits-author-date
-            raise Exception("Not yet implemented! The search for a commit by date when the author time is not the same as the commiter time can't use the --before flag for git log.")
 
         commitHash = self.TryGitCommand(cmd=cmd, retry=retry)
 
@@ -664,8 +677,11 @@ class AccuRev2Git(object):
             if len(status.staged) != 0 or len(status.changed) != 0 or len(status.untracked) != 0:
                 raise Exception("Invalid initial state! There are changes in the tracking repository. Staged {staged}, changed {changed}, untracked {untracked}.".format(staged=status.staged, changed=status.changed, untracked=status.untracked))
 
-    def Commit(self, transaction=None, allowEmptyCommit=False, messageOverride=None, parents=None, treeHash=None, ref=None, checkout=True):
+    def Commit(self, transaction=None, allowEmptyCommit=False, messageOverride=None, parents=None, treeHash=None, ref=None, checkout=True, authorIsCommitter=None):
         usePlumbing = (parents is not None or treeHash is not None)
+
+        if authorIsCommitter is None:
+            authorIsCommitter = self.config.git.authorIsCommitter
 
         # Custom messages for when we have a transaction.
         trMessage, forTrMessage = '', ''
@@ -716,7 +732,7 @@ class AccuRev2Git(object):
 
         # If the author-is-committer flag is set to true make the committer the same as the author.
         committerName, committerEmail, committerDate, committerTimezone = None, None, None, None
-        if self.config.git.authorIsCommitter:
+        if authorIsCommitter:
             committerName, committerEmail, committerDate, committerTimezone = authorName, authorEmail, authorDate, authorTimezone
 
         lastCommitHash = None
@@ -783,8 +799,12 @@ class AccuRev2Git(object):
 
         if len(streamMap) == 0:
             # When the stream map is missing or empty we intend to process all streams
-            streams = accurev.show.streams(depot=self.config.accurev.depot)
+            includeDeactivatedItems = "hidden" not in self.config.accurev.excludeStreamTypes
+            streams = accurev.show.streams(depot=self.config.accurev.depot, includeDeactivatedItems=includeDeactivatedItems, includeOldDefinitions=False)
             for stream in streams.streams:
+                if self.config.accurev.excludeStreamTypes is not None and stream.Type in self.config.accurev.excludeStreamTypes:
+                    logger.debug("Excluded stream '{0}' of type '{1}'".format(stream.name, stream.Type))
+                    continue
                 streamMap[stream.name] = self.SanitizeBranchName(stream.name)
 
         return streamMap
@@ -814,14 +834,17 @@ class AccuRev2Git(object):
             # Find the next transaction
             for tr in deepHist:
                 if tr.id > startTrNumber:
-                    diff, diffXml = self.TryDiff(streamName=streamName, firstTrNumber=startTrNumber, secondTrNumber=tr.id)
-                    if diff is None:
-                        return (None, None)
-                    elif len(diff.elements) > 0:
-                        logger.debug("FindNextChangeTransaction deep-hist: {0}".format(tr.id))
-                        return (tr.id, diff)
+                    if tr.Type in ignored_transaction_types:
+                        logger.debug("Ignoring transaction #{id} - {Type} (transaction type is in ignored_transaction_types list)".format(id=tr.id, Type=tr.Type))
                     else:
-                        logger.debug("FindNextChangeTransaction deep-hist skipping: {0}, diff was empty...".format(tr.id))
+                        diff, diffXml = self.TryDiff(streamName=streamName, firstTrNumber=startTrNumber, secondTrNumber=tr.id)
+                        if diff is None:
+                            return (None, None)
+                        elif len(diff.elements) > 0:
+                            logger.debug("FindNextChangeTransaction deep-hist: {0}".format(tr.id))
+                            return (tr.id, diff)
+                        else:
+                            logger.debug("FindNextChangeTransaction deep-hist skipping: {0}, diff was empty...".format(tr.id))
 
             diff, diffXml = self.TryDiff(streamName=streamName, firstTrNumber=startTrNumber, secondTrNumber=endTrNumber)
             return (endTrNumber + 1, diff) # The end transaction number is inclusive. We need to return the one after it.
@@ -1200,7 +1223,7 @@ class AccuRev2Git(object):
 
                 self.WriteInfoFiles(path=self.gitRepo.path, depot=depot, streamName=stream.name, transaction=tr.id, useCommandCache=self.config.accurev.UseCommandCache())
 
-                commitHash = self.Commit(transaction=tr, messageOverride="transaction {trId}".format(trId=tr.id), parents=[], ref=stateRef)
+                commitHash = self.Commit(transaction=tr, messageOverride="transaction {trId}".format(trId=tr.id), parents=[], ref=stateRef, authorIsCommitter=True)
                 if commitHash is None:
                     logger.debug( "{0} first commit has failed. Is it an empty commit? Aborting!".format(stream.name) )
                     return (None, None)
@@ -1217,6 +1240,10 @@ class AccuRev2Git(object):
             return (None, None)
         endTr = endTrHist.transactions[0]
         logger.info("{0}: retrieving transaction range #{1} - #{2}".format(stream.name, tr.id, endTr.id))
+
+        if tr.id > endTr.id:
+            logger.info("{0}: nothing to do, last processed transaction {1} is greater than the end transaction {2}.".format(stream.name, tr.id, endTr.id))
+            return (tr, self.GetLastCommitHash(ref=stateRef))
 
         # Iterate over all of the transactions that affect the stream we are interested in and maybe the "chstream" transactions (which affect the streams.xml).
         deepHist = None
@@ -1265,7 +1292,7 @@ class AccuRev2Git(object):
                 self.WriteInfoFiles(path=self.gitRepo.path, depot=depot, streamName=stream.name, transaction=tr.id, useCommandCache=self.config.accurev.UseCommandCache())
                     
                 # Commit
-                commitHash = self.Commit(transaction=tr, messageOverride="transaction {trId}".format(trId=tr.id), ref=stateRef)
+                commitHash = self.Commit(transaction=tr, messageOverride="transaction {trId}".format(trId=tr.id), ref=stateRef, authorIsCommitter=True)
                 if commitHash is None:
                     if "nothing to commit" in self.gitRepo.lastStdout:
                         logger.info("stream {streamName}: tr. #{trId} is a no-op. Potential but unlikely error. Continuing.".format(streamName=stream.name, trId=tr.id))
@@ -1399,7 +1426,7 @@ class AccuRev2Git(object):
                 return (None, None)
 
             # Make first commit.
-            commitHash = self.Commit(transaction=tr, allowEmptyCommit=True, messageOverride="transaction {trId}".format(trId=tr.id), parents=[], ref=dataRef)
+            commitHash = self.Commit(transaction=tr, allowEmptyCommit=True, messageOverride="transaction {trId}".format(trId=tr.id), parents=[], ref=dataRef, authorIsCommitter=True)
             if commitHash is None:
                 # The first streams mkstream transaction will be empty so we may end up with an empty commit.
                 logger.debug( "{0} first commit has failed.".format(stream.name) )
@@ -1497,7 +1524,7 @@ class AccuRev2Git(object):
 
             # Make the commit. Empty commits are allowed so that we match the state ref exactly (transaction for transaction).
             # Reasoning: Empty commits are cheap and since these are not intended to be seen by the user anyway so we may as well make them to have a simpler mapping.
-            commitHash = self.Commit(transaction=tr, allowEmptyCommit=True, messageOverride="transaction {trId}".format(trId=tr.id), ref=dataRef)
+            commitHash = self.Commit(transaction=tr, allowEmptyCommit=True, messageOverride="transaction {trId}".format(trId=tr.id), ref=dataRef, authorIsCommitter=True)
             if commitHash is None:
                 logger.error( "Commit failed for {trId} on {dataRef}".format(trId=tr.id, dataRef=dataRef) )
                 return (None, None)
@@ -1513,20 +1540,33 @@ class AccuRev2Git(object):
     # have to redo a lot of the work that we have already done for the 7 streams. Instead we have the two steps decoupled so that all we need to do is
     # download the 8th stream information from accurev (which we don't yet have) and do the reprocessing by only looking for information already in git.
     def RetrieveStream(self, depot, stream, dataRef, stateRef, hwmRef, startTransaction, endTransaction):
+        prevHwm = None
+        if hwmRef is not None:
+            hwmRefText = self.ReadFileRef(ref=hwmRef)
+            if hwmRefText is not None and len(hwmRefText) > 0:
+                prevHwmMetadata = json.loads(hwmRefText)
+                prevHwm = prevHwmMetadata.get("high-water-mark")
+                startTransaction = CallOnNonNoneArgs(max, int(startTransaction), prevHwm) # make sure we start from the transaction we last processed.
+
         logger.info( "Retrieving stream {0} info from Accurev for transaction range : {1} - {2}".format(stream.name, startTransaction, endTransaction) )
         stateTr, stateHash = self.RetrieveStreamInfo(depot=depot, stream=stream, stateRef=stateRef, startTransaction=startTransaction, endTransaction=endTransaction)
-        logger.info( "Retrieving stream {0} data from Accurev for transaction range : {1} - {2}".format(stream.name, startTransaction, endTransaction) )
-        dataTr,  dataHash  = self.RetrieveStreamData(stream=stream, dataRef=dataRef, stateRef=stateRef)
+        logger.info( "Retrieving stream {0} data from Accurev for transaction range : {1} - {2}".format(stream.name, startTransaction if prevHwm is None else prevHwm, endTransaction) )
+        dataTr,  dataHash  = self.RetrieveStreamData(stream=stream, dataRef=dataRef, stateRef=stateRef) # Note: In case the last retrieval was interrupted, we will retrieve those transactions first.
 
         if stateTr is not None and dataTr is not None:
+            newHwm = CallOnNonNoneArgs(max, dataTr.id, prevHwm)
             if stateTr.id != dataTr.id:
                 logger.error( "Missmatch while retrieving stream {streamName} (id: streamId), the data ref ({dataRef}) is on tr. {dataTr} while the state ref ({stateRef}) is on tr. {stateTr}.".format(streamName=stream.name, streamId=stream.streamNumber, dataTr=dataTr.id, stateTr=stateTr.id, dataRef=dataRef, stateRef=stateRef) )
-            # Success! Update the high water mark for the stream.
-            metadata = { "high-water-mark": int(endTransaction) }
-            if self.WriteFileRef(ref=hwmRef, text=json.dumps(metadata)) != True:
-                logger.error( "Failed to write the high-water-mark to ref {ref}".format(ref=hwmRef) )
             else:
-                logger.info( "Updated the high-water-mark to ref {ref} as {trId}".format(ref=hwmRef, trId=endTransaction) )
+                newHwm = CallOnNonNoneArgs(max, int(endTransaction), newHwm)
+
+            # Success! Update the high water mark for the stream.
+            if hwmRef is not None:
+                metadata = { "high-water-mark": newHwm }
+                if self.WriteFileRef(ref=hwmRef, text=json.dumps(metadata)) != True:
+                    logger.error( "Failed to write the high-water-mark to ref {ref}".format(ref=hwmRef) )
+                else:
+                    logger.info( "Updated the high-water-mark to ref {ref} as {trId}".format(ref=hwmRef, trId=newHwm) )
         elif stateTr is not None and dataTr is None:
             logger.error( "Missmatch while retrieving stream {streamName} (id: streamId), the state ref ({stateRef}) is on tr. {stateTr} but the data ref ({dataRef}) wasn't retrieved.".format(streamName=stream.name, streamId=stream.streamNumber, stateTr=stateTr.id, dataRef=dataRef, stateRef=stateRef) )
         elif stateTr is None:
@@ -1542,6 +1582,9 @@ class AccuRev2Git(object):
 
         depot  = self.config.accurev.depot
         endTrHist = accurev.hist(depot=depot, timeSpec=self.config.accurev.endTransaction)
+        if endTrHist is None or endTrHist.transactions is None or len(endTrHist.transactions) == 0:
+            logger.error( "Failed to get end transaction for depot {0}. `accurev hist -p {0} -t {1}` returned no transactions. Please make sure the depot name is spelled correctly and that the transaction number/keyword is valid.".format(depot, self.config.accurev.endTransaction) )
+            return
         endTr = endTrHist.transactions[0]
 
         # Retrieve stream information from Accurev and store it inside git.
@@ -1607,6 +1650,17 @@ class AccuRev2Git(object):
     def GetStreamByName(self, depot, streamName):
         depot = self.GetDepot(depot)
 
+        if depot is not None and accurev.ext.is_loggedin():
+            try:
+                stream = accurev.show.streams(depot=depot.name, stream=streamName, useCache=self.config.accurev.UseCommandCache()).streams[0]
+                if stream is not None and stream.name is not None:
+                    return stream
+            except:
+                logger.info("Failed to find stream '{0}' using `accurev show streams -s '{0}'`, trying to search through processed history (slow way)...".format(streamName))
+        else:
+            logger.info("Not logged into Accurev. Searching for stream '{0}' by name (the slow way)...".format(streamName))
+
+        # Without using Accurev we can search for it in our Git history but this is really slow...
         streamNamesRefspec = u'{refsNS}cache/depots/{depotNumber}/stream_names'.format(refsNS=AccuRev2Git.gitRefsNamespace, depotNumber=depot.number)
         streamNames = {} # This is so we cache the stream name to stream number mapping which can take about 10 seconds to compute in a large-ish repo...
         streamNamesText = self.ReadFileRef(ref=streamNamesRefspec)
@@ -1617,10 +1671,10 @@ class AccuRev2Git(object):
             commitHash = streamNames[streamName]
             if commitHash is not None:
                 streamsXml, streams = self.GetStreamsInfo(ref=commitHash)
-                for s in streams.streams:
-                    if s.name == streamName:
-                        logger.debug("Loaded cached stream '{name}' by name.".format(name=streamName))
-                        return s # Found it!
+                s = streams.getStream(streamName)
+                if s is not None:
+                    logger.debug("Loaded cached stream '{name}' by name.".format(name=streamName))
+                    return s # Found it!
 
         logger.debug("Searching for stream '{name}' by name.".format(name=streamName))
 
@@ -1654,11 +1708,11 @@ class AccuRev2Git(object):
                     # the stream name appears.
                     commitHash = hashList[-1]
                     streamsXml, streams = self.GetStreamsInfo(ref=commitHash)
-                    for s in streams.streams:
-                        if s.name == streamName:
-                            streamNames[streamName] = commitHash # Write the commit hash where we found the stream name in the cache.
-                            self.WriteFileRef(ref=streamNamesRefspec, text=json.dumps(streamNames)) # Do it for each stream since this is cheaper than searching.
-                            return s
+                    s = streams.getStream(streamName)
+                    if s is not None:
+                        streamNames[streamName] = commitHash # Write the commit hash where we found the stream name in the cache.
+                        self.WriteFileRef(ref=streamNamesRefspec, text=json.dumps(streamNames)) # Do it for each stream since this is cheaper than searching.
+                        return s
                     assert False, "Invariant error! We successfully found that the hash {h} on ref {r} mentions the stream {sn} but couldn't match it?!".format(h=commitHash, r=ref, sn=streamName)
         return None
 
@@ -1737,11 +1791,13 @@ class AccuRev2Git(object):
             assert stateRef is not None and dataRef is not None and len(stateRef) != 0 and len(dataRef) != 0, "Invariant error! The state ({sr}) and data ({dr}) refs must not be None!".format(sr=stateRef, dr=dataRef)
 
             if branchName is None:
-                branchName = self.SanitizeBranchName(stream.name)
-            else:
-                branchName = self.SanitizeBranchName(branchName)
+                branchName = stream.name
 
             branchRef = 'refs/heads/{branchName}'.format(branchName=branchName)
+            sanitizedRef = self.SanitizeRefName(branchRef)
+            if branchRef != sanitizedRef:
+                logger.warning("Branch name '{0}' is not allowed, renamed to '{1}'.".format(branchRef[len("refs/heads/"):], sanitizedRef[len("refs/heads/"):]))
+                branchRef = sanitizedRef
 
             branchList = self.gitRepo.branch_list()
             if branchList is None:
@@ -1970,14 +2026,74 @@ class AccuRev2Git(object):
             raise Exception("Unrecognized git message style '{s}'".format(s=style))
 
         if cherryPickSrcHash is not None:
-            messageSections[0] = "(CP) {0}".format(messageSections[0])
+            if len(messageSections) > 0:
+                messageSections[0] = "(CP) {0}".format(messageSections[0])
             messageSections.append("(cherry picked from commit {hash})".format(hash=cherryPickSrcHash))
 
         return ('\n\n'.join(messageSections), notes)
 
-    def SanitizeBranchName(self, name):
-        name = name.replace(' ', '_').strip()
+    def SanitizeRefComponent(self, component):
+        if component is None or len(component) == 0:
+            return component
+        # If it starts with a dot, remove the dot
+        if component[0] == '.':
+            component = component[1:]
+        # If it ends with .lock, remove the .lock
+        if component.endswith(".lock"):
+            component = component[:-len(".lock")]
+        return component
+
+    def SanitizeRefName(self, name):
+        if name is None or len(name) == 0:
+            return name
+
+        while "//" in name:
+            name = name.replace("//", "/")
+
+        illegalSequence = {
+            "..": "__",
+            "?": "_",
+            "*": "_",
+            "[": "_",
+            "\\": "/",
+            "@{": "_",
+            " ": "_"
+        }
+        for s in illegalSequence:
+            name = name.replace(s, illegalSequence[s])
+        
+        # Remove control characters
+        nonControl = ""
+        for ch in name:
+            if ord(ch) <= 40:
+                nonControl += '_'
+            else:
+                nonControl += ch
+        name = nonControl
+
+        # Sanitize components
+        name = "/".join([self.SanitizeRefComponent(x) for x in name.split('/')])
+
+        illegalEnding = {
+            ".": "",
+            "/": "/_"
+        }
+        for e in illegalEnding:
+            if name[-1] == e:
+                name = name[:-1] + illegalEnding[e]
+
+        if name == "@":
+            return "_"
+
         return name
+
+    def SanitizeBranchName(self, name):
+        if name is None or len(name) == 0:
+            return name
+        sanitized = self.SanitizeRefName("refs/heads/{0}".format(name))
+        if sanitized is None or len(sanitized) == 0:
+            return sanitized
+        return sanitized[len("refs/heads/"):]
 
     def BuildStreamTree(self, streams):
         rv = {}
@@ -2051,20 +2167,74 @@ class AccuRev2Git(object):
         lastStateCommitHash = self.GetLastCommitHash(ref=streamStateRefspec)
         if lastStateCommitHash is None:
             # Since we will use git log --first-parent a lot we need to make sure we have a parentless commit to start off with.
-            lastStateCommitHash = self.Commit(transaction=tr, allowEmptyCommit=True, messageOverride='transaction {trId}'.format(trId=tr.id), parents=[], treeHash=emptyTree, ref=streamStateRefspec, checkout=False)
+            lastStateCommitHash = self.Commit(transaction=tr, allowEmptyCommit=True, messageOverride='transaction {trId}'.format(trId=tr.id), parents=[], treeHash=emptyTree, ref=streamStateRefspec, checkout=False, authorIsCommitter=True)
             if lastStateCommitHash is None:
                 raise Exception("Failed to add empty state commit for stream {streamName} (id: {streamNumber})".format(streamName=stream.name, streamNumber=stream.streamNumber))
             logger.debug("Created state branch for stream {streamName} as {ref} - tr. {trType} {trId} - commit {h}".format(trType=tr.Type, trId=tr.id, streamName=stream.name, ref=streamStateRefspec, h=self.ShortHash(lastStateCommitHash)))
-        stateCommitHash = self.Commit(transaction=tr, allowEmptyCommit=True, messageOverride='transaction {trId}'.format(trId=tr.id), parents=[ lastStateCommitHash, commitHash ], treeHash=emptyTree, ref=streamStateRefspec, checkout=False)
+        stateCommitHash = self.Commit(transaction=tr, allowEmptyCommit=True, messageOverride='transaction {trId}'.format(trId=tr.id), parents=[ lastStateCommitHash, commitHash ], treeHash=emptyTree, ref=streamStateRefspec, checkout=False, authorIsCommitter=True)
         if stateCommitHash is None:
             raise Exception("Failed to commit {Type} {tr} to hidden state ref {ref} with commit {h}".format(Type=tr.Type, tr=tr.id, ref=streamStateRefspec, h=self.ShortHash(commitHash)))
         logger.debug("Committed stream state for {streamName} to {ref} - tr. {trType} {trId} - commit {h}".format(trType=tr.Type, trId=tr.id, streamName=stream.name, ref=streamStateRefspec, h=self.ShortHash(stateCommitHash)))
 
-    def CommitTransaction(self, tr, stream, parents=None, treeHash=None, branchName=None, title=None, srcStream=None, dstStream=None, friendlyMessage=None, cherryPickSrcHash=None):
+    def TagTransaction(self, tagName, objHash, tr, stream, title=None, friendlyMessage=None, force=False):
+        tagMessage, notes = self.GenerateCommitMessage(transaction=tr, stream=stream, title=title, friendlyMessage=friendlyMessage)
+        
+        # Create temporary file for the commit message.
+        messageFilePath = None
+        with tempfile.NamedTemporaryFile(mode='w+', prefix='ac2git_tag_', encoding='utf-8', delete=False) as messageFile:
+            messageFilePath = messageFile.name
+            emptyMessage = True
+            if tagMessage is not None:
+                if len(tagMessage) > 0:
+                    messageFile.write(tagMessage)
+                    emptyMessage = False
+            elif tr is not None and tr.comment is not None and len(tr.comment) > 0:
+                # In git the # at the start of the line indicate that this line is a comment inside the message and will not be added.
+                # So we will just add a space to the start of all the lines starting with a # in order to preserve them.
+                messageFile.write(tr.comment)
+                emptyMessage = False
+
+            if emptyMessage:
+                # `git commit` and `git commit-tree` commands, when given an empty file for the commit message, seem to revert to
+                # trying to read the commit message from the STDIN. This is annoying since we don't want to be opening a pipe to
+                # the spawned process all the time just to write an EOF character so instead we will just add a single space as the
+                # message and hope the user doesn't notice.
+                # For the `git commit` command it's not as bad since white-space is always stripped from commit messages. See the 
+                # `git commit --cleanup` option for details.
+                messageFile.write(' ')
+        
+        if messageFilePath is None:
+            logger.error("Failed to create temporary file for tag message. Transaction {trType} {trId}".format(trType=tr.Type, trId=tr.id))
+            return None
+
+        # Get the author's and committer's name, email and timezone information.
+        taggerName, taggerEmail, taggerDate, taggerTimezone = None, None, None, None
+        if tr is not None:
+            taggerName, taggerEmail = self.GetGitUserFromAccuRevUser(tr.user)
+            taggerDate, taggerTimezone = self.GetGitDatetime(accurevUsername=tr.user, accurevDatetime=tr.time)
+
+        rv = self.gitRepo.create_tag(name=tagName, obj=objHash, annotated=True, force=force, message_file=messageFilePath, tagger_name=taggerName, tagger_email=taggerEmail, tagger_date=taggerDate, tagger_tz=taggerTimezone, cleanup='whitespace')
+        os.remove(messageFilePath)
+        
+        if rv is None:
+            # Depending on the version of Git we can't trust the return value of the `git tag` command.
+            # Hence we use `git log refs/tags/<tag name>` instead of peeling back the tag to ensure that
+            # it was correctly created.
+            commitHash = self.GetLastCommitHash(branchName="refs/tags/{0}".format(tagName), retry=True)
+            if commitHash != objHash:
+                # Note: This assumes that we are ONLY taggint commit objects. If this ever changes then
+                # we will need to properly peel back the tag and get the commit hash to which it points
+                # to so that we can directly compare it to the objHash.
+                logger.error("Failed to tag {trType} {trId}. Tag points to {commitHash} instead of {objHash}".format(trType=tr.Type, trId=tr.id, commitHash=commitHash, objHash=objHash))
+                return False
+
+        return True
+        
+    def CommitTransaction(self, tr, stream, parents=None, treeHash=None, branchName=None, title=None, srcStream=None, dstStream=None, friendlyMessage=None, cherryPickSrcHash=None, refNamespace='refs/heads/'):
         assert branchName is not None, "Error: CommitTransaction() is a helper for ProcessTransaction() and doesn't accept branchName as None."
 
         branchRef = None
-        branchRef = 'refs/heads/{branch}'.format(branch=branchName)
+        branchRef = '{ns}{branch}'.format(ns=refNamespace, branch=branchName)
         checkout = (branchName is None)
 
         commitMessage, notes = self.GenerateCommitMessage(transaction=tr, stream=stream, title=title, friendlyMessage=friendlyMessage, srcStream=srcStream, dstStream=dstStream, cherryPickSrcHash=cherryPickSrcHash)
@@ -2234,7 +2404,7 @@ class AccuRev2Git(object):
             if basisStream.time is not None:
                 basisTimestamp = accurev.GetTimestamp(basisStream.time)
                 if basisTimestamp != 0:
-                    minTimestamp = NonNoneMin(minTimestamp, basisTimestamp)
+                    minTimestamp = CallOnNonNoneArgs(min, minTimestamp, basisTimestamp)
             # Make the basis streams basis our basis and try again...
             basisStream, basisBranchName, basisStreamData, basisTreeHash = self.UnpackStreamDetails(streams=streams, streamMap=streamMap, affectedStreamMap=affectedStreamMap, streamNumber=basisStream.basisStreamNumber)
 
@@ -2329,8 +2499,8 @@ class AccuRev2Git(object):
         stream, branchName, streamData, treeHash = self.UnpackStreamDetails(streams=streams, streamMap=streamMap, affectedStreamMap=affectedStreamMap, streamNumber=streamNumber)
 
         # Process the transaction based on type.
-        if tr.Type in [ "defcomp" ]: # Ignored transactions.
-            logger.info("Ignoring transaction #{id} - {Type}".format(id=tr.id, Type=tr.Type))
+        if tr.Type in ignored_transaction_types: # Ignored transactions.
+            logger.info("Ignoring transaction #{id} - {Type} (transaction type is in ignored_transaction_types list)".format(id=tr.id, Type=tr.Type))
 
         elif tr.Type in [ "mkstream", "chstream" ]:
             parents = None
@@ -2414,20 +2584,36 @@ class AccuRev2Git(object):
             for stream, branchName, streamData, treeHash, parents in targetStreams:
                 assert branchName is not None, "Invariant error! branchName cannot be None here!"
 
+                createTag = False
+                refNamespace = 'refs/heads/'
+                if stream.Type == "snapshot":
+                    refNamespace = 'refs/tags/'
+                    createTag = True
+
                 if prevBasisCommitHash != basisCommitHash:
                     amMergedIntoPrevBasis = ( len(parents) > 0 and prevBasisCommitHash is not None and self.GitMergeBase(refs=[ parents[0], prevBasisCommitHash ], isAncestor=True) )
                     if None in [ amMergedIntoPrevBasis ]:
                         raise Exception("Error! The git merge-base command failed!")
                     elif amMergedIntoPrevBasis:
-                        # Fast-forward the timelocked stream branch to the correct commit.
-                        if self.UpdateAndCheckoutRef(ref='refs/heads/{branch}'.format(branch=branchName), commitHash=basisCommitHash, checkout=False) != True:
+                        # Fast-forward the timelocked or snapshot stream branch to the correct commit.
+                        if createTag:
+                            # Note: This is unlikely to execute as we tend to compare hashes from refs directly and annotated tags have a hash that is different from the commit to which
+                            #       they point. This is here in case we decide to peel the tags back to expose the commits in the core git processing logic.
+                            logger.warning("{trInfo} Re-creating tag {dst} on {b} at {h}".format(trInfo=trInfoMsg, b=basisBranchName, h=self.ShortHash(basisCommitHash), dst=branchName))
+                            if self.TagTransaction(tagName=branchName, objHash=basisCommitHash, tr=tr, stream=stream, title=title, force=True) != True:
+                                raise Exception("Failed to re-create tag {branch} at {hash} (latest commit on {parentBranch}).".format(branch=branchName, hash=self.ShortHash(basisCommitHash), parentBranch=basisBranchName))
+                        elif self.UpdateAndCheckoutRef(ref='{ns}{branch}'.format(ns=refNamespace, branch=branchName), commitHash=basisCommitHash, checkout=False) != True:
                             raise Exception("Failed to fast-forward {branch} to {hash} (latest commit on {parentBranch}). Old basis {oldHash} on {oldParentBranch}. Title: {title}".format(branch=branchName, hash=self.ShortHash(basisCommitHash), parentBranch=basisBranchName, oldHash=self.ShortHash(prevBasisCommitHash), oldParentBranch=prevBasisBranchName, title=title))
+                        else:
+                            logger.info("{trType} {trId}. Fast-forward {dst} to {b} {h}.".format(trType=tr.Type, trId=tr.id, b=basisBranchName, h=self.ShortHash(basisCommitHash), dst=branchName))
                         parents = None # Do not commit!
-                        logger.info("{trType} {trId}. Fast-forward {dst} to {b} {h}.".format(trType=tr.Type, trId=tr.id, b=basisBranchName, h=self.ShortHash(basisCommitHash), dst=branchName))
                         self.LogBranchState(stream=stream, tr=tr, commitHash=basisCommitHash) # Since we are not committing we need to manually store the ref state at this time.
                     else:
                         # Merge by specifying the parent commits.
-                        parents.insert(0, basisCommitHash) # Make this commit a merge of the parent stream into the child stream.
+                        if self.config.git.newBasisIsFirstParent:
+                            parents.insert(0, basisCommitHash) # Make this commit a merge of the parent stream into the child stream.
+                        else:
+                            parents.append(basisCommitHash)
                         assert None not in parents, "Invariant error! Either the source hash or the destination hash in {p} was none!".format(p=parents)
 
                         trInfoMsg="{trType} {trId}.".format(trType=tr.Type, trId=tr.id)
@@ -2435,10 +2621,18 @@ class AccuRev2Git(object):
                             basisTreeHash = self.GetTreeFromRef(ref=basisCommitHash)
                             if basisTreeHash == treeHash:
                                 # Fast-forward the created stream branch to the correct commit.
-                                if self.UpdateAndCheckoutRef(ref='refs/heads/{branch}'.format(branch=branchName), commitHash=basisCommitHash, checkout=False) != True:
+                                if createTag:
+                                    if self.TagTransaction(tagName=branchName, objHash=basisCommitHash, tr=tr, stream=stream, title=title) != True:
+                                        if branchName in self.gitRepo.tag_list():
+                                            # Snapshot streams do have `chstream` transactions. For what reason, I can't say, but I suspect that their creation used to be a 2 step process. Either way,
+                                            # we need to be able to handle that case. Simply recreate the tag at the right point and ignore the history. It's supposed to be immutable anyway...
+                                            logger.warning("{trInfo} Tag {dst} exists, re-creating on {b} at {h}".format(trInfo=trInfoMsg, b=basisBranchName, h=self.ShortHash(basisCommitHash), dst=branchName))
+                                        if self.TagTransaction(tagName=branchName, objHash=basisCommitHash, tr=tr, stream=stream, title=title, force=True) != True:
+                                            raise Exception("Failed to create tag {branch} at {hash} (latest commit on {parentBranch}).".format(branch=branchName, hash=self.ShortHash(basisCommitHash), parentBranch=basisBranchName))
+                                elif self.UpdateAndCheckoutRef(ref='{ns}{branch}'.format(ns=refNamespace, branch=branchName), commitHash=basisCommitHash, checkout=False) != True:
                                     raise Exception("Failed to fast-forward {branch} to {hash} (latest commit on {parentBranch}).".format(branch=branchName, hash=self.ShortHash(basisCommitHash), parentBranch=basisBranchName))
                                 parents = None # Don't commit this mkstream since it doesn't introduce anything new.
-                                logger.info("{trInfo} Created {dst} on {b} at {h}".format(trInfo=trInfoMsg, b=basisBranchName, h=self.ShortHash(basisCommitHash), dst=branchName))
+                                logger.info("{trInfo} Created {tagMsg}{dst} on {b} at {h}".format(trInfo=trInfoMsg, b=basisBranchName, h=self.ShortHash(basisCommitHash), dst=branchName, tagMsg="tag " if createTag else ""))
                                 self.LogBranchState(stream=stream, tr=tr, commitHash=basisCommitHash) # Since we are not committing we need to manually store the ref state at this time.
                             else:
                                 logger.info("{trInfo} Created {dst} based on {b} at {h} (tree was not the same)".format(trInfo=trInfoMsg, b=basisBranchName, h=self.ShortHash(basisCommitHash), dst=branchName))
@@ -2454,10 +2648,14 @@ class AccuRev2Git(object):
                         if treeHash is None:
                             raise Exception("Couldn't get last tree for {trType} {trId} on untracked stream {s}. Message: {m}".format(trType=tr.Type, trId=tr.id, s=stream.name, m=title))
 
-                    commitHash = self.CommitTransaction(tr=tr, stream=stream, treeHash=treeHash, parents=parents, branchName=branchName, title=title)
+                    commitHash = self.CommitTransaction(tr=tr, stream=stream, treeHash=treeHash, parents=parents, branchName=branchName, title=title, refNamespace=refNamespace)
                     if commitHash is None:
                         raise Exception("Failed to commit chstream {trId}".format(trId=tr.id))
                     logger.info("{Type} {tr}. committed to {branch} {h}. {title}".format(Type=tr.Type, tr=tr.id, branch=branchName, h=self.ShortHash(commitHash), title=title))
+                    if createTag:
+                        if self.TagTransaction(tagName=branchName, objHash=commitHash, tr=tr, stream=stream, title=title) != True:
+                            raise Exception("Failed to create tag {branch} at {hash}.".format(branch=branchName, hash=self.ShortHash(commitHash)))
+                        logger.warning("{Type} {tr}. creating tag {branch} for branch {branch} at {h}. {title}".format(Type=tr.Type, tr=tr.id, branch=branchName, h=self.ShortHash(commitHash), title=title))
                 else:
                     logger.debug("{Type} {tr}. skiping commit to {branch}. (fast-forwarded to {h}) {title}".format(Type=tr.Type, tr=tr.id, branch=branchName, h=self.ShortHash(basisCommitHash), title=title))
 
@@ -3089,9 +3287,14 @@ def DumpExampleConfigFile(outputFilename):
         start-transaction="1" 
         end-transaction="now" 
         command-cache-filename="command_cache.sqlite3" >
-        <!-- The stream-list is optional. If not given all streams are processed -->
+        <!-- The stream-list is optional. If not given all streams are processed
+                exclude-types:   A comma separated list of stream types that are to be excluded from being automatically added. Doesn't apply to streams that were explicitly specified.
+                                 The stream types have to match the stream types returned by Accurev in its command line client's XML output and a special keyword "hidden" for excluding
+                                 hidden streams. Known Accurev stream types are "normal", "workspace", "snapshot", "passthrough".
+                                 Example list: "normal, workspace, snapshot, hidden".
+         -->
         <!-- The branch-name attribute is also optional for each stream element. If provided it specifies the git branch name to which the stream will be mapped. -->
-        <stream-list>
+        <stream-list exclude-types="workspace">
             <stream branch-name="some_branch">some_stream</stream>
             <stream>some_other_stream</stream>
         </stream-list>
@@ -3114,6 +3317,8 @@ def DumpExampleConfigFile(outputFilename):
             source-stream-fast-forward: [ "true", "false" ] - when a promote is made and both the source and destination streams are known a merge commit is made on the destination stream. If
                                         this option is set to "true" then the source stream's branch is moved up to the destination branch after the commit is made, otherwise it is left where
                                         it was before.
+            new-basis-is-first-parent: [ "true", "false" ] - If set to true, for a chstream transaction, the new basis transaction will be made the corresponding commit's first parent, while
+                                                             the previous transaction made in the stream will be the second parent. If set to false the order of the two parents is reversed.
     -->
     <git 
         repo-path="/put/the/git/repo/here" 
@@ -3121,7 +3326,8 @@ def DumpExampleConfigFile(outputFilename):
         message-key="footer" 
         author-is-committer="true" 
         empty-child-stream-action="merge" 
-        source-stream-fast-forward="false" > 
+        source-stream-fast-forward="false"
+        new-basis-is-first-parent="true" > 
         <!-- Optional: You can add remote elements to specify the remotes to which the converted branches will be pushed. The push-url attribute is optional. -->
         <remote name="origin" url="https://github.com/orao/ac2git.git" push-url="https://github.com/orao/ac2git.git" /> 
         <remote name="backup" url="https://github.com/orao/ac2git.git" />
@@ -3248,9 +3454,18 @@ def AutoConfigFile(filename, args, preserveConfig=False):
         start-transaction="{start_transaction}" 
         end-transaction="{end_transaction}" 
         command-cache-filename="command_cache.sqlite3" >
-        <!-- The stream-list is optional. If not given all streams are processed -->
+        <!-- The stream-list is optional. If not given all streams are processed
+                exclude-types:   A comma separated list of stream types that are to be excluded from being automatically added. Doesn't apply to streams that were explicitly specified.
+                                 The stream types have to match the stream types returned by Accurev in its command line client's XML output and a special keyword "hidden" for excluding
+                                 hidden streams. Known Accurev stream types are "normal", "workspace", "snapshot", "passthrough".
+                                 Example list: "normal, workspace, snapshot, hidden".
+         -->
         <!-- The branch-name attribute is also optional for each stream element. If provided it specifies the git branch name to which the stream will be mapped. -->
-        <stream-list>""".format(accurev_username=config.accurev.username, accurev_password=config.accurev.password, accurev_depot=config.accurev.depot, start_transaction=1, end_transaction="now"))
+        <stream-list{exclude_types}>""".format(accurev_username=config.accurev.username,
+                                               accurev_password=config.accurev.password,
+                                               accurev_depot=config.accurev.depot,
+                                               start_transaction=1, end_transaction="now",
+                                               exclude_types="" if config.excludeStreamTypes is None else " exclude-types=\"{0}\"".format(", ".join(config.excludeStreamTypes))))
 
         if preserveConfig:
             for stream in config.accurev.streamMap:
@@ -3286,6 +3501,8 @@ def AutoConfigFile(filename, args, preserveConfig=False):
             source-stream-fast-forward: [ "true", "false" ] - when a promote is made and both the source and destination streams are known a merge commit is made on the destination stream. If
                                         this option is set to "true" then the source stream's branch is moved up to the destination branch after the commit is made, otherwise it is left where
                                         it was before.
+            new-basis-is-first-parent: [ "true", "false" ] - If set to true, for a chstream transaction, the new basis transaction will be made the corresponding commit's first parent, while
+                                                             the previous transaction made in the stream will be the second parent. If set to false the order of the two parents is reversed.
     -->
     <git 
         repo-path="{git_repo_path}" 
@@ -3293,7 +3510,14 @@ def AutoConfigFile(filename, args, preserveConfig=False):
         message-key="{message_key}"  
         author-is-committer="{author_is_committer}"
         empty-child-stream-action="{empty_child_stream_action}" 
-        source-stream-fast-forward="{source_stream_fast_forward}" >""".format(git_repo_path=config.git.repoPath, message_style=config.git.messageStyle if config.git.messageStyle is not None else 'notes', message_key=config.git.messageKey if config.git.messageKey is not None else 'footer', author_is_committer="true" if self.config.git.authorIsCommitter else "false", empty_child_stream_action=config.git.emptyChildStreamAction, source_stream_fast_forward="true" if self.config.git.sourceStreamFastForward else "false"))
+        source-stream-fast-forward="{source_stream_fast_forward}"
+        new-basis-is-first-parent="{new_basis_is_first_parent}" >""".format(git_repo_path=config.git.repoPath,
+                                                                            message_style=config.git.messageStyle if config.git.messageStyle is not None else 'notes',
+                                                                            message_key=config.git.messageKey if config.git.messageKey is not None else 'footer',
+                                                                            author_is_committer="true" if config.git.authorIsCommitter else "false",
+                                                                            empty_child_stream_action=config.git.emptyChildStreamAction,
+                                                                            source_stream_fast_forward="true" if config.git.sourceStreamFastForward else "false",
+                                                                            new_basis_is_first_parent="true" if config.git.newBasisIsFirstParent else "false"))
         if config.git.remoteMap is not None:
             for remoteName in remoteMap:
                 remote = remoteMap[remoteName]
@@ -3490,6 +3714,7 @@ def PrintConfigSummary(config, filename):
         logger.info('    author is committer: {0}'.format(config.git.authorIsCommitter))
         logger.info('    empty child stream action: {0}'.format(config.git.emptyChildStreamAction))
         logger.info('    source stream fast forward: {0}'.format(config.git.sourceStreamFastForward))
+        logger.info('    new basis is first parent: {0}'.format(config.git.newBasisIsFirstParent))
         if config.git.remoteMap is not None:
             for remoteName in config.git.remoteMap:
                 remote = config.git.remoteMap[remoteName]
@@ -3507,6 +3732,9 @@ def PrintConfigSummary(config, filename):
         logger.info('    end tran.:   #{0}'.format(config.accurev.endTransaction))
         logger.info('    username: {0}'.format(config.accurev.username))
         logger.info('    command cache: {0}'.format(config.accurev.commandCacheFilename))
+        logger.info('    ignored transaction types (hard-coded): {0}'.format(", ".join(ignored_transaction_types)))
+        if config.accurev.excludeStreamTypes is not None:
+            logger.info('    excluded stream types: {0}'.format(", ".join(config.accurev.excludeStreamTypes)))
         logger.info('  method: {0}'.format(config.method))
         logger.info('  merge strategy: {0}'.format(config.mergeStrategy))
         logger.info('  usermaps: {0}'.format(len(config.usermaps)))
