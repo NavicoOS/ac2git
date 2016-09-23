@@ -752,7 +752,7 @@ class AccuRev2Git(object):
                 treeHash = self.gitRepo.write_tree()
             if treeHash is not None and len(treeHash.strip()) > 0:
                 treeHash = treeHash.strip()
-                commitHash = self.gitRepo.commit_tree(tree=treeHash, parents=parents, message_file=messageFilePath, committer_name=committerName, committer_email=committerEmail, committer_date=committerDate, committer_tz=committerTimezone, author_name=committerName, author_email=committerEmail, author_date=committerDate, author_tz=committerTimezone, allow_empty=allowEmptyCommit, git_opts=[u'-c', u'core.autocrlf=false'])
+                commitHash = self.gitRepo.commit_tree(tree=treeHash, parents=parents, message_file=messageFilePath, committer_name=committerName, committer_email=committerEmail, committer_date=committerDate, committer_tz=committerTimezone, author_name=authorName, author_email=authorEmail, author_date=authorDate, author_tz=authorTimezone, allow_empty=allowEmptyCommit, git_opts=[u'-c', u'core.autocrlf=false'])
                 if commitHash is None:
                     logger.error( "Failed to commit tree {0}{1}. Error:\n{2}".format(treeHash, forTrMessage, self.gitRepo.lastStderr) )
                 else:
@@ -760,7 +760,7 @@ class AccuRev2Git(object):
             else:
                 logger.error( "Failed to write tree{0}. Error:\n{1}".format(forTrMessage, self.gitRepo.lastStderr) )
         else:
-            commitResult = self.gitRepo.commit(message_file=messageFilePath, committer_name=committerName, committer_email=committerEmail, committer_date=committerDate, committer_tz=committerTimezone, author_name=committerName, author_email=committerEmail, author_date=committerDate, author_tz=committerTimezone, allow_empty_message=True, allow_empty=allowEmptyCommit, cleanup='whitespace', git_opts=[u'-c', u'core.autocrlf=false'])
+            commitResult = self.gitRepo.commit(message_file=messageFilePath, committer_name=committerName, committer_email=committerEmail, committer_date=committerDate, committer_tz=committerTimezone, author_name=authorName, author_email=authorEmail, author_date=authorDate, author_tz=authorTimezone, allow_empty_message=True, allow_empty=allowEmptyCommit, cleanup='whitespace', git_opts=[u'-c', u'core.autocrlf=false'])
             if commitResult is not None:
                 commitHash = commitResult.shortHash
                 if commitHash is None:
