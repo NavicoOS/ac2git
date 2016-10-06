@@ -2595,9 +2595,11 @@ class ext(object):
                 raise Exception("Error: assumption that the root stream has the same name as the depot doesn't hold. Aborting...")
             mkstreamTr = firstTr.transactions[0]
         else:
-            mkstreamTr = ext.get_mkstream_transaction(stream=streamInfo.streamNumber, depot=depot, useCache=useCache)
+            mkstreamTr = ext.get_mkstream_transaction(stream=streamInfo.name, depot=depot, useCache=useCache)
             if mkstreamTr is None:
-                raise Exception("Failed to get mkstream transaction for the stream {0}".format(stream))
+                mkstreamTr = ext.get_mkstream_transaction(stream=streamInfo.streamNumber, depot=depot, useCache=useCache)
+                if mkstreamTr is None:
+                    raise Exception("Failed to get mkstream transaction for the stream {0}".format(stream))
             if mkstreamTr.id > ts.end:
                 # The stream didn't exist during the requested time span.
                 return []
