@@ -427,6 +427,8 @@ class AccuRev2Git(object):
     commandFailureRetryCount = 3
     commandFailureSleepSeconds = 3
 
+    cachedDepots = None
+
     def __init__(self, config):
         self.config = config
         self.cwd = None
@@ -1029,13 +1031,11 @@ class AccuRev2Git(object):
         return depotNumber, remainder
 
     def GetDepot(self, depot):
-        depotNumber = None
-        depotName = None
-        try:
-            depotNumber = int(depot)
-        except:
-            if isinstance(depot, str):
-                depotName = depot
+        if AccuRev2Git.cachedDepots is not None:
+            d = AccuRev2Git.cachedDepots.getDepot(depot)
+            if d is not None:
+                return d
+
         depotsRef = '{depotsNS}info'.format(depotsNS=self.GetDepotRefsNamespace())
 
         # Check if the ref exists!
@@ -1068,18 +1068,16 @@ class AccuRev2Git(object):
             depotsXml, depots = self.GetDepotsInfo(ref=commitHash)
 
         # Try and find the depot in the list of existing depots.
-        for d in depots.depots:
-            if depotName is not None and d.name == depotName:
-                return d
-            elif depotNumber is not None and d.number == depotNumber:
-                return d
+        d = depots.getDepot(depot)
+        if d is not None:
+            AccuRev2Git.cachedDepots = depots
+            return d
 
         if haveCommitted:
             logger.info( "Failed to find depot {d} on depots ref {r} at commit {h}".format(d=depot, h=self.ShortHash(commitHash), r=depotsRef) )
             return None
 
         # We haven't committed anything yet so a depot might have been renamed since we started. Run the depots command again and commit it if there have been any changes.
-
         self.gitRepo.checkout(branchName=depotsRef)
 
         # Delete everything in the index and working directory.
@@ -1103,11 +1101,10 @@ class AccuRev2Git(object):
             haveCommitted = True
 
             # Try and find the depot in the list of existing depots.
-            for d in depots.depots:
-                if depotName is not None and d.name == depotName:
-                    return d
-                elif depotNumber is not None and d.number == depotNumber:
-                    return d
+            d = depots.getDepot(depot)
+            if d is not None:
+                AccuRev2Git.cachedDepots = depots
+                return d
 
         return None
 
