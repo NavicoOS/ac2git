@@ -3049,7 +3049,7 @@ class AccuRev2Git(object):
                 logger.info( "Using existing git repository." )
                 return True
         
-            logger.info( "Creating new git repository" )
+            logger.info( "Creating new git repository." )
             
             # Create an empty first commit so that we can create branches as we please.
             if git.init(path=gitRepoPath) is not None:
