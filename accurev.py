@@ -1069,6 +1069,31 @@ class obj:
                 str += ")"
                 
                 return str
+
+            # Gets the depot from the list whose name or number match nameOrNumber.
+            def getDepot(self, nameOrNumber):
+                # Sanitize the inputs.
+                if self.depots is None or len(self.depots) == 0:
+                    return None
+                elif nameOrNumber is None:
+                    return None
+                # Prepare state
+                name = None
+                depotNumber = None
+                if isinstance(nameOrNumber, int):
+                    depotNumber = nameOrNumber
+                else:
+                    name = nameOrNumber
+                    try:
+                        depotNumber = int(nameOrNumber)
+                    except:
+                        pass
+                # Find the matching stream
+                for depot in self.depots:
+                    if (name is not None and name == depot.name) or (depotNumber is not None and depotNumber == depot.number):
+                        return depot
+                # Not found
+                return None
                 
             @classmethod
             def fromxmlstring(cls, xmlText):
