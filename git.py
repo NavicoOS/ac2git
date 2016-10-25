@@ -415,9 +415,9 @@ def set_author_or_committer_environment(who="author", name=None, email=None, dat
         'GIT_{who}_DATE' : None if date_str is None else str('{0}'.format(date_str))
     }
     
-    for k in newEnv:
-        if newEnv[k] is not None:
-            env[k.format(who=who)] = newEnv[k]
+    for k, v in newEnv.items():
+        if v is not None:
+            env[k.format(who=who)] = v
     return env
 
 class repo(object):

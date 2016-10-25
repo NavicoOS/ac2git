@@ -803,11 +803,20 @@ class AccuRev2Git(object):
             # When the stream map is missing or empty we intend to process all streams
             includeDeactivatedItems = "hidden" not in self.config.accurev.excludeStreamTypes
             streams = accurev.show.streams(depot=self.config.accurev.depot, includeDeactivatedItems=includeDeactivatedItems, includeOldDefinitions=False)
+            included, excluded = [], []
             for stream in streams.streams:
                 if self.config.accurev.excludeStreamTypes is not None and stream.Type in self.config.accurev.excludeStreamTypes:
-                    logger.debug("Excluded stream '{0}' of type '{1}'".format(stream.name, stream.Type))
-                    continue
-                streamMap[stream.name] = self.SanitizeBranchName(stream.name)
+                    excluded.append(stream)
+                else:
+                    included.append(stream)
+                    streamMap[stream.name] = self.SanitizeBranchName(stream.name)
+            logger.info("Auto-generated stream list ({0} included, {1} excluded):".format(len(included), len(excluded)))
+            logger.info("  Included streams ({0}):".format(len(included)))
+            for s in included:
+                logger.info("    + {0}: {1} -> {2}".format(s.Type, s.name, streamMap[s.name]))
+            logger.info("  Excluded streams ({0}):".format(len(excluded)))
+            for s in excluded:
+                logger.info("    - {0}: {1}".format(s.Type, s.name))
 
         return streamMap
 
