@@ -793,7 +793,7 @@ class AccuRev2Git(object):
 
         return commitHash
 
-    def GetStreamMap(self):
+    def GetStreamMap(self, printInfo=False):
         streamMap = self.config.accurev.streamMap
 
         if streamMap is None:
@@ -810,13 +810,14 @@ class AccuRev2Git(object):
                 else:
                     included.append(stream)
                     streamMap[stream.name] = self.SanitizeBranchName(stream.name)
-            logger.info("Auto-generated stream list ({0} included, {1} excluded):".format(len(included), len(excluded)))
-            logger.info("  Included streams ({0}):".format(len(included)))
-            for s in included:
-                logger.info("    + {0}: {1} -> {2}".format(s.Type, s.name, streamMap[s.name]))
-            logger.info("  Excluded streams ({0}):".format(len(excluded)))
-            for s in excluded:
-                logger.info("    - {0}: {1}".format(s.Type, s.name))
+            if printInfo:
+                logger.info("Auto-generated stream list ({0} included, {1} excluded):".format(len(included), len(excluded)))
+                logger.info("  Included streams ({0}):".format(len(included)))
+                for s in included:
+                    logger.info("    + {0}: {1} -> {2}".format(s.Type, s.name, streamMap[s.name]))
+                logger.info("  Excluded streams ({0}):".format(len(excluded)))
+                for s in excluded:
+                    logger.info("    - {0}: {1}".format(s.Type, s.name))
 
         return streamMap
 
@@ -3052,7 +3053,9 @@ class AccuRev2Git(object):
             
     def InitGitRepo(self, gitRepoPath):
         gitRootDir, gitRepoDir = os.path.split(gitRepoPath)
-        if os.path.isdir(gitRootDir):
+        if len(gitRepoDir) == 0 and len(gitRootDir) > 0: # The path was slash terminated.
+            gitRootDir, gitRepoDir = os.path.split(gitRootDir)
+        if len(gitRootDir) == 0 or os.path.isdir(gitRootDir):
             if git.isRepo(gitRepoPath):
                 # Found an existing repo, just use that.
                 logger.info( "Using existing git repository." )
@@ -3747,6 +3750,112 @@ def PrintConfigSummary(config, filename):
         logger.info('  log file: {0}'.format(config.logFilename))
         logger.info('  verbose:  {0}'.format( (logger.getEffectiveLevel() == logging.DEBUG) ))
 
+def PrintStatus(state):
+    # Setup Git - TODO: this was copied from Accurev2Git.Start(), remove this duplication at some point...
+    try:
+        state.gitRepo = git.open(state.config.git.repoPath)
+        status = state.gitRepo.status()
+        if status is None:
+            logger.info("git state failed. Aborting! err: {err}".format(err=state.gitRepo.lastStderr))
+            return
+    except:
+        logger.exception("git state failed. Aborting! err: {err}".format(err=state.gitRepo.lastStderr))
+        return
+    # end TODO
+
+    # Setup AccuRev - TODO: this was copied from Accurev2Git.Start(), remove this duplication at some point...
+    acInfo = accurev.info()
+    doLogout = False
+    isLoggedIn = False
+    if state.config.accurev.username is None:
+        # When a username isn't specified we will use any logged in user for the conversion.
+        isLoggedIn = accurev.ext.is_loggedin(infoObj=acInfo)
+    else:
+        # When a username is specified that specific user must be logged in.
+        isLoggedIn = (acInfo.principal == state.config.accurev.username)
+
+    if not isLoggedIn:
+        # Login the requested user
+        if accurev.ext.is_loggedin(infoObj=acInfo):
+            # Different username, logout the other user first.
+            logoutSuccess = accurev.logout()
+            logger.info("Accurev logout for '{0}' {1}".format(acInfo.principal, 'succeeded' if logoutSuccess else 'failed'))
+
+        loginResult = accurev.login(state.config.accurev.username, state.config.accurev.password)
+        if loginResult:
+            logger.info("Accurev login for '{0}' succeeded.".format(state.config.accurev.username))
+        else:
+            logger.error("AccuRev login for '{0}' failed.\n".format(state.config.accurev.username))
+            logger.error("AccuRev message:\n{0}".format(loginResult.errorMessage))
+            return 1
+
+        doLogout = True
+    else:
+        logger.info("Accurev user '{0}', already logged in.".format(acInfo.principal))
+
+    # If this script is being run on a replica then ensure that it is up-to-date before processing the streams.
+    accurev.replica.sync()
+    # end TODO
+
+    # Get all of the streams that have been recorded in Git's hidden refs.
+    logger.info("Parsing hidden refs for downloaded AccuRev streams.")
+    refList = state.GetAllKnownStreamRefs(state.config.accurev.depot)
+    refMap = {}
+    for ref in refList:
+        depotNumber, streamNumber, remainder = state.ParseStreamRef(ref=ref)
+        if streamNumber not in refMap:
+            refMap[streamNumber] = { "depot": depotNumber }
+        if remainder in [ "info", "data" ]:
+            lastTrId = state.GetTransactionForRef(ref=ref)
+            refMap[streamNumber][remainder] = lastTrId
+            refMap[streamNumber][remainder + "-ref"] = ref
+        elif remainder == "hwm":
+            hwmRefText = state.ReadFileRef(ref=ref)
+            if hwmRefText is not None and len(hwmRefText) > 0:
+                hwmMetadata = json.loads(hwmRefText)
+                hwm = hwmMetadata.get("high-water-mark")
+                refMap[streamNumber][remainder] = int(hwm)
+        else:
+            logger.warning("Unknown ref: {0}".format(ref))
+
+    # Get the configured streams list
+    logger.info("Parsing configured AccuRev streams.")
+    streamMap = state.GetStreamMap()
+    streamList = []
+    logger.info("Stream information:")
+    for streamName, branchName in streamMap.items():
+        stream = state.GetStreamByName(state.config.accurev.depot, streamName)
+        streamList.append(stream)
+        symbol = '+'
+        info = 'no downloaded data'
+        if stream.streamNumber in refMap:
+            symbol = '='
+            refData = refMap[stream.streamNumber]
+            info, data, hwm = refData.get("info"), refData.get("data"), refData.get("hwm")
+            info = 'downloaded up to transaction {tr} (info: {info}, data: {data}, high-water-mark: {hwm})'.format(tr=hwm, info=info, data=data, hwm=hwm)
+            del refMap[stream.streamNumber]
+        logger.info("  {symbol} stream: {name} (id: {number}) - {info}".format(symbol=symbol, name=stream.name, number=stream.streamNumber, info=info))
+
+    # Print the information about streams that have downloaded data but are not configured
+    streams = None
+    for streamNumber, refData in refMap.items():
+        info, data, hwm = refData.get("info"), refData.get("data"), refData.get("hwm")
+        info = 'downloaded up to transaction {tr} (info: {info}, data: {data}, high-water-mark: {hwm})'.format(tr=hwm, info=info, data=data, hwm=hwm)
+        streamName = '[unknown]'
+        if "info-ref" in refData:
+            if streams is None:
+                streamsXml, streams = self.GetStreamsInfo(ref=refData["info-ref"])
+            stream = streams.getStream(streamNumber)
+            if stream is None:
+                streamsXml, streams = self.GetStreamsInfo(ref=refData["info-ref"])
+                stream = streams.getStream(streamNumber)
+            if stream is not None:
+                streamName = stream.name
+        logger.info("  - stream: {name} (id: {number}) - {info}".format(name=streamName, number=streamNumber, info=info))
+
+    if doLogout:
+        accurev.logout()
+
 def PrintRunningTime(referenceTime):
     outMessage = ''
     # Custom formatting of the timestamp
@@ -3793,6 +3902,7 @@ def AccuRev2GitMain(argv):
     parser.add_argument('--fixup-config', nargs='?', dest='fixupConfigFilename', const=configFilename, default=None, metavar='<config-filename>', help="Fixup the configuration file by adding updated AccuRev information. It is the same as the --auto-config option but the existing configuration file options are preserved. Other command line arguments that are provided will override the existing configuration file options for the new configuration file.")
     parser.add_argument('-T', '--track',    dest='track', action='store_const', const=True, help="Tracking mode. Sets the 'tracking' flag which makes the script run continuously in a loop. The configuration file is reloaded on each iteration so changes are picked up. Only makes sense for when you want this script to continuously track the accurev depot's newest transactions (i.e. you're using 'highest' or 'now' as your end transactions).")
     parser.add_argument('-I', '--tracking-intermission', nargs='?', dest='intermission', type=int, const=300, default=0, metavar='<intermission-sec>', help="Sets the intermission (in seconds) between consecutive iterations of the script in 'tracking' mode. The script sleeps for <intermission-sec> seconds before continuing the next conversion. This is useless if the --track option is not used.")
+    parser.add_argument('-s', '--status', dest='status', action='store_true', default=False, help="Print the status of the conversion and exit.")
     
     args = parser.parse_args()
     
@@ -3845,6 +3955,10 @@ def AccuRev2GitMain(argv):
             state = AccuRev2Git(config)
 
             PrintConfigSummary(state.config, args.configFilename)
+            if args.status:
+                PrintMissingUsers(state.config)
+                PrintStatus(state)
+                return 0
             if args.checkMissingUsers in [ "warn", "strict" ]:
                 if PrintMissingUsers(state.config) and args.checkMissingUsers == "strict":
                     sys.stderr.write("Found missing users. Exiting.\n")
