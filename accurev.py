@@ -28,7 +28,7 @@ def GetXmlContents(xmlElement):
     if xmlElement is not None:
         text = ''
         if xmlElement.text is not None:
-	    text = xmlElement.text
+            text = xmlElement.text
         return text + ''.join(ElementTree.tostring(e) for e in xmlElement)
     return None
 
