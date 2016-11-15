@@ -26,7 +26,10 @@ import sqlite3
 # ################################################################################################ #
 def GetXmlContents(xmlElement):
     if xmlElement is not None:
-        return xmlElement.text + ''.join(ElementTree.tostring(e) for e in xmlElement)
+        text = ''
+        if xmlElement.text is not None:
+	    text = xmlElement.text
+        return text + ''.join(ElementTree.tostring(e) for e in xmlElement)
     return None
 
 def IntOrNone(value):
