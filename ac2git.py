@@ -652,6 +652,13 @@ class AccuRev2Git(object):
 
     def SafeCheckout(self, ref, doReset=False, doClean=False):
         status = self.gitRepo.status()
+        if status is None:
+            logger.error("git status - command failed!")
+            logger.error("  exit code: {0}".format(self.gitRepo.lastReturnCode))
+            logger.error("  stderr: {0}".format(self.gitRepo.lastStderr))
+            logger.error("  stdout: {0}".format(self.gitRepo.lastStdout))
+            raise Exception("SafeCheckout - failed to invoke `git status`")
+        
         if doReset:
             logger.debug( "Reset current branch - '{br}'".format(br=status.branch) )
             self.gitRepo.reset(isHard=True)
