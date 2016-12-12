@@ -1436,11 +1436,11 @@ class AccuRev2Git(object):
             commitHash = self.Commit(transaction=tr, allowEmptyCommit=True, messageOverride="transaction {trId}".format(trId=tr.id), parents=[], ref=dataRef, authorIsCommitter=True)
             if commitHash is None:
                 # The first streams mkstream transaction will be empty so we may end up with an empty commit.
-                logger.debug( "{0} first commit has failed.".format(stream.name) )
+                logger.error( "{0} first commit has failed.".format(stream.name) )
                 return (None, None)
             else:
                 if self.gitRepo.checkout(branchName=dataRef) is None:
-                    logger.debug( "{0} failed to checkout data ref {1}. Aborting!".format(stream.name, dataRef) )
+                    logger.error( "{0} failed to checkout data ref {1}. Aborting!".format(stream.name, dataRef) )
                     return (None, None)
 
                 logger.info( "stream {streamName}: tr. #{trId} {trType} -> commit {hash} on {ref}".format(streamName=stream.name, trId=tr.id, trType=tr.Type, hash=self.ShortHash(commitHash), ref=dataRef) )
