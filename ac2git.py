@@ -1575,9 +1575,9 @@ class AccuRev2Git(object):
                 else:
                     logger.info( "Updated the high-water-mark to ref {ref} as {trId}".format(ref=hwmRef, trId=newHwm) )
         elif stateTr is not None and dataTr is None:
-            logger.error( "Missmatch while retrieving stream {streamName} (id: streamId), the state ref ({stateRef}) is on tr. {stateTr} but the data ref ({dataRef}) wasn't retrieved.".format(streamName=stream.name, streamId=stream.streamNumber, stateTr=stateTr.id, dataRef=dataRef, stateRef=stateRef) )
+            logger.error( "Missmatch while retrieving stream {streamName} (id: {streamId}), the state ref ({stateRef}) is on tr. {stateTr} but the data ref ({dataRef}) wasn't retrieved.".format(streamName=stream.name, streamId=stream.streamNumber, stateTr=stateTr.id, dataRef=dataRef, stateRef=stateRef) )
         elif stateTr is None:
-            logger.error( "While retrieving stream {streamName} (id: streamId), the state ref ({stateRef}) failed.".format(streamName=stream.name, streamId=stream.streamNumber, dataRef=dataRef, stateRef=stateRef) )
+            logger.error( "While retrieving stream {streamName} (id: {streamId}), the state ref ({stateRef}) failed.".format(streamName=stream.name, streamId=stream.streamNumber, dataRef=dataRef, stateRef=stateRef) )
 
         return dataTr, dataHash
 
