@@ -124,6 +124,7 @@ class Config(object):
                 authorIsCommitter = xmlElement.attrib.get('author-is-committer')
                 emptyChildStreamAction  = xmlElement.attrib.get('empty-child-stream-action')
                 sourceStreamFastForward = xmlElement.attrib.get('source-stream-fast-forward')
+                sourceStreamInferrence = xmlElement.attrib.get('source-stream-inferrence')
                 newBasisIsFirstParent = xmlElement.attrib.get('new-basis-is-first-parent')
 
                 remoteMap = OrderedDict()
@@ -135,11 +136,11 @@ class Config(object):
                     
                     remoteMap[remoteName] = git.GitRemoteListItem(name=remoteName, url=remoteUrl, pushUrl=remotePushUrl)
 
-                return cls(repoPath=repoPath, messageStyle=messageStyle, messageKey=messageKey, authorIsCommitter=authorIsCommitter, remoteMap=remoteMap, emptyChildStreamAction=emptyChildStreamAction, sourceStreamFastForward=sourceStreamFastForward, newBasisIsFirstParent=newBasisIsFirstParent)
+                return cls(repoPath=repoPath, messageStyle=messageStyle, messageKey=messageKey, authorIsCommitter=authorIsCommitter, remoteMap=remoteMap, emptyChildStreamAction=emptyChildStreamAction, sourceStreamFastForward=sourceStreamFastForward, sourceStreamInferrence=sourceStreamInferrence, newBasisIsFirstParent=newBasisIsFirstParent)
             else:
                 return None
             
-        def __init__(self, repoPath, messageStyle=None, messageKey=None, authorIsCommitter=None, remoteMap=None, emptyChildStreamAction=None, sourceStreamFastForward=None, newBasisIsFirstParent=None):
+        def __init__(self, repoPath, messageStyle=None, messageKey=None, authorIsCommitter=None, remoteMap=None, emptyChildStreamAction=None, sourceStreamFastForward=None, sourceStreamInferrence=None, newBasisIsFirstParent=None):
             self.repoPath               = repoPath
             self.messageStyle           = messageStyle
             self.messageKey             = messageKey
@@ -169,10 +170,19 @@ class Config(object):
             else:
                 self.sourceStreamFastForward = False
             
+            if sourceStreamInferrence is not None:
+                sourceStreamInferrence = sourceStreamInferrence.lower()
+                if sourceStreamInferrence not in [ "true", "false" ]:
+                    raise Exception("Error, the source-stream-inferrence attribute only accepts true or false options but got: {0}".format(sourceStreamInferrence))
+                self.sourceStreamInferrence = (sourceStreamInferrence == "true")
+            else:
+                self.sourceStreamInferrence = False
+            
+            
             if newBasisIsFirstParent is not None:
                 newBasisIsFirstParent = newBasisIsFirstParent.lower()
                 if newBasisIsFirstParent not in [ "true", "false" ]:
-                    raise Exception("Error, the new-basis-is-first-parent attribute only accepts true or false options but got: {0}".format(sourceStreamFastForward))
+                    raise Exception("Error, the new-basis-is-first-parent attribute only accepts true or false options but got: {0}".format(newBasisIsFirstParent))
                 self.newBasisIsFirstParent = (newBasisIsFirstParent == "true")
             else:
                 self.newBasisIsFirstParent = True
@@ -1663,8 +1673,14 @@ class AccuRev2Git(object):
     # Tries to get the stream name from the data that we have stored in git.
     def GetStreamByName(self, depot, streamName):
         depot = self.GetDepot(depot)
-
-        if depot is not None and accurev.ext.is_loggedin():
+        accurev_is_loggedin = False
+        
+        try:
+            accurev_is_loggedin = accurev.ext.is_loggedin()
+        except:
+            pass
+        
+        if depot is not None and accurev_is_loggedin:
             try:
                 stream = accurev.show.streams(depot=depot.name, stream=streamName, useCache=self.config.accurev.UseCommandCache()).streams[0]
                 if stream is not None and stream.name is not None:
@@ -2378,12 +2394,11 @@ class AccuRev2Git(object):
                 self.MergeIntoChildren(tr=tr, streamTree=streamTree, streamMap=streamMap, affectedStreamMap=affectedStreamMap, streams=streams, streamNumber=c)
 
     def UnpackStreamDetails(self, streams, streamMap, affectedStreamMap, streamNumber):
-        if streamNumber is not None and not isinstance(streamNumber, int):
-            streamNumber = int(streamNumber)
-
         # Get the information for the stream on which this transaction had occurred.
         stream, branchName, streamData, treeHash = None, None, None, None
         if streamNumber is not None:
+            if not isinstance(streamNumber, int):
+                streamNumber = int(streamNumber)
             # Check if the destination stream is a part of our processing.
             if streamMap is not None and str(streamNumber) in streamMap:
                 branchName = streamMap[str(streamNumber)]["branch"]
@@ -2486,6 +2501,65 @@ class AccuRev2Git(object):
 
         logger.debug("GetBasisCommitHash: Commit hash for stream {name} (id: {sn}) was not found.".format(name=streamName, sn=streamNumber))
         return None, None, None, None
+
+    def TryInferSourceStream(self, streams, streamMap, affectedStreamMap, dstStreamNumber):
+        if dstStreamNumber is None:
+            # If we don't know where this was promoted to then we can't figure out where it was promoted from...
+            return None, None
+        
+        # Convert the stream information into a tree containing only streams that were not affected by the transaction.
+        streamTree = self.BuildStreamTree(streams=streams.streams)
+        affectedSet = set([ sn for sn in affectedStreamMap ])
+        
+        # Get the destination stream details.
+        stream, branchName, streamData, treeHash = self.UnpackStreamDetails(streams=streams, streamMap=streamMap, affectedStreamMap=affectedStreamMap, streamNumber=dstStreamNumber)
+        if stream is None:
+            raise Exception("Couldn't get the stream from its number {n}".format(n=sn))
+        
+        # Diff the destination stream to its last commit.
+        lastCommitHash = self.GetLastCommitHash(branchName=branchName)
+        diff = self.GitDiff(lastCommitHash, streamData["data_hash"])
+        if len(diff) == 0:
+            # The diff is empty, meaning that this transaction didn't change the destination stream.
+            # It is impossible to determine the source stream for the promote in this case. Bail out!
+            logger.debug("TryInferSourceStream: Can't infer source stream as the destination stream has not changed.".format(b=branchName, s=stream.name))
+            return None, None
+        
+        possibleSrcStream = []
+        s = streamTree[dstStreamNumber]
+        for c in s["children"]:
+            assert c is not None, "Invariant error! Invalid dictionary structure. Data: {d1}, from: {d2}".format(d1=s, d2=streamTree)
+            if c in affectedSet:
+                # If this child stream was the source of the promote it wouldn't have been changed (affected) by the promote.
+                continue
+
+            childStream, childBranchName, childStreamData, childTreeHash = self.UnpackStreamDetails(streams=streams, streamMap=streamMap, affectedStreamMap=affectedStreamMap, streamNumber=c)
+            if childStream is None:
+                raise Exception("Couldn't get the stream from its number {n}".format(n=c))
+            assert childTreeHash is None, "Invariant: As an unaffected stream there should be no data for this transaction."
+
+            if childStream.time is not None and accurev.GetTimestamp(childStream.time) != 0:
+                logger.debug("TryInferSourceStream: Child stream {s} is timelocked to {t}. It can't be used for determining the source stream.".format(s=childBranchName, t=childStream.time))
+                continue
+
+            lastChildCommitHash = self.GetLastCommitHash(branchName=childBranchName)
+            if lastChildCommitHash is None:
+                # If the child stream has no last commit hash then it is excluded from the candidacy.
+                continue
+            
+            # Do a diff between the last commit on the child stream and the tree in the destination stream.
+            # If they are the same then we know that it is highly likely that this is the source of the promote.
+            diff = self.GitDiff(lastChildCommitHash, streamData["data_hash"])
+
+            if len(diff) == 0:
+                possibleSrcStream.append( (childStream.name, childStream.streamNumber) )
+        
+        # If we have only a single stream that wasn't changed by this transaction, and its contents is the same as the
+        # destination stream's (i.e. it has become an empty stream), then it is most likely the source of the promote.
+        if len(possibleSrcStream) == 1:
+            return possibleSrcStream[0]
+        # No suitable source stream found.
+        return None, None
 
     # Processes a single transaction whose id is the trId (int) and which has been recorded against the streams outlined in the affectedStreamMap.
     # affectedStreamMap is a dictionary with the following format { <key:stream_num_str>: { "state_hash": <val:state_ref_commit_hash>, "data_hash": <val:data_ref_commit_hash> } }
@@ -2723,6 +2797,16 @@ class AccuRev2Git(object):
 
                 # Determine the stream from which the files in this this transaction were promoted.
                 srcStreamName, srcStreamNumber = trHist.fromStream()
+                if srcStreamNumber is None and tr.Type == 'promote':
+                    if self.config.git.sourceStreamInferrence:
+                        srcStreamName, srcStreamNumber = self.TryInferSourceStream(streams=streams, streamMap=streamMap, affectedStreamMap=affectedStreamMap, dstStreamNumber=streamNumber)
+                        if srcStreamNumber is not None:
+                            logger.info("{trType} {tr}. Source stream unavailable. Inferred source stream: {s} (id: {id})".format(tr=tr.id, trType=tr.Type, s=srcStreamName, id=srcStreamNumber))
+                        else:
+                            logger.debug("{trType} {tr}. Source stream unavailable. Failed to infer source stream.".format(tr=tr.id, trType=tr.Type))
+                    else:
+                        logger.debug("{trType} {tr}. Source stream unavailable.".format(tr=tr.id, trType=tr.Type))
+                
                 srcStream, srcBranchName, srcStreamData, srcTreeHash = self.UnpackStreamDetails(streams=streams, streamMap=streamMap, affectedStreamMap=affectedStreamMap, streamNumber=srcStreamNumber)
 
                 lastSrcBranchHash = None
@@ -3333,6 +3417,9 @@ def DumpExampleConfigFile(outputFilename):
             source-stream-fast-forward: [ "true", "false" ] - when a promote is made and both the source and destination streams are known a merge commit is made on the destination stream. If
                                         this option is set to "true" then the source stream's branch is moved up to the destination branch after the commit is made, otherwise it is left where
                                         it was before.
+            source-stream-inferrence: [ "true", "false" ] - Experimental: when the promote transaction has no source stream in formation in its extended XML, which can be the case for older Accurev depots, 
+                                                            try and infer the source of the promote. If a child stream was not changed by the promote but the basis stream (destination of the promote)
+                                                            ended up being the same as the child stream it is highly likely that this child stream is the source of the promote.
             new-basis-is-first-parent: [ "true", "false" ] - If set to true, for a chstream transaction, the new basis transaction will be made the corresponding commit's first parent, while
                                                              the previous transaction made in the stream will be the second parent. If set to false the order of the two parents is reversed.
     -->
@@ -3343,6 +3430,7 @@ def DumpExampleConfigFile(outputFilename):
         author-is-committer="true" 
         empty-child-stream-action="merge" 
         source-stream-fast-forward="false"
+        source-stream-inferrence="false"
         new-basis-is-first-parent="true" > 
         <!-- Optional: You can add remote elements to specify the remotes to which the converted branches will be pushed. The push-url attribute is optional. -->
         <remote name="origin" url="https://github.com/orao/ac2git.git" push-url="https://github.com/orao/ac2git.git" /> 
@@ -3517,6 +3605,9 @@ def AutoConfigFile(filename, args, preserveConfig=False):
             source-stream-fast-forward: [ "true", "false" ] - when a promote is made and both the source and destination streams are known a merge commit is made on the destination stream. If
                                         this option is set to "true" then the source stream's branch is moved up to the destination branch after the commit is made, otherwise it is left where
                                         it was before.
+            source-stream-inferrence: [ "true", "false" ] - Experimental: when the promote transaction has no source stream in formation in its extended XML, which can be the case for older Accurev depots, 
+                                                            try and infer the source of the promote. If a child stream was not changed by the promote but the basis stream (destination of the promote)
+                                                            ended up being the same as the child stream it is highly likely that this child stream is the source of the promote.
             new-basis-is-first-parent: [ "true", "false" ] - If set to true, for a chstream transaction, the new basis transaction will be made the corresponding commit's first parent, while
                                                              the previous transaction made in the stream will be the second parent. If set to false the order of the two parents is reversed.
     -->
@@ -3527,12 +3618,14 @@ def AutoConfigFile(filename, args, preserveConfig=False):
         author-is-committer="{author_is_committer}"
         empty-child-stream-action="{empty_child_stream_action}" 
         source-stream-fast-forward="{source_stream_fast_forward}"
+        source-stream-inferrence="{source_stream_inferrence}"
         new-basis-is-first-parent="{new_basis_is_first_parent}" >""".format(git_repo_path=config.git.repoPath,
                                                                             message_style=config.git.messageStyle if config.git.messageStyle is not None else 'notes',
                                                                             message_key=config.git.messageKey if config.git.messageKey is not None else 'footer',
                                                                             author_is_committer="true" if config.git.authorIsCommitter else "false",
                                                                             empty_child_stream_action=config.git.emptyChildStreamAction,
                                                                             source_stream_fast_forward="true" if config.git.sourceStreamFastForward else "false",
+                                                                            source_stream_inferrence="true" if config.git.sourceStreamInferrence else "false",
                                                                             new_basis_is_first_parent="true" if config.git.newBasisIsFirstParent else "false"))
         if config.git.remoteMap is not None:
             for remoteName in remoteMap:
@@ -3673,6 +3766,8 @@ def SetConfigFromArgs(config, args):
         config.git.emptyChildStreamAction = args.emptyChildStreamAction
     if args.sourceStreamFastForward is not None:
         config.git.sourceStreamFastForward = (args.sourceStreamFastForward == "true")
+    if args.sourceStreamInferrence is not None:
+        config.git.sourceStreamInferrence = (args.sourceStreamInferrence == "true")
     if args.conversionMethod is not None:
         config.method = args.conversionMethod
     if args.mergeStrategy is not None:
@@ -3730,6 +3825,7 @@ def PrintConfigSummary(config, filename):
         logger.info('    author is committer: {0}'.format(config.git.authorIsCommitter))
         logger.info('    empty child stream action: {0}'.format(config.git.emptyChildStreamAction))
         logger.info('    source stream fast forward: {0}'.format(config.git.sourceStreamFastForward))
+        logger.info('    source stream inferrence: {0}'.format(config.git.sourceStreamInferrence))
         logger.info('    new basis is first parent: {0}'.format(config.git.newBasisIsFirstParent))
         if config.git.remoteMap is not None:
             for remoteName in config.git.remoteMap:
@@ -3897,6 +3993,7 @@ def AccuRev2GitMain(argv):
     parser.add_argument('-S', '--merge-strategy', dest='mergeStrategy', choices=['skip', 'normal', 'orphanage'], metavar='<merge-strategy>', help="Sets the merge strategy which dictates how the git repository branches are generated. Depending on the value chosen the branches can be orphan branches ('orphanage' strategy) or have merges where promotes have occurred with the 'normal' strategy. The 'skip' strategy forces the script to skip making the git branches and will cause it to only do the retrieving of information from accurev for use with some strategy at a later date.")
     parser.add_argument('-E', '--empty-child-stream-action', dest='emptyChildStreamAction', choices=['merge', 'cherry-pick'], metavar='<empty-child-stream-action>', help="When a promote to a parent stream affects the child stream and the result of the two commits on the two branches in git results in a git diff operation returning empty then it could be said that this was in-fact a merge (of sorts). This option controlls whether such situations are treated as cherry-picks or merges in git.")
     parser.add_argument('-K', '--source-stream-fast-forward', dest='sourceStreamFastForward', choices=['true', 'false'], metavar='<source-stream-fast-forward>', help="When both the source and destination streams are known this flag controlls whether the source branch is moved to the resulting merge commit (the destination branch is always updated/moved to this commit). This has an effect of making the history look like the letter K where the promotes come in and then branch from the merge commit instead of the previous commit which occured on the branch.")
+    parser.add_argument('--exp-source-stream-inferrence', dest='sourceStreamInferrence', choices=['true', 'false'], metavar='<source-stream-inferrence>', help="Experimental: When the source stream (source of a promote) is unknown, this flag controlls whether script will attempt to infer the source stream from the contents of the child streams. If a child stream was not changed by the promote but the basis stream (destination of the promote) ended up being the same as the child stream it is highly likely that this child stream is the source of the promote.")
     parser.add_argument('-R', '--restart',    dest='restart', action='store_const', const=True, help="Discard any existing conversion and start over.")
     parser.add_argument('-r', '--soft-restart',    dest='softRestart', action='store_const', const=True, help="Discard any existing processed branches and start the processing from the downloaded accurev data anew.")
     parser.add_argument('-v', '--verbose',    dest='debug',   action='store_const', const=True, help="Print the script debug information. Makes the script more verbose.")
