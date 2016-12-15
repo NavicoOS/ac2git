@@ -2517,12 +2517,15 @@ class AccuRev2Git(object):
             raise Exception("Couldn't get the stream from its number {n}".format(n=sn))
         
         # Diff the destination stream to its last commit.
+        if branchName is None:
+            logger.debug("TryInferSourceStream: Can't infer source stream as the destination stream {s} (id: {id}) has no branch name.".format(s=stream.name, id=stream.streamNumber))
+            return None, None
         lastCommitHash = self.GetLastCommitHash(branchName=branchName)
         diff = self.GitDiff(lastCommitHash, streamData["data_hash"])
         if len(diff) == 0:
             # The diff is empty, meaning that this transaction didn't change the destination stream.
             # It is impossible to determine the source stream for the promote in this case. Bail out!
-            logger.debug("TryInferSourceStream: Can't infer source stream as the destination stream has not changed.".format(b=branchName, s=stream.name))
+            logger.debug("TryInferSourceStream: Can't infer source stream as the destination stream {s} (id: {id}) has not changed.".format(s=stream.name, id=stream.streamNumber))
             return None, None
         
         possibleSrcStream = []
@@ -2542,6 +2545,10 @@ class AccuRev2Git(object):
                 logger.debug("TryInferSourceStream: Child stream {s} is timelocked to {t}. It can't be used for determining the source stream.".format(s=childBranchName, t=childStream.time))
                 continue
 
+            if childBranchName is None:
+                logger.debug("TryInferSourceStream: Child stream {s} (id: {id}) has no branch name, skipping.".format(s=childStream.name, id=childStream.streamNumber))
+                continue
+            
             lastChildCommitHash = self.GetLastCommitHash(branchName=childBranchName)
             if lastChildCommitHash is None:
                 # If the child stream has no last commit hash then it is excluded from the candidacy.
