@@ -2518,7 +2518,7 @@ class AccuRev2Git(object):
         
         # Diff the destination stream to its last commit.
         if branchName is None:
-            logger.debug("TryInferSourceStream: Can't infer source stream as the destination stream {s} (id: {id}) has no branch name.".format(s=stream.name, id=stream.streamNumber))
+            #logger.debug("TryInferSourceStream: Can't infer source stream as the destination stream {s} (id: {id}) has no branch name.".format(s=stream.name, id=stream.streamNumber))
             return None, None
         lastCommitHash = self.GetLastCommitHash(branchName=branchName)
         diff = self.GitDiff(lastCommitHash, streamData["data_hash"])
