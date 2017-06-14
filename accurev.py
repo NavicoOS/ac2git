@@ -2415,12 +2415,15 @@ class ext(object):
                             mkstreamTr = t
                             break
                 if mkstreamTr is None:
-                    raise Exception("Failed to find the mkstream transaction for stream {s} (name: {n}, id: {sn}, created: {t} UTC)!".format(s=stream, n=streamInfo.name, sn=streamInfo.streamNumber, t=streamInfo.startTime))
+                    # Failed to find the mkstream transaction.
+                    return None
             else:
                 # We found the mkstream transaction cheaply, return it.
                 mkstreamTr = mkstream.transactions[0]
                 if len(mkstream.transactions) != 1:
-                    raise Exception("There seem to be multiple mkstream transactions for the stream {0}".format(stream))
+                    # There seem to be multiple mkstream transactions for this stream.
+                    # Since we can't know which one belongs to us, return.
+                    return None
 
         return mkstreamTr
 
@@ -2602,7 +2605,13 @@ class ext(object):
             if mkstreamTr is None:
                 mkstreamTr = ext.get_mkstream_transaction(stream=streamInfo.streamNumber, depot=depot, useCache=useCache)
                 if mkstreamTr is None:
-                    raise Exception("Failed to get mkstream transaction for the stream {0}".format(stream))
+                    # We can't reasonably determine where the stream started so just pick the first transaction
+                    # from the stream itself.
+                    h = hist(depot=depot, timeSpec="highest-1", stream=streamInfo.name, useCache=useCache)
+                    if h is not None and len(h.transactions) > 0:
+                        mkstreamTr = h.transactions[-1] # Get first transaction
+                    else:
+                        return []
             if mkstreamTr.id > ts.end:
                 # The stream didn't exist during the requested time span.
                 return []
