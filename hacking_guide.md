@@ -23,13 +23,13 @@ There are also functions in the _global namespace_ which return objects from the
 For example let us look at the `accurev pop` command. To invoke it you can do the following:
 
     import accurev
-	
-	result = accurev.pop(verSpec="MyStream", location=".", timeSpec="now", isRecursive=True, elementList="*")
-	
-	if result:
-		print("Successfully populated latest from MyStream")
-	else:
-		print("Error! Failed to populate MyStream!")
+    
+    result = accurev.pop(verSpec="MyStream", location=".", timeSpec="now", isRecursive=True, elementList="*")
+    
+    if result:
+        print("Successfully populated latest from MyStream")
+    else:
+        print("Error! Failed to populate MyStream!")
 
 The result is an `accurev.obj.Pop` object which contains two lists: `result.messages` and `result.elements`. Each element of the `result.messages` list is an `accurev.obj.Pop.Message` and each element of the `result.elements` list is an `accurev.obj.Pop.Element`. You can read their attributes directly and they are _loaded_ from the XML output of an accurev command.
 
@@ -38,12 +38,12 @@ The result is an `accurev.obj.Pop` object which contains two lists: `result.mess
 Effectively the `pop()` function from earlier is a convenience function that you could have decomposed into its constituents like so:
 
     xmlResult = accurev.raw.pop(verSpec="MyStream", location=".", timeSpec="now", isRecursive=True, elementList="*", isXmlOutput=True)
-	result = accurev.obj.Pop.fromxmlstring(xmlResult)
-	
-	if result:
-		print("Successfully populated latest from MyStream")
-	else:
-		print("Error! Failed to populate MyStream!")
+    result = accurev.obj.Pop.fromxmlstring(xmlResult)
+    
+    if result:
+        print("Successfully populated latest from MyStream")
+    else:
+        print("Error! Failed to populate MyStream!")
 
 In the end the only purpose of the fully specified `accurev.obj` namespace, as I call it, is to explicitly state what possible members we might be getting from the accurev XML output.
 

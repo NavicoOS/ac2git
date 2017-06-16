@@ -570,7 +570,10 @@ class AccuRev2Git(object):
         # Get the stream creation transaction (mkstream). Note: The first stream in the depot doesn't have an mkstream transaction.
         tr = accurev.ext.get_mkstream_transaction(stream=streamName, depot=depot, useCache=useCache)
         if tr is None:
-            raise Exception("Failed to find the mkstream transaction for stream {s}".format(s=streamName))
+            logger.warning("Failed to find the mkstream transaction for stream {s}. Trying to get first transaction.".format(s=streamName))
+            hist, histXml = self.TryHist(depot=depot, timeSpec="highest-1", streamName=streamName)
+            if hist is not None and len(hist.transactions) > 0:
+                tr = hist.transactions[-1] # Get first transaction
 
         hist, histXml = self.TryHist(depot=depot, timeSpec=tr.id) # Make the first transaction be the mkstream transaction.
 
@@ -1254,7 +1257,7 @@ class AccuRev2Git(object):
                 else:
                     logger.info( "stream {streamName}: tr. #{trId} {trType} -> commit {hash} on {ref}".format(streamName=stream.name, trId=tr.id, trType=tr.Type, hash=self.ShortHash(commitHash), ref=stateRef) )
             else:
-                logger.info( "Failed to get the first transaction for {0} from accurev. Won't retrieve any further.".format(stream.name) )
+                logger.warning( "Failed to get the first transaction for {0} from accurev. Continuing...".format(stream.name) )
                 return (None, None)
 
         # Get the end transaction.
@@ -1421,7 +1424,8 @@ class AccuRev2Git(object):
             # Get all the hashes from the stateRef since we need to process them all.
             stateHashList = self.GetGitLogList(ref=stateRef, gitLogFormat='%H')
             if stateHashList is None:
-                raise Exception("Couldn't get the commit hash list to process from the Accurev state ref {stateRef}.".format(stateRef=stateRef))
+                logger.warning("Couldn't get the commit hash list to process from the Accurev state ref {stateRef}.".format(stateRef=stateRef))
+                return (None, None)
 
             if len(stateHashList) == 0:
                 logger.error( "{dataRef} is upto date. No transactions available in Accurev state ref {stateRef}. git log {stateRef} returned empty.".format(dataRef=dataRef, stateRef=stateRef) )
