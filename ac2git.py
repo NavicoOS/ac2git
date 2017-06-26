@@ -3170,6 +3170,8 @@ class AccuRev2Git(object):
                 logger.info( "Created a new git repository." )
             else:
                 logger.error( "Failed to create a new git repository." )
+                logger.error( "Try to create it manually using git and then restart:" )
+                logger.error( "    git init {0}".format(gitRepoPath) )
                 sys.exit(1)
                 
             return True
