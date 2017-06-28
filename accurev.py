@@ -1451,19 +1451,19 @@ class obj:
                 if match:
                     itemMap[match.group(1)] = match.group(2)
 
-            return cls(principal=itemMap["Principal"]          \
-                       , host=itemMap["Host"]                  \
-                       , serverName=itemMap["Server name"]     \
-                       , port=itemMap["Port"]                  \
-                       , dbEncoding=itemMap["DB Encoding"]     \
-                       , ACCUREV_BIN=itemMap["ACCUREV_BIN"]    \
-                       , clientTime=itemMap["Client time"]     \
-                       , serverTime=itemMap["Server time"]     \
-                       , clientVer=itemMap.get("client_ver")   \
-                       , serverVer=itemMap.get("server_ver")   \
-                       , depot=itemMap.get("Depot")            \
+            return cls(principal=itemMap["Principal"]              \
+                       , host=itemMap["Host"]                      \
+                       , serverName=itemMap["Server name"]         \
+                       , port=itemMap.get("Port")                  \
+                       , dbEncoding=itemMap.get("DB Encoding")     \
+                       , ACCUREV_BIN=itemMap["ACCUREV_BIN"]        \
+                       , clientTime=itemMap.get("Client time")     \
+                       , serverTime=itemMap.get("Server time")     \
+                       , clientVer=itemMap.get("client_ver")       \
+                       , serverVer=itemMap.get("server_ver")       \
+                       , depot=itemMap.get("Depot")                \
                        , workspaceRef=itemMap.get("Workspace/ref") \
-                       , basis=itemMap.get("Basis")            \
+                       , basis=itemMap.get("Basis")                \
                        , top=itemMap.get("Top"))
 
 
