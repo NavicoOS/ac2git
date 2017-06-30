@@ -178,6 +178,12 @@ I strongly recommend reading the `how_it_works.md` for a word explanation of wha
 
 For now it works as I need it to and that's enough.
 
+----
+
+### Other works ###
+
+There is one more conversion script called [accurev-to-git](https://github.com/fuzzmz/accurev-to-git), which was developed independently to this one, by [Serban Constantin](https://github.com/fuzzmz). He wrote [this blog post](https://fuzz.me.uk/accurev-to-git/) about it, which explains his methodology.
+
 ---
 ---
 
