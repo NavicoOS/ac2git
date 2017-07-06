@@ -1178,10 +1178,10 @@ class AccuRev2Git(object):
         # Get the diff information. (if any)
         diff = None
         diffXml = self.gitRepo.raw_cmd(['git', 'show', '{hash}:diff.xml'.format(hash=ref)]) # Doesn't exist for the mkstream transaction (first commit)
-        if diffXml is not None:
+        if diffXml is not None and len(diffXml) != 0:
             diff = accurev.obj.Diff.fromxmlstring(diffXml)
-        elif len(diffXml) == 0:
-            raise Exception("Command failed! git show {hash}:diff.xml".format(hash=ref))
+        else:
+            logger.warning("Command failed! git show {hash}:diff.xml".format(hash=ref))
         return (diffXml, diff)
 
     # Gets the hist.xml contents and parsed accurev.obj.History object from the given \a ref (git ref or hash).
@@ -1488,35 +1488,26 @@ class AccuRev2Git(object):
             # Get the stream information.
             streamsXml, streams = self.GetStreamsInfo(ref=stateHash)
 
-            popOverwrite = (self.config.method == "pop")
             deletedPathList = None
-            if self.config.method == "pop":
-                self.ClearGitRepo()
-            else:
-                if diff is None:
-                    logger.error( "No diff available for {trId} on {dataRef}".format(trId=tr.id, dataRef=dataRef) )
-                    return (None, None)
- 
+            usePopMethod = (self.config.method == "pop")
+            if diff is None:
+                logger.warning("Accurev diff is unavailable for this transaction. Fallback to `pop method`...")
+                usePopMethod = True
+            elif not usePopMethod:
                 try:
+                    warning = "Error trying to delete changed elements. Fallback to `pop method`..."
                     deletedPathList = self.DeleteDiffItemsFromRepo(diff=diff)
-                except:
-                    popOverwrite = True
-                    logger.info("Error trying to delete changed elements. Fatal, aborting!")
-                    # This might be ok only in the case when the files/directories were changed but not in the case when there
-                    # was a deletion that occurred. Abort and be safe!
-                    # TODO: This must be solved somehow since this could hinder this script from continuing at all!
-                    return (None, None)
-
-                # Remove all the empty directories (this includes directories which contain an empty .gitignore file since that's what we is done to preserve them)
-                try:
+                    # Remove all the empty directories (this includes directories which contain an empty .gitignore file since that's what we is done to preserve them)
+                    warning = "Error trying to delete empty directories. Fallback to `pop method`..."
                     self.DeleteEmptyDirs()
                 except:
-                    popOverwrite = True
-                    logger.info("Error trying to delete empty directories. Fatal, aborting!")
+                    usePopMethod = True
+                    logger.warning(warning)
                     # This might be ok only in the case when the files/directories were changed but not in the case when there
-                    # was a deletion that occurred. Abort and be safe!
-                    # TODO: This must be solved somehow since this could hinder this script from continuing at all!
-                    return (None, None)
+                    # was a deletion that occurred. Fallback to using the pop method just to be safe.
+
+            if usePopMethod:
+                self.ClearGitRepo()
 
             tr = hist.transactions[0]
             streamAtTr = streams.getStream(stream.streamNumber)
@@ -1545,7 +1536,7 @@ class AccuRev2Git(object):
 
             # Populate
             logger.debug( "{0} pop: {1} {2}{3}".format(stream.name, tr.Type, tr.id, " to {0}".format(destStreamName) if destStreamName is not None else "") )
-            popResult = self.TryPop(streamName=stream.name, transaction=tr, overwrite=popOverwrite)
+            popResult = self.TryPop(streamName=stream.name, transaction=tr, overwrite=usePopMethod)
             if not popResult:
                 logger.error( "accurev pop failed for {trId} on {dataRef}".format(trId=tr.id, dataRef=dataRef) )
                 return (None, None)
