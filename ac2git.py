@@ -3500,7 +3500,7 @@ def AutoConfigFile(filename, args, preserveConfig=False):
     config = Config.fromfile(filename=args.configFilename)
     
     if config is None:
-        config = Config(accurev=Config.AccuRev(), git=Config.Git(), usermaps=[], logFilename=None)
+        config = Config(accurev=Config.AccuRev(), git=Config.Git(repoPath=None), usermaps=[], logFilename=None)
     elif not preserveConfig:
         # preserve only the accurev username and passowrd
         arUsername = config.accurev.username
@@ -3639,7 +3639,7 @@ def AutoConfigFile(filename, args, preserveConfig=False):
         file.write("""    </git>
     <method>{method}</method>
     <merge-strategy>{merge_strategy}</merge-strategy>
-    <logfile>{log_filename}<logfile>
+    <logfile>{log_filename}</logfile>
     <!-- The user maps are used to convert users from AccuRev into git. Please spend the time to fill them in properly. -->""".format(method=config.method, merge_strategy=config.mergeStrategy, log_filename=config.logFilename))
         file.write("""
     <usermaps filename="usermaps.config.xml">
