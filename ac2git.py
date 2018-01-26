@@ -27,6 +27,7 @@ import codecs
 import json
 import pytz
 import tempfile
+import stat
 
 from collections import OrderedDict
 
@@ -450,7 +451,11 @@ class AccuRev2Git(object):
             if os.path.islink(path):
                 os.unlink(path)
             elif os.path.isfile(path):
-                os.remove(path)
+                try:
+                    os.remove(path)
+                except:
+                    os.chmod(path, stat.S_IWRITE )
+                    os.unlink(path)
             elif os.path.isdir(path):
                 shutil.rmtree(path)
             
