@@ -452,8 +452,8 @@ class AccuRev2Git(object):
                 os.unlink(path)
             elif os.path.isfile(path):
                 try:
-                    os.remove(path)
-                except:
+                    os.unlink(path)
+                except OSError:
                     os.chmod(path, stat.S_IWRITE )
                     os.unlink(path)
             elif os.path.isdir(path):
