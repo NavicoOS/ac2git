@@ -191,3 +191,4 @@ FakesAssemblies/
 *.log
 *.config.xml
 
+.idea/
